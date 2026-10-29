@@ -1,0 +1,173 @@
+name: ${COMPOSE_PROJECT_NAME:-juno}
+
+x-app-environment: &app-environment
+  NODE_ENV: production
+  DATABASE_URL: ${DATABASE_URL:?run node deploy/setup.mjs first}
+  AUTH_MODE: account
+  API_HOST: 0.0.0.0
+  API_PORT: 8787
+  API_SITE: ${API_SITE:?configure API_SITE in deploy/.env}
+  WEB_DIST: /app/web-dist
+  BETTER_AUTH_URL: ${BETTER_AUTH_URL:?configure BETTER_AUTH_URL in deploy/.env}
+  BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?run node deploy/setup.mjs first}
+  AUTH_TRUSTED_ORIGINS: ${AUTH_TRUSTED_ORIGINS:-}
+  INTERNAL_AGENTD_TOKEN: ${INTERNAL_AGENTD_TOKEN:?run node deploy/setup.mjs first}
+  ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+  AGENTD_URL: http://127.0.0.1:8788
+  AGENTD_PORT: 8788
+  COMPUTERD_URL: http://127.0.0.1:8791
+  COMPUTERD_PORT: 8791
+  COMPUTERD_HOST: 127.0.0.1
+  COMPUTERD_TOKEN: ${COMPUTERD_TOKEN:?run node deploy/setup.mjs first}
+  COMPUTERD_LINK_PORT: ${COMPUTERD_LINK_PORT:-8795}
+  COMPUTERD_LINK_HOST: ${COMPUTERD_LINK_HOST:-0.0.0.0}
+  COMPUTERD_LINK_URL: ${COMPUTERD_LINK_URL:-}
+  COMPUTERD_MAC_LINK_URL: ${COMPUTERD_MAC_LINK_URL:-}
+  SCREEN_TICKET_SECRET: ${SCREEN_TICKET_SECRET:?run node deploy/setup.mjs first}
+  ARTIFACT_HOST: ${ARTIFACT_HOST:?configure ARTIFACT_HOST in deploy/.env}
+  ARTIFACT_URL_SECRET: ${ARTIFACT_URL_SECRET:?run node deploy/setup.mjs first}
+  SPACE_DOMAIN: ${SPACE_DOMAIN:?configure SPACE_DOMAIN in deploy/.env}
+  SPACE_URL_SECRET: ${SPACE_URL_SECRET:?run node deploy/setup.mjs first}
+  SECRETS_KEY: ${SECRETS_KEY:?run node deploy/setup.mjs first}
+  COMPUTER_PROVIDER: ${COMPUTER_PROVIDER:-local}
+  LOCAL_SANDBOX_IMAGE: ${LOCAL_SANDBOX_IMAGE:-juno-desktop:local}
+  E2B_API_KEY: ${E2B_API_KEY:-}
+  E2B_API_URL: ${E2B_API_URL:-}
+  E2B_SANDBOX_URL: ${E2B_SANDBOX_URL:-}
+  E2B_TEMPLATE: ${E2B_TEMPLATE:-desktop-debian}
+  COMPUTER_TIMEOUT_MS: ${COMPUTER_TIMEOUT_MS:-3600000}
+  COMPUTER_IDLE_PAUSE_MINUTES: ${COMPUTER_IDLE_PAUSE_MINUTES:-30}
+  COMPUTER_RESOLUTION: ${COMPUTER_RESOLUTION:-1440x900}
+  COMPUTER_TIMEZONE: ${COMPUTER_TIMEZONE:-UTC}
+  BLOB_DIR: /data/blobs
+  MEDIA_CACHE_DIR: /data/media
+  SITE_ICON_CACHE_DIR: /data/site-icons
+  COMPUTER_BINDING_FILE: /data/computerd/binding.json
+  SCREEN_REGISTRY_FILE: /data/computerd/screen-pool.json
+  MAC_REGISTRY_FILE: /data/computerd/mac-links.json
+  MODEL_BASE_URL: ${MODEL_BASE_URL:-}
+  MODEL_API_KEY: ${MODEL_API_KEY:-}
+  MODEL_ID: ${MODEL_ID:-}
+  MODEL_WIRE_API: ${MODEL_WIRE_API:-responses}
+  MODEL_FALLBACK_ID: ${MODEL_FALLBACK_ID:-}
+  MODEL_SUPPORTS_IMAGES: ${MODEL_SUPPORTS_IMAGES:-false}
+  MODEL_PRICING_JSON: ${MODEL_PRICING_JSON:-}
+  SEARCH_PROVIDER: ${SEARCH_PROVIDER:-}
+  SEARCH_API_KEY: ${SEARCH_API_KEY:-}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  # Optional integrations (deploy/README.md lists each registration). Blank = that integration is not offered.
+  MCP_OAUTH_RETURN_URL: ${MCP_OAUTH_RETURN_URL:-${BETTER_AUTH_URL}/connectors}
+  MCP_OAUTH_APP_RETURN_URLS: ${MCP_OAUTH_APP_RETURN_URLS:-juno://connectors}
+  PUBLIC_ORIGINS: ${PUBLIC_ORIGINS:-}
+  CHANNELS_PUBLIC_URL: ${CHANNELS_PUBLIC_URL:-}
+  SLACK_CLIENT_ID: ${SLACK_CLIENT_ID:-}
+  SLACK_CLIENT_SECRET: ${SLACK_CLIENT_SECRET:-}
+  SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
+  DISCORD_APP_ID: ${DISCORD_APP_ID:-}
+  DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+  TELEGRAM_MANAGER_BOT_TOKEN: ${TELEGRAM_MANAGER_BOT_TOKEN:-}
+  GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+  GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+  GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+  YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+  MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
+  MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
+  STRAVA_CLIENT_ID: ${STRAVA_CLIENT_ID:-}
+  STRAVA_CLIENT_SECRET: ${STRAVA_CLIENT_SECRET:-}
+  DROPBOX_CLIENT_ID: ${DROPBOX_CLIENT_ID:-}
+  DROPBOX_CLIENT_SECRET: ${DROPBOX_CLIENT_SECRET:-}
+  SALESFORCE_CLIENT_ID: ${SALESFORCE_CLIENT_ID:-}
+  SALESFORCE_CLIENT_SECRET: ${SALESFORCE_CLIENT_SECRET:-}
+  COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
+  COMPOSIO_AUTH_CONFIG_SPOTIFY: ${COMPOSIO_AUTH_CONFIG_SPOTIFY:-}
+  COMPOSIO_AUTH_CONFIG_SHOPIFY: ${COMPOSIO_AUTH_CONFIG_SHOPIFY:-}
+  LTA_ACCOUNT_KEY: ${LTA_ACCOUNT_KEY:-}
+  APNS_KEY_ID: ${APNS_KEY_ID:-}
+  APNS_TEAM_ID: ${APNS_TEAM_ID:-}
+  APNS_KEY: ${APNS_KEY:-}
+  APNS_TOPIC: ${APNS_TOPIC:-}
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run node deploy/setup.mjs first}
+      POSTGRES_DB: ${POSTGRES_DB:-agents}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    networks: [data]
+
+  migrate:
+    image: juno-server:${JUNO_IMAGE_TAG:-local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["pnpm", "--filter", "@agent-desktop/db", "migrate"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?run node deploy/setup.mjs first}
+      NODE_ENV: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks: [data]
+
+  app:
+    image: juno-server:${JUNO_IMAGE_TAG:-local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment: *app-environment
+    volumes:
+      - app-data:/data
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:8787/healthz]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+    restart: unless-stopped
+    networks: [data, edge]
+
+  edge:
+    image: juno-edge:${JUNO_IMAGE_TAG:-local}
+    build:
+      context: ..
+      dockerfile: deploy/Edge.Dockerfile
+    environment:
+      API_SITE: ${API_SITE:?configure API_SITE in deploy/.env}
+      ARTIFACT_SITE: ${ARTIFACT_SITE:?configure ARTIFACT_SITE in deploy/.env}
+      SPACE_WILDCARD: ${SPACE_WILDCARD:?configure SPACE_WILDCARD in deploy/.env}
+      CADDYFILE_PATH: ${CADDYFILE_PATH:-./Caddyfile}
+    ports:
+      - "${EDGE_HTTP_BIND:-127.0.0.1}:${EDGE_HTTP_PORT:-80}:80"
+      - "${EDGE_HTTPS_BIND:-127.0.0.1}:${EDGE_HTTPS_PORT:-443}:443"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [edge]
+
+volumes:
+  postgres-data:
+  app-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  data:
+  edge:

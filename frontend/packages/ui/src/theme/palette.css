@@ -1,0 +1,70 @@
+/*
+ * Raw palette — tier 1 of the two-tier token system.
+ * These values are ONLY referenced from theme/*.css (tokens.css). Components must never
+ * use them; they use the semantic tier instead (--bg, --fg, --accent, ...).
+ *
+ * Exposed to Tailwind via `@theme` so they generate `bg-neutral-3`, `text-accent-9`, etc.,
+ * but that is an escape hatch for the Foundations story only.
+ */
+@theme {
+  /* Achromatic 12-step neutral scale (step 1 = lightest, 12 = darkest).
+   * Anchors measured at chatgpt.com 2026-10-08 (docs/design/CHATGPT-SURFACES.md):
+   * canvas #0e0e0e, black rail #000000, composer/overlay base #212121,
+  * text #ededed / #cdcdcd / #afafaf, light canvas #fcfcfc. Panel
+  * (#171717 / #f9f9f9) and interaction steps are product adaptations,
+  * not measured values. Names --color-neutral-1..12 are kept compatible.
+  *
+  * Named adaptation steps below extend the scale for the UI76 interaction
+  * ramp (also adaptations, not measured): dark selected #3a3a3a and
+  * pressed #404040 sit between the #2f2f2f hover step and #5d5d5d text;
+  * light hover #f1f1f1 and pressed #e3e3e3 sit around selected #ededed. */
+  --color-neutral-0: #000000;
+  --color-neutral-1: #ffffff;
+  --color-neutral-2: #fcfcfc;
+  --color-neutral-3: #f9f9f9;
+  --color-neutral-4: #ededed;
+  --color-neutral-5: #cdcdcd;
+  --color-neutral-6: #afafaf;
+  --color-neutral-7: #8f8f8f;
+  --color-neutral-8: #5d5d5d;
+  --color-neutral-9: #2f2f2f;
+  --color-neutral-10: #212121;
+  --color-neutral-11: #171717;
+  --color-neutral-12: #0e0e0e;
+  --color-neutral-selected-dark: #3a3a3a;
+  --color-neutral-pressed-dark: #404040;
+  --color-neutral-hover-light: #f1f1f1;
+  --color-neutral-pressed-light: #e3e3e3;
+
+  /* Accent: neutral greys for links and focus (VISUAL.md; the app has no blue). */
+  --color-accent-3: #f1f1f1;
+  --color-accent-5: #d4d4d4;
+  --color-accent-7: #8f8f8f;
+  --color-accent-9: #5d5d5d;
+  --color-accent-10: #141414;
+
+  /* Ten agent colours, dark-mode safe; each has a lighter `-soft` stop used as
+   * the top of the avatar's subtle gradient (VISUAL.md "Avatars"). Saturation is
+   * eased down so names and previews read before the avatar; shapes pick from
+   * this set by hashing the agent id. Same values in light and dark. */
+  --color-agent-1: #6b92df;
+  --color-agent-1-soft: #94b5f2;
+  --color-agent-2: #a47de6;
+  --color-agent-2-soft: #c5a5f6;
+  --color-agent-3: #d576a0;
+  --color-agent-3-soft: #eca7c6;
+  --color-agent-4: #dd8e5c;
+  --color-agent-4-soft: #f2ba91;
+  --color-agent-5: #cead51;
+  --color-agent-5-soft: #e8d18a;
+  --color-agent-6: #64bc8b;
+  --color-agent-6-soft: #9adbb8;
+  --color-agent-7: #54b7c2;
+  --color-agent-7-soft: #90dbe2;
+  --color-agent-8: #939caf;
+  --color-agent-8-soft: #bdc4d2;
+  --color-agent-9: #d97f7f;
+  --color-agent-9-soft: #efa9a9;
+  --color-agent-10: #8f9ae8;
+  --color-agent-10-soft: #b8bff4;
+}

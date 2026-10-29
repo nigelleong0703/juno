@@ -1,0 +1,62 @@
+{
+  "staticDir": "storybook-static",
+  "outDir": "screenshots",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "themes": [
+    "Dark",
+    "Light"
+  ],
+  "stories": [
+    {
+      "id": "foundations-overview--overview",
+      "name": "foundations"
+    },
+    {
+      "id": "primitives-button--variants",
+      "name": "buttons"
+    },
+    {
+      "id": "primitives-form-controls--inputs",
+      "name": "form-controls"
+    },
+    {
+      "id": "primitives-form-controls--toggles",
+      "name": "form-toggles"
+    },
+    {
+      "id": "primitives-dialog--edit-agent",
+      "name": "dialog"
+    },
+    {
+      "id": "primitives-sidebar--chat-list",
+      "name": "sidebar-chat-list"
+    },
+    {
+      "id": "primitives-toast--sonner",
+      "name": "sonner-toast"
+    },
+    {
+      "id": "patterns-dataview--list",
+      "name": "data-view-list"
+    },
+    {
+      "id": "patterns-dataview--table",
+      "name": "data-view-table"
+    },
+    {
+      "id": "patterns-settingslayout--with-multiple-sections",
+      "name": "settings-layout"
+    },
+    {
+      "id": "patterns-commandmenu--open",
+      "name": "command-menu"
+    },
+    {
+      "id": "ai-ai-elements--conversation",
+      "name": "ai-conversation"
+    }
+  ]
+}

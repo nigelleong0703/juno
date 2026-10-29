@@ -1,0 +1,32 @@
+{
+  "name": "@agent-desktop/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing/scratch-postgres": "./src/__tests__/scratch-postgres.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "migrate": "node --import tsx/esm src/migrate.ts",
+    "blobs:migrate": "node --import tsx/esm src/migrate-blobs.ts"
+  },
+  "dependencies": {
+    "@agent-desktop/contracts": "workspace:*",
+    "@agent-desktop/durable": "workspace:*",
+    "@agent-desktop/log": "workspace:*",
+    "@agent-desktop/public-contracts": "workspace:*",
+    "juno-agent": "workspace:*",
+    "postgres": "^3.4.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@agent-desktop/memory-graph": "workspace:*",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0",
+    "tsx": "^4.7.0"
+  }
+}

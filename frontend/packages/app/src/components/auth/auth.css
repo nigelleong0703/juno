@@ -1,0 +1,325 @@
+/* Mascot-first application auth. Every selector is .al1- scoped; no globals. */
+.al1-auth {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100dvh;
+  position: relative;
+  padding: 48px 24px 96px;
+  background: var(--bg, transparent);
+  color: var(--fg, inherit);
+  box-sizing: border-box;
+  overflow-x: clip;
+  overflow-y: auto;
+  color-scheme: light dark;
+}
+.al1-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: min(560px, 100%);
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+.al1-scene {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  max-width: 100%;
+}
+.al1-brand-lockup {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  max-width: 100%;
+}
+.al1-mascot {
+  display: block;
+  width: auto;
+  height: clamp(80px, 10vw, 96px);
+  object-fit: contain;
+}
+.al1-scene[data-compact="true"] .al1-mascot {
+  height: 56px;
+}
+.al1-wordmark {
+  margin: 0;
+  font-size: clamp(48px, 7vw, 76px);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.al1-scene[data-compact="true"] .al1-wordmark {
+  font-size: 48px;
+}
+.al1-tagline {
+  margin: 44px 0 0;
+  padding: 0;
+  max-width: 450px;
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 22px;
+  line-height: 1.4;
+  font-weight: 400;
+  text-wrap: balance;
+  overflow-wrap: break-word;
+}
+.al1-welcome {
+  margin-top: 40px;
+  display: flex;
+  justify-content: center;
+}
+.al1-signin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 124px;
+  height: 40px;
+  padding: 0 22px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: var(--fg, #111);
+  color: var(--bg, #fff);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+.al1-signin:hover {
+  opacity: 0.88;
+}
+.al1-signin:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.al1-server {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  max-width: calc(100% - 48px);
+  white-space: nowrap;
+  padding: 4px 8px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  opacity: 0.6;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.al1-server:hover {
+  opacity: 1;
+}
+.al1-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0;
+}
+.al1-formwrap {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  width: 360px;
+  max-width: 100%;
+  margin-top: 40px;
+  box-sizing: border-box;
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+.al1-heading {
+  text-align: center;
+}
+.al1-form {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+.al1-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.al1-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+.al1-namefield {
+  display: grid;
+  grid-template-rows: 0fr;
+  margin-top: -16px;
+  transition: grid-template-rows 200ms cubic-bezier(0.4, 0, 0.2, 1), margin-top 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.al1-namefield[data-open="true"] {
+  grid-template-rows: 1fr;
+  margin-top: 0;
+}
+.al1-namefield-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+.al1-namefield[data-open="false"] .al1-namefield-inner {
+  visibility: hidden;
+}
+.al1-password {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.al1-password > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+.al1-show {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.65;
+}
+.al1-show:hover {
+  opacity: 1;
+}
+.al1-show:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  opacity: 1;
+}
+.al1-show:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.al1-error {
+  margin: 0;
+  animation: al1-shake 220ms ease-in-out 1;
+}
+.al1-submit {
+  transition: transform 90ms ease-out;
+}
+.al1-submit:active {
+  transform: scale(0.98);
+}
+.al1-submit-busy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.al1-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: al1-spin 700ms linear infinite;
+}
+.al1-switch {
+  width: 100%;
+  padding: 2px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.al1-enter {
+  animation: al1-rise 280ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+.al1-d1 { animation-delay: 60ms; }
+.al1-d2 { animation-delay: 120ms; }
+.al1-d3 { animation-delay: 180ms; }
+.al1-d4 { animation-delay: 240ms; }
+@keyframes al1-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes al1-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes al1-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+@keyframes al1-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (max-width: 480px) {
+  .al1-auth {
+    padding: 40px 20px 96px;
+  }
+  .al1-brand-lockup {
+    gap: 12px;
+  }
+  .al1-mascot {
+    height: 68px;
+  }
+  .al1-scene[data-compact="true"] .al1-mascot {
+    height: 48px;
+  }
+  .al1-wordmark {
+    font-size: 40px;
+  }
+  .al1-scene[data-compact="true"] .al1-wordmark {
+    font-size: 34px;
+  }
+  .al1-tagline {
+    margin-top: 32px;
+    font-size: 18px;
+    max-width: 320px;
+  }
+  .al1-formwrap {
+    width: 100%;
+    max-width: 360px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .al1-enter {
+    animation: al1-fade 150ms ease-out backwards;
+  }
+  .al1-d1, .al1-d2, .al1-d3, .al1-d4 { animation-delay: 0ms; }
+  .al1-spinner {
+    animation: none;
+  }
+  .al1-error {
+    animation: none;
+  }
+  .al1-namefield {
+    transition: none;
+  }
+  .al1-submit {
+    transition: none;
+  }
+}

@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+"""agent-browser: drive the sandbox Chromium over its loopback CDP port.
+
+Interface: agent-browser --port <loopback CDP port> --request '<JSON>'
+Success prints {ok: true, action, ...} and exits 0; any failure prints
+{ok: false, error} and exits nonzero. Actions: tabs, new_tab (optional
+http/s url), navigate (http/s, truthful post-redirect url/title), snapshot
+(native AX nodes of the main frame, same-process iframes and cross-origin
+iframes, short refs like e12; `follow` shows the tab the last action moved
+to), click and type (native input, exact text), get_text (bounded), dialog
+(read or answer a native dialog), notices (only what happened meanwhile), point (the control under a screen point,
+for the purchase gate on coordinate clicks), bounds (screen rects of refs,
+or of the visible tab's controls), attrs (form-control attributes of refs: type, autocomplete,
+maxlength, required, min/max, select options; never values), secure_key (the sandbox's public key for
+end-to-end encrypted secure input) and fill_secret (unseals a value that a client encrypted to that key and
+types it; the plaintext is never in argv, the result or an error, and the page is masked from then on, see
+agent_browser_mask). Every result has the filled values redacted.
+navigate/snapshot/get_text take an optional tab (t2); without one they use
+the tab this browser last acted on. click/type take only a ref: the ref
+already names its tab, frame and document (agent_browser_refs), so it can
+never act on another tab, and a ref from a replaced document fails stale.
+No caller script is evaluated.
+
+Every call first makes sure the port's watcher runs (agent_browser_watch):
+it sees native dialogs, popups and closed tabs between calls. Agent-facing
+results carry `dialog` (open and blocking the tab), `alerts` (accepted
+automatically), `opened` and `closed` (tabs) when there is something new.
+
+Design adapts the native-AX / native-input approach of Pilot's page-control
+module (MIT, (c) 2026 nigelleong0703; see THIRD-PARTY-NOTICES.md) without
+its extension plumbing, overlays, or sleeps; see the module docstrings.
+"""
+import argparse
+import json
+import sys
+import time
+from typing import Any, Dict, List
+
+try:
+    from agent_browser_attrs import do_attrs
+    from agent_browser_jev import enumerate_page, bind_observation, scroll
+    from agent_browser_cdp import (REQUEST_BUDGET_S, DialogOpen, HelperError, connect,
+                                   create_tab, page_identity, page_targets)
+    from agent_browser_bounds import (bounds_result, element_at, focused_element, focused_submit, is_visible_tab,
+                                      ref_element, visible_elements)
+    from agent_browser_frames import view_for
+    from agent_browser_input import do_click, do_fill_secret, do_type
+    import agent_browser_mask
+    from agent_browser_seal import load_private, public_info, unseal
+    from agent_browser_nav import do_get_text, do_navigate, do_snapshot
+    from agent_browser_notices import dialog_reader, merge_notices, open_dialogs, take_notices
+    from agent_browser_refs import (handle_for, lookup_ref, normalize_ref,
+                                    normalize_tab, port_state, replace_refs,
+                                    sync_tabs, target_for)
+    from agent_browser_watch import ask_watcher, ensure_watcher
+except ImportError as exc:
+    print(json.dumps({"ok": False, "error": "missing dependency: %s" % exc}))
+    raise SystemExit(1)
+
+
+def reject_extra(request, allowed):
+    # type: (Dict[str, Any], Any) -> None
+    extra = set(request) - set(allowed)
+    if extra:
+        raise ValueError("unsupported fields: %s" % sorted(extra))
+
+
+def open_tabs(port, deadline):
+    # type: (int, float) -> List[Dict[str, Any]]
+    targets = page_targets(port, deadline)
+    with port_state(port) as state:
+        sync_tabs(state, [t["id"] for t in targets])
+    return targets
+
+
+def pick_tab(port, deadline, tab):
+    # type: (int, float, Any) -> str
+    """Target id for an explicit tab handle, else the last tab acted on."""
+    targets = page_targets(port, deadline)
+    if not targets:
+        raise HelperError("no open page on 127.0.0.1:%d" % port)
+    with port_state(port) as state:
+        sync_tabs(state, [t["id"] for t in targets])
+        if tab is not None:
+            return target_for(state, tab)
+        active = state["tabs"].get(state.get("active") or "")
+        return active or targets[0]["id"]
+
+
+def mark_active(port, target_id):
+    # type: (int, str) -> str
+    with port_state(port) as state:
+        handle = handle_for(state, target_id)
+        state["active"] = handle
+        return handle
+
+
+def describe(dialog):
+    # type: (Dict[str, Any]) -> str
+    return "A %s dialog is open on %s: %r" % (dialog.get("type"), dialog.get("tab") or "this tab",
+                                              dialog.get("message", ""))
+
+
+def on_tab(port, deadline, target_id, act, blocked=None, read=False):
+    # type: (int, float, str, Any, Any, bool) -> Dict[str, Any]
+    """Run `act` on a tab. A native dialog blocks the page until it is answered. When one opens during
+    the action (a confirm after a click, a beforeunload on navigate) the action did run: the result is
+    `blocked(dialog)` plus the dialog. When one is already open, a read reports it the same way; any
+    other action fails and nothing was done."""
+    def report(dialog):
+        # type: (Dict[str, Any]) -> Dict[str, Any]
+        result = dict(tab_identity(port, deadline, target_id), ok=True)
+        result.update(blocked(dialog) if blocked is not None else {})
+        result["dialog"] = dialog
+        return result
+    try:
+        cdp, target_id = connect(port, deadline, target_id, dialog_reader(port))
+    except DialogOpen as exc:
+        if not read:
+            raise HelperError("%s. Nothing was done: answer it with browser.dialog (accept or dismiss) first."
+                              % describe(exc.dialog))
+        result = report(exc.dialog)
+        result["tab"] = mark_active(port, target_id)
+        return result
+    try:
+        result = act(cdp, target_id)
+    except DialogOpen as exc:
+        result = report(exc.dialog)
+    except HelperError as exc:
+        if (blocked is None or "connection lost" not in str(exc)
+                or any(t["id"] == target_id for t in page_targets(port, deadline))):
+            raise
+        # The action closed its own tab ("Done" calling window.close(), an OAuth popup finishing):
+        # it ran; the notices report the close and the current tab goes back to the opener.
+        with port_state(port) as state:
+            handle = handle_for(state, target_id)
+        result = dict(blocked({}), ok=True, url="", title="", tab=handle)
+        return result
+    finally:
+        cdp.close()
+    result["tab"] = mark_active(port, target_id)
+    return result
+
+
+def tab_identity(port, deadline, target_id):
+    # type: (int, float, str) -> Dict[str, Any]
+    """url/title of a blocked tab, from the browser process (the renderer cannot answer)."""
+    for target in page_targets(port, deadline):
+        if target["id"] == target_id:
+            return {"url": str(target.get("url") or ""), "title": str(target.get("title") or "")}
+    return {"url": "", "title": ""}
+
+
+def snapshot(port, deadline, target_id, upstream=False):
+    # type: (int, float, str) -> Dict[str, Any]
+    blocked = lambda _d: {"action": "snapshot", "nodes": [], "crossOriginFrames": 0}
+    result = on_tab(port, deadline, target_id, lambda cdp, tid: enumerate_page(cdp) if upstream else do_snapshot(cdp, tid), blocked, read=True)
+    if "dialog" not in result:  # a blocked page listed nothing: its refs stay valid for after the dialog
+        with port_state(port) as state:
+            if upstream:
+                bind_observation(result, state, replace_refs)
+            else:
+                replace_refs(state, result["tab"], result["nodes"])
+    return result
+
+
+def follow_target(port, deadline, tab):
+    # type: (int, float, Any) -> str
+    """The tab an action's after-snapshot shows: the current tab when the action moved it, i.e.
+    a tab the acted-on tab opened (popup, target=_blank; see take_notices), or the opener when the
+    acted-on tab was a popup that has closed (an OAuth sign-in that finished)."""
+    targets = page_targets(port, deadline)
+    if not targets:
+        raise HelperError("no open page on 127.0.0.1:%d" % port)
+    with port_state(port) as state:
+        sync_tabs(state, [t["id"] for t in targets])
+        asked = normalize_tab(tab) if tab is not None else state.get("active")
+        active = state.get("active")
+        if active and (asked not in state["tabs"] or (state.get("openedBy") or {}).get(active) == asked):
+            return state["tabs"][active]
+    return pick_tab(port, deadline, tab)
+
+
+def act_on_ref(port, deadline, ref, act, blocked=None):
+    # type: (int, float, Any, Any, Any) -> Dict[str, Any]
+    with port_state(port) as state:
+        _handle, target_id, frame_id, loader_id, backend_id, oopif = lookup_ref(state, ref)
+    return on_tab(port, deadline, target_id,
+                  lambda cdp, _tid: act(view_for(cdp, oopif), frame_id, loader_id, backend_id), blocked)
+
+
+MAX_BOUNDS_REFS = 20
+
+
+def ref_bounds(port, deadline, refs):
+    # type: (int, float, Any) -> Dict[str, Any]
+    if (not isinstance(refs, list) or not 1 <= len(refs) <= MAX_BOUNDS_REFS
+            or not all(isinstance(ref, str) for ref in refs)):
+        raise ValueError("bounds refs must be a list of 1..%d refs" % MAX_BOUNDS_REFS)
+    elements = []  # type: List[Dict[str, Any]]
+    result = {}  # type: Dict[str, Any]
+    for ref in refs:
+        key = normalize_ref(ref)
+        result = act_on_ref(port, deadline, ref, lambda view, frame, loader, node, key=key:
+                            bounds_result(view, [ref_element(view, frame, loader, node, key)]))
+        elements.extend(result["elements"])
+    result["elements"] = elements
+    return result
+
+
+MAX_ATTRS_REFS = 8
+
+
+def ref_attrs(port, deadline, refs):
+    # type: (int, float, Any) -> Dict[str, Any]
+    """Form-control attributes of these refs (never their values), for typing a secure-input request."""
+    if (not isinstance(refs, list) or not 1 <= len(refs) <= MAX_ATTRS_REFS
+            or not all(isinstance(ref, str) for ref in refs)):
+        raise ValueError("attrs refs must be a list of 1..%d refs" % MAX_ATTRS_REFS)
+    fields = []  # type: List[Dict[str, Any]]
+    result = {}  # type: Dict[str, Any]
+    for ref in refs:
+        key = normalize_ref(ref)
+        result = act_on_ref(port, deadline, ref, lambda view, frame, loader, node, key=key:
+                            do_attrs(view, frame, loader, node, key))
+        fields.extend(result["fields"])
+    result["fields"] = fields
+    return result
+
+
+def visible_tab(port, deadline, read):
+    # type: (int, float, Any) -> Dict[str, Any]
+    """`read(cdp)` on the tab that is on screen. Read-only: the active tab and refs stay as they were."""
+    reader = dialog_reader(port)
+    for target in open_tabs(port, deadline):
+        try:
+            cdp, target_id = connect(port, deadline, target["id"], reader)
+        except DialogOpen:
+            continue
+        try:
+            if not is_visible_tab(cdp):
+                continue
+            result = read(cdp)
+        finally:
+            cdp.close()
+        with port_state(port) as state:
+            result["tab"] = handle_for(state, target_id)
+        return result
+    raise HelperError("no browser tab is visible on the screen")
+
+
+def point(port, deadline, x, y):
+    # type: (int, float, Any, Any) -> Dict[str, Any]
+    """What a screen click at (x, y) would hit in the browser (without a point: the focused control),
+    for the purchase gate on coordinate clicks and Enter.
+
+    An open dialog is reported instead: a click may well answer it, and the page cannot be read."""
+    focus = x is None and y is None  # without a point: the focused control (what Enter would press)
+    if not focus and not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (x, y)):
+        raise ValueError("point needs numeric x and y, or neither")
+    dialogs = open_dialogs(port, [t["id"] for t in page_targets(port, deadline)])
+    if dialogs:
+        return {"ok": True, "action": "point", "url": "", "title": "", "tab": dialogs[0]["tab"], "dialog": dialogs[0]}
+    def read(cdp):
+        # type: (Any) -> Dict[str, Any]
+        element = focused_element(cdp) if focus else element_at(cdp, float(x), float(y))
+        url, title = page_identity(cdp)
+        result = {"ok": True, "action": "point", "url": url, "title": title}  # type: Dict[str, Any]
+        if element is not None:
+            result["element"] = element
+        if focus:
+            # Enter in a text field presses the form's default submit button: the gate judges that button.
+            submit = focused_submit(cdp)
+            if submit is not None:
+                result["submit"] = submit
+        return result
+    return visible_tab(port, deadline, read)
+
+
+def answer_dialog(port, deadline, tab, accept, text):
+    # type: (int, float, Any, Any, Any) -> Dict[str, Any]
+    """Without accept: the open dialog, if any. With accept true/false: answer it (text for a prompt)."""
+    target_id = pick_tab(port, deadline, tab)
+    with port_state(port) as state:
+        handle = handle_for(state, target_id)
+    dialog = dialog_reader(port)(target_id)
+    result = dict(tab_identity(port, deadline, target_id), ok=True, action="dialog", tab=handle)
+    if accept is None:
+        if dialog is not None:
+            result["dialog"] = dialog
+        return result
+    if not isinstance(accept, bool) or (text is not None and not isinstance(text, str)):
+        raise ValueError("dialog needs accept true/false and an optional string text")
+    if dialog is None:
+        raise HelperError("no dialog is open on %s" % handle)
+    request = {"target": target_id, "accept": accept}  # type: Dict[str, Any]
+    if text is not None:
+        request["promptText"] = text
+    ask_watcher(port, request, deadline - time.monotonic())
+    result["handled"] = dict(dialog, accepted=accept)
+    mark_active(port, target_id)
+    return result
+
+
+# Actions whose result goes to the agent: they report (and consume) what happened meanwhile.
+AGENT_ACTIONS = ("tabs", "new_tab", "navigate", "snapshot", "get_text", "click", "type", "dialog", "notices", "scroll")
+
+
+def filled_secrets(port, deadline):
+    # type: (int, float) -> List[str]
+    """The values secure fills put into this browser (held by the watcher), so no result can quote them."""
+    try:
+        values = ask_watcher(port, {"op": "secrets"}, deadline - time.monotonic()).get("values")
+    except HelperError:
+        return []  # no watcher, so no secrets in its memory either
+    return [v for v in values if isinstance(v, str)] if isinstance(values, list) else []
+
+
+def run(port, raw_request, deadline):
+    # type: (int, str, float) -> Dict[str, Any]
+    if not 1 <= port <= 65535:
+        raise ValueError("invalid port %r" % (port,))
+    try:
+        request = json.loads(raw_request)
+    except ValueError:
+        raise ValueError("request is not valid JSON")
+    if not isinstance(request, dict):
+        raise ValueError("request must be a JSON object")
+    ensure_watcher(port, deadline)
+    agent_browser_mask.ACTIVE = filled_secrets(port, deadline)
+    early = {}  # type: Dict[str, Any]
+    if request.get("action") == "snapshot" and request.get("follow") is True:
+        early = take_notices(port, [t["id"] for t in page_targets(port, deadline)])
+    result = act(port, request, deadline)
+    if request.get("action") in AGENT_ACTIONS:
+        merge_notices(result, early, take_notices(port, [t["id"] for t in page_targets(port, deadline)]))
+    return agent_browser_mask.redact_deep(result, agent_browser_mask.ACTIVE)
+
+
+def act(port, request, deadline):
+    # type: (int, Dict[str, Any], float) -> Dict[str, Any]
+    action = request.get("action")
+    tab = request.get("tab")
+    if action == "tabs":
+        reject_extra(request, ("action",))
+        targets = open_tabs(port, deadline)
+        dialogs = dict((d["tab"], d) for d in open_dialogs(port, [t["id"] for t in targets]))
+        with port_state(port) as state:
+            active = state["tabs"].get(state.get("active") or "")
+            tabs = [{"tab": handle_for(state, t["id"]),
+                     "url": t.get("url", "") if isinstance(t.get("url"), str) else "",
+                     "title": t.get("title", "") if isinstance(t.get("title"), str) else "",
+                     "active": t["id"] == (active or targets[0]["id"])}
+                    for t in targets]
+        for entry in tabs:
+            if entry["tab"] in dialogs:
+                entry["dialog"] = dialogs[entry["tab"]]
+        return {"ok": True, "action": "tabs", "tabs": tabs}
+    if action == "new_tab":
+        reject_extra(request, ("action", "url"))
+        target_id = create_tab(port, deadline)
+        open_tabs(port, deadline)
+        url = request.get("url")
+        def open_page(cdp, _tid):
+            # type: (Any, str) -> Dict[str, Any]
+            if url is not None:
+                return do_navigate(cdp, url, deadline)
+            page_url, title = page_identity(cdp)
+            return {"ok": True, "url": page_url, "title": title}
+        result = on_tab(port, deadline, target_id, open_page)
+        result["action"] = "new_tab"
+        return result
+    if action == "navigate":
+        reject_extra(request, ("action", "url", "tab"))
+        target_id = pick_tab(port, deadline, tab)
+        return on_tab(port, deadline, target_id,
+                      lambda cdp, _tid: do_navigate(cdp, request.get("url"), deadline),
+                      lambda _d: {"action": "navigate"})
+    if action == "snapshot":
+        reject_extra(request, ("action", "tab", "follow", "upstream"))
+        if "upstream" in request and not isinstance(request["upstream"], bool):
+            raise ValueError("upstream must be boolean")
+        if request.get("follow") is True:
+            return snapshot(port, deadline, follow_target(port, deadline, tab), request.get("upstream") is True)
+        return snapshot(port, deadline, pick_tab(port, deadline, tab), request.get("upstream") is True)
+    if action == "scroll":
+        reject_extra(request, ("action", "tab", "ref", "direction"))
+        direction = request.get("direction", "down")
+        if direction not in ("up", "down"):
+            raise ValueError("scroll direction must be up/down")
+        if request.get("ref"):
+            return act_on_ref(port, deadline, request["ref"], lambda view, frame, loader, node: scroll(view.page, direction, view, frame, loader, node))
+        target_id = pick_tab(port, deadline, tab)
+        return on_tab(port, deadline, target_id, lambda cdp, _tid: scroll(cdp, direction))
+    if action == "get_text":
+        reject_extra(request, ("action", "tab"))
+        target_id = pick_tab(port, deadline, tab)
+        return on_tab(port, deadline, target_id, lambda cdp, _tid: do_get_text(cdp),
+                      lambda _d: {"action": "get_text", "text": ""}, read=True)
+    if action == "click":
+        reject_extra(request, ("action", "ref"))
+        return act_on_ref(port, deadline, request.get("ref"), do_click,
+                          lambda _d: {"action": "click", "clicked": True})
+    if action == "type":
+        reject_extra(request, ("action", "ref", "text"))
+        text = request.get("text")
+        return act_on_ref(port, deadline, request.get("ref"),
+                          lambda view, frame, loader, node: do_type(view, frame, loader, node, text),
+                          lambda _d: {"action": "type", "typed": True})
+    if action == "dialog":
+        reject_extra(request, ("action", "tab", "accept", "text"))
+        return answer_dialog(port, deadline, tab, request.get("accept"), request.get("text"))
+    if action == "notices":
+        # What happened since the agent last looked, without touching a page (computer.screenshot adds it).
+        reject_extra(request, ("action",))
+        return {"ok": True, "action": "notices"}
+    if action == "point":
+        reject_extra(request, ("action", "x", "y"))
+        return point(port, deadline, request.get("x"), request.get("y"))
+    if action == "bounds":
+        reject_extra(request, ("action", "refs"))
+        if request.get("refs") is None:
+            return visible_tab(port, deadline, lambda cdp: bounds_result(cdp, visible_elements(cdp)))
+        return ref_bounds(port, deadline, request.get("refs"))
+    if action == "attrs":
+        reject_extra(request, ("action", "refs"))
+        return ref_attrs(port, deadline, request.get("refs"))
+    if action == "secure_key":
+        reject_extra(request, ("action",))
+        return dict(public_info(), ok=True, action="secure_key")
+    if action == "fill_secret":
+        reject_extra(request, ("action", "ref", "requestId", "fieldId", "sealed"))
+        secret = unseal(load_private(), request.get("sealed"), request.get("requestId"), request.get("fieldId"),
+                        request.get("ref"))
+        # Masked before anything is typed: no frame of the page ever shows the value.
+        ask_watcher(port, {"op": "mask", "values": [secret]}, deadline - time.monotonic())
+        agent_browser_mask.ACTIVE = agent_browser_mask.ACTIVE + [secret]
+        return act_on_ref(port, deadline, request.get("ref"),
+                          lambda view, frame, loader, node: do_fill_secret(view, frame, loader, node, secret))
+    raise ValueError("unknown action %r" % (action,))
+
+
+def emit(payload):
+    # type: (Dict[str, Any]) -> None
+    print(json.dumps(payload))
+
+
+def main(argv=None):
+    # type: (Any) -> int
+    parser = argparse.ArgumentParser(description="Drive sandboxed Chromium over CDP")
+    parser.add_argument("--port", required=True, type=int)
+    parser.add_argument("--request", required=True)
+    args = parser.parse_args(argv)
+    deadline = time.monotonic() + REQUEST_BUDGET_S
+    try:
+        emit(run(args.port, args.request, deadline))
+    except Exception as exc:
+        emit({"ok": False, "error": "%s" % exc})
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

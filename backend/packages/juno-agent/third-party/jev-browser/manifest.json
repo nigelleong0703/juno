@@ -1,0 +1,22 @@
+{
+  "repository": "https://github.com/Ying-Kai-Liao/jev-browser",
+  "commit": "74592bac3fa78407ea1571b8233ead8540d531f3",
+  "methods": {
+    "redact": "fac77d6777e2422d3bc52bb1328613940e5bd1115b3029c14ab13717926bb6ad",
+    "check": "f8683c70b1053c1c992451f63bdc9498adb860b40e26612e8227bff0349047c7",
+    "choose": "b3fdf68cb75a6b607a0f41898480519ae48c174e5c2e435039e91fd97978f042",
+    "read": "93797f44bea98205ad155d167459318e42ec31e381f4cd13aa0498b05c4992d3",
+    "decide": "c5208c06e247657d60e545f30c2788cbf356fe526aae8d45fef4c6e160d19cd4",
+    "resolve": "b0ccda1d79da3e4c2e5a3344d1055843c2f88827800e819be3bb7fba7daaadcf",
+    "argQuestions": "a4b018c68071d57ede55d4159dcbf3ecbb9e2472eabea364ce0c898de0f64c35",
+    "argsFrom": "0aa23c6118d919861553502384efe8409a6a4d90a1751e353370c96b5394df3b",
+    "webmcpArgs": "a198a587ede41672293e31e6a653529e4f15cf3700d209d6496e1fec0a6baf17",
+    "runGoal": "7a11eb529e12236cca7e5200b02bb1bfc37a96cf4998783d6082b6b74958b030"
+  },
+  "pageScripts": {
+    "ENUMERATE": "32ef4d060b862d698b0a68e3f8403445956d7ac13beb71a5e640ee04fa1840e7",
+    "SCROLL_BOX_MAIN": "85d18e088c902baa684b89181df093909df9c03a2e45d3d9db4b43c1dbf5d75f",
+    "SCROLL_BOX_OF": "027b7f20ddb62b6408f9ad8bf80c807c7423a375e415163cae7dfdabfe779588",
+    "SCROLL_OFFSET": "dd29bf62d4e1ace574c29ffef9a2296218b940027ab295d489ab6ee42de2edfe"
+  }
+}

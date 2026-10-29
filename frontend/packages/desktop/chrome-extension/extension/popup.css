@@ -1,0 +1,45 @@
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  background: #f5f5f3;
+  color: #1e2420;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 340px; max-width: 380px; }
+main { padding: 18px; }
+header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+h1 { font-size: 18px; line-height: 1.2; margin: 3px 0 0; letter-spacing: -0.02em; }
+.eyebrow { color: #59705f; font-size: 10px; font-weight: 700; letter-spacing: 0.12em; }
+.badge { border: 1px solid #ccd3cd; border-radius: 999px; color: #667069; font-size: 11px; padding: 4px 8px; }
+.badge.online { border-color: #9ab9a5; background: #e7f1e9; color: #2f6e47; }
+.badge.error { border-color: #d8b3ad; background: #f7e9e7; color: #954c42; }
+.tab-card { background: #fff; border: 1px solid #dfe2dd; border-radius: 12px; margin: 16px 0 12px; padding: 12px; }
+.page-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-url { color: #78827b; font-size: 11px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-access { color: #7a6033; font-size: 11px; margin-top: 9px; }
+.tab-access.allowed { color: #34734b; }
+.message { color: #854b42; font-size: 11px; min-height: 15px; margin-bottom: 8px; }
+.button { background: #fff; border: 1px solid #d3d8d3; border-radius: 9px; color: #28312b; cursor: pointer; display: block; font: inherit; font-size: 12px; font-weight: 600; margin-top: 8px; padding: 9px 10px; width: 100%; }
+.button:hover { background: #fafbf9; }
+.button:disabled { cursor: default; opacity: 0.45; }
+.button.primary { background: #253e30; border-color: #253e30; color: #fff; }
+.button.primary:hover { background: #1d3327; }
+.button.quiet { background: transparent; border-color: transparent; color: #707a72; }
+.note { color: #6b756e; font-size: 11px; line-height: 1.45; margin: 14px 0 8px; }
+.meta { color: #8a938c; font-size: 10px; margin: 0; }
+
+@media (prefers-color-scheme: dark) {
+  :root { background: #171b18; color: #eef2ee; }
+  .eyebrow { color: #9bafa1; }
+  .badge { border-color: #404842; color: #a6b0a9; }
+  .badge.online { border-color: #416d51; background: #203a29; color: #a9d8b8; }
+  .badge.error { border-color: #714a43; background: #3c2723; color: #efb4aa; }
+  .tab-card { background: #202521; border-color: #353c36; }
+  .page-url, .note, .meta, .tab-access { color: #9da79f; }
+  .tab-access.allowed { color: #a8d8b8; }
+  .button { background: #262d28; border-color: #3b443d; color: #eef2ee; }
+  .button:hover { background: #2b342d; }
+  .button.primary { background: #b8d8c1; border-color: #b8d8c1; color: #172219; }
+  .button.quiet { background: transparent; }
+}

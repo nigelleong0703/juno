@@ -1,0 +1,40 @@
+{
+  "name": "juno-agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./owner-context": "./src/owner-context.ts",
+    "./computer": "./src/ports/computer/index.ts",
+    "./contracts": "./src/contracts/index.ts",
+    "./contracts/*": "./src/contracts/*.ts",
+    "./execution/*": "./src/execution/*.ts",
+    "./modules/*": "./src/modules/*.ts",
+    "./testing/*": "./src/testing/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@agent-desktop/durable": "workspace:*",
+    "@agent-desktop/memory-graph": "workspace:*",
+    "@agent-desktop/public-contracts": "workspace:*",
+    "@earendil-works/pi-agent-core": "1.0.2",
+    "@earendil-works/pi-ai": "1.0.2",
+    "croner": "^10.0.1",
+    "mdast-util-from-markdown": "2.1.0",
+    "ws": "^8.22.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/mdast": "4.0.4",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

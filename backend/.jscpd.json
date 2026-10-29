@@ -1,0 +1,10 @@
+{
+  "pattern": "**/*.ts",
+  "path": ["packages"],
+  "ignore": ["**/node_modules/**", "**/dist/**", "**/out/**", "**/*.d.ts", "**/__tests__/**", "**/*.test.ts", "**/generated/**"],
+  "minTokens": 70,
+  "threshold": 1.5,
+  "reporters": ["consoleFull"],
+  "silent": false,
+  "absolute": false
+}

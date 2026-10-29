@@ -1,0 +1,204 @@
+/*
+ * CT2/CT6 control shape. The reference control surface: while the user holds the screen lease the
+ * frame draws the reference control stroke and the control footer rises into a centred tab joined to
+ * the frame's bottom edge by concave shoulders. When the agent drives, the frame stays neutral and
+ * the footer drops away as the existing detached pill.
+ *
+ * CT6 wraps the stroke out of the tab: the ownership outline is an absolutely positioned SVG
+ * (FrameOutline.tsx) whose two half-perimeter paths start at the bottom centre, grow outward and up
+ * both sides to meet at the top centre, then retract along the very same paths. It is one
+ * normalised stroke-dashoffset transition — never an opacity fade — so it stays reversible if the
+ * lease flips mid-motion, and it snaps under reduced motion. The tab base seats first and the
+ * stroke then wraps; on return the base recedes as the final stroke withdraws, so both directions
+ * take the same 460ms. One accent colour keeps the stroke, the tab and the shoulders seamless.
+ */
+:root {
+  --control-accent: var(--interactive-selected);
+  --control-ease: cubic-bezier(0.45, 0.05, 0.55, 0.95);
+}
+
+/* Positioning context shared by the frame and its footer. The footer is absolute, so the stage
+   height is the frame alone; a trailing margin reserves the space the footer occupies. */
+.control-stage {
+  --control-accent: var(--interactive-selected);
+}
+
+.control-stage--footer {
+  margin-bottom: 52px;
+}
+
+/* Inside a size container marked data-fit-height (the right-pane workspace) the screen fills the
+   width but is capped so the frame, the footer tab (52px) and the stage padding fit the container
+   height: the largest screen of its own ratio that fits, centred. */
+[data-fit-height] .control-stage {
+  max-width: max(240px, calc((100cqh - 120px) * var(--screen-ratio)));
+  margin-inline: auto;
+}
+
+/* Positioning wrapper around the clipped frame alone. It shares the frame's dimensions (the stage
+   also holds the footer, so it cannot serve this role); the external outline sibling traces this
+   box while the frame keeps its exact size and ratio. */
+.control-frame-wrap {
+  position: relative;
+  width: 100%;
+}
+
+/* UI85 external ownership outline. An absolute SVG sibling expanded 5px outside the frame on every
+   side: it contributes no layout, so the screen keeps its exact size and ratio, and
+   pointer-events:none keeps it out of the live input path. Two mirror paths carry the stroke;
+   pathLength=1 normalises each half so a single dash hides it entirely until the offset falls. */
+.control-outline {
+  position: absolute;
+  inset: -5px;
+  z-index: 10;
+  width: calc(100% + 10px);
+  height: calc(100% + 10px);
+  pointer-events: none;
+}
+
+.control-outline path {
+  fill: none;
+  stroke: var(--control-accent);
+  stroke-width: 5;
+  /* Butt caps: a zero-length dash (fully hidden, offset 1) paints nothing, so an agent-owned
+     frame shows no stray dots; the two halves then meet exactly at the top and bottom centres. */
+  stroke-linecap: butt;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+}
+
+.control-stage[data-control="user"] .control-outline path {
+  stroke-dashoffset: 0;
+}
+
+.control-stage[data-control="user"] .control-frame {
+  /* No broad glow — the wrap itself is the indicator. The frame keeps no shadow while the
+     user holds the lease. */
+  box-shadow: none;
+}
+
+/* Footer: the pane's existing pill, centred on the frame's bottom edge. It rests just below the
+   frame when the agent drives and rises flush onto the edge when the user takes over. */
+.control-tab {
+  /* On return the base recedes as the final stroke withdraws (460ms total, mirroring the draw); the
+     user state resets this to zero so it seats immediately. Pseudo-elements and children inherit
+     it. */
+  --control-base-delay: 260ms;
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  z-index: 20;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  min-width: 0;
+  /* Size to the content so the status never wraps on a narrow pane; cap it so the tab stays
+     inside the frame and the existing truncate + shrink-0 footer handles any overflow. */
+  width: max-content;
+  max-width: calc(100% - 40px);
+  transform: translate(-50%, 12px);
+}
+
+.control-tab > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Concave shoulders: two accent fillets flanking the tab's top corners. The clip path keeps the
+   outer-top corner and carves the inner curve away, so the accent reads as concave and welds the
+   tab into the frame's bottom stroke instead of bulging out as a rounded square. */
+.control-tab::before,
+.control-tab::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: 16px;
+  height: 16px;
+  background: var(--control-accent);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.control-tab::before {
+  /* 1px inside the body: the fillet and the tab body are separate boxes, and a flush edge can
+     leave a fractional-pixel antialias gap that reads as a thin vertical seam. */
+  right: calc(100% - 1px);
+  clip-path: path("M0 0 H16 V16 C16 7 9 0 0 0 Z");
+}
+
+.control-tab::after {
+  left: calc(100% - 1px);
+  clip-path: path("M16 0 H0 V16 C0 7 7 0 16 0 Z");
+}
+
+/* Connected tab: square top corners weld into the frame stroke, rounded bottom keeps the pill
+   feel, and the footer body takes the accent. The base seats at once — the stroke wraps after. */
+.control-stage[data-control="user"] .control-tab {
+  --control-base-delay: 0ms;
+  /* Seats on the frame's bottom edge, not 5px into it: the outline is drawn outside the frame, so
+     a raised tab covered the bottom of the live picture (the remote dock/taskbar). */
+  transform: translate(-50%, 0);
+  /* The welded shape keeps no shadow; the tab seats into the frame stroke without a glow. */
+  filter: none;
+}
+
+.control-stage[data-control="user"] .control-tab::before,
+.control-stage[data-control="user"] .control-tab::after {
+  opacity: 1;
+}
+
+.control-stage[data-control="user"] .control-tab > * {
+  /* Overrides the inline popover radius so the joined tab reads square against the frame. */
+  border-radius: 0 0 14px 14px !important;
+  border-color: var(--control-accent);
+  background: var(--control-accent);
+  color: var(--foreground);
+  /* The body keeps no shadow of its own: the parent carries the union shape, and the pill's
+     own shadow stays off so no straight seam falls inside the join. */
+  box-shadow: none;
+}
+
+.control-stage[data-control="user"] .control-tab .text-fg-muted {
+  color: var(--muted-foreground);
+}
+
+/* Motion. Draw/retract is a single normalised stroke-dashoffset transition: it reverses cleanly if
+   the lease flips mid-flight and it never fades the outline. The tab base seats under the draw on
+   the way in (base 200ms at 0, stroke 400ms after a 60ms hold) and, on the way out, recedes as the
+   final stroke withdraws (stroke 400ms at 0, base 200ms at 260), so both directions take the same
+   460ms. Suppressed under reduced motion so the shape snaps. */
+@media (prefers-reduced-motion: no-preference) {
+  .control-frame {
+    transition: box-shadow 240ms ease;
+  }
+
+  /* Retract immediately on return; small hold before the draw so the base seats first. */
+  .control-outline path {
+    transition: stroke-dashoffset 400ms var(--control-ease) 0ms;
+  }
+
+  .control-stage[data-control="user"] .control-outline path {
+    transition: stroke-dashoffset 400ms var(--control-ease) 60ms;
+  }
+
+  .control-tab {
+    transition:
+      transform 200ms ease var(--control-base-delay),
+      filter 200ms ease var(--control-base-delay);
+  }
+
+  .control-tab::before,
+  .control-tab::after {
+    transition: opacity 200ms ease var(--control-base-delay);
+  }
+
+  .control-tab > *,
+  .control-tab .text-fg-muted {
+    transition:
+      background-color 200ms ease var(--control-base-delay),
+      border-color 200ms ease var(--control-base-delay),
+      color 200ms ease var(--control-base-delay),
+      border-radius 200ms ease var(--control-base-delay),
+      box-shadow 200ms ease var(--control-base-delay);
+  }
+}

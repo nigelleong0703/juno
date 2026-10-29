@@ -1,0 +1,64 @@
+appId: io.github.nigelleong0703.agent-desktop
+productName: Juno
+directories:
+  output: release
+  buildResources: build
+files:
+  - "!**/.vscode/*"
+  - "!src/*"
+  - "!scripts/*"
+  - "!build/*"
+  - "!electron.vite.config.{js,ts,mjs,cjs}"
+  - "!tsconfig.json"
+  - "!{.env,.env.*,.npmrc,pnpm-lock.yaml,AGENTS.md,README.md}"
+  - "!{dist,release}"
+asar: true
+extraResources:
+  # cua-driver (fetched by scripts/fetch-cua-driver.mjs, not in git), pinned: the app starts it embedded so Screen Recording and
+  # Accessibility are Juno's. Outside the asar (it is executed). electron-builder signs these Mach-O files with the app's identity
+  # (hardened runtime) before notarization; LICENSE and THIRD_PARTY_NOTICES.md (MIT) ship beside the binary.
+  - from: vendor/cua-driver
+    to: cua-driver
+  - from: vendor/mac-helper
+    to: mac-helper
+  - from: vendor/chrome-bridge
+    to: chrome-bridge
+  - from: vendor/chrome-extension
+    to: chrome-extension
+afterPack: scripts/after-pack.cjs
+mac:
+  # Sign with a certificate that carries a team ID. A self-made certificate (no team) makes the Keychain tie "Always Allow"
+  # to each build's hash, so every reinstall asked again for "Juno Safe Storage". A release overrides this with CSC_NAME
+  # (the Developer ID Application certificate). Set CSC_NAME to your own signing certificate.
+  icon: build/icon.icns
+  # macOS 26+ reads the light/dark/tinted AppIcon from Assets.car (copied in by afterPack); icon.icns is the older-macOS fallback.
+  extendInfo:
+    CFBundleIconName: AppIcon
+    NSMicrophoneUsageDescription: Juno uses the microphone when you dictate a message.
+    NSAudioCaptureUsageDescription: Juno records system audio only when you start a recording.
+    NSAppleEventsUsageDescription: Juno's agents use Mail, Calendar, Reminders and Notes on this Mac when you allow it.
+    NSCalendarsUsageDescription: Juno's agents read and add calendar events on this Mac when you allow it.
+    NSRemindersUsageDescription: Juno's agents read and add reminders on this Mac when you allow it.
+  category: public.app-category.productivity
+  target:
+    - dmg
+    - zip
+  # The macOS traffic lights sit inside our title bar (VISUAL.md), so the window is frameless.
+  darkModeSupport: true
+win:
+  target:
+    - nsis
+linux:
+  target:
+    - AppImage
+  category: Utility
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+# Updates come from the GitHub releases of the public installers-only repo (no source there). `dist:mac` builds with
+# `--publish never`, so a build never uploads; it writes latest-mac.yml next to the zip, and both are attached to the release.
+publish:
+  provider: github
+  owner: nigelleong0703
+  repo: juno-releases
+  releaseType: prerelease

@@ -1,0 +1,13 @@
+#!/bin/sh
+# Handler for juno-app://<name>, called by Chromium through xdg-open with the browser's own
+# environment (DISPLAY included), so the app opens on the same screen. Only the fixed names below
+# can run; anything else is rejected, and no part of the URL is ever passed to a command.
+case "${1#juno-app://}" in
+  terminal | terminal/) set -- xfce4-terminal ;;
+  editor | editor/) set -- mousepad ;;
+  writer | writer/) set -- libreoffice --writer ;;
+  calc | calc/) set -- libreoffice --calc ;;
+  impress | impress/) set -- libreoffice --impress ;;
+  *) echo "juno-app-open: unknown app" >&2; exit 1 ;;
+esac
+nohup "$@" >/dev/null 2>&1 &

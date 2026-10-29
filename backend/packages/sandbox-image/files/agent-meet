@@ -1,0 +1,717 @@
+#!/usr/bin/env python3
+"""agent-meet: join and attend a Google Meet from the sandbox Chromium.
+
+Interface: agent-meet --port <loopback CDP port> --display <X display number> --request '<JSON>'
+Success prints {ok: true, action, ...} and exits 0; any failure prints {ok: false, error} and exits nonzero.
+Actions:
+  join {url, name}   open (or reuse) the Meet tab, dismiss the mic/camera prompt, fill "Your name", mute mic and
+                     camera, then press "Ask to join" / "Join now" with a REAL OS click (xdotool). Returns after the
+                     click: {state: waiting_admission | in_meeting | denied | captcha | error, detail}. It does not
+                     wait for the host to admit the guest.
+  state              {state: in_meeting | waiting_admission | denied | ended | captcha | prejoin | unknown, detail,
+                     participants?}. `captcha` only for a VISIBLE recaptcha frame (Meet loads an invisible one).
+  chat_read {since?, name?} the in-call chat as {messages: [{id, sender, text, self, at?}]}, newest last; `since` is an
+                     id from an earlier read, only newer messages come back. Own messages have no header in Meet: they
+                     get `self: true` and sender = `name` (the local display name) or "You".
+  chat_send {text}   type into the chat box and send.
+  audio_read {since?}  what people SAY, as the meeting's own audio: installs a page-side recorder once and returns
+                     {on, epoch, segments: [{seq, start, end, speakers, data}]} with only segments whose seq > `since` (at
+                     most 6 per call, oldest first); segments with seq <= `since` are dropped from the page (acknowledged).
+                     `data` is a standalone audio/webm (opus) file, base64; `speakers` are the names Meet showed as speaking
+                     meanwhile. `on` is false while the recorder hears no remote audio track. The recorder lives in the page
+                     (window.__junoAudio): every remote audio track of the call's audio/video elements is mixed into one
+                     MediaRecorder that restarts per segment (cut after >=1.2s of silence once the segment is >=3s, or at 25s;
+                     segments without speech are discarded). `epoch` changes when the page reloads (seqs restart at 1). The
+                     helper does no speech-to-text; the backend transcribes each segment.
+  leave             press "Leave call" (or "Cancel" while waiting to be let in).
+
+Why a real click: Meet ignores synthetic clicks on its join button in some builds, and a trusted OS click is what a
+person does. The button's rect is read over CDP in CSS pixels, converted to framebuffer pixels with the same
+window geometry model as agent_browser_bounds (viewport sits at the bottom of the browser window, equal borders left,
+right and bottom), and clicked with `xdotool mousemove x y sleep 0.15 click 1` on --display. XAUTHORITY comes from the
+environment (the platform exports the display's cookie, as for agent-browser `point`).
+
+Credit: the selectors, texts and join step order are adapted from Vexa (https://github.com/vexa-ai/vexa, Apache-2.0,
+commit f1a62fbbdfd2c98cb162582d82c31fe8102acc89, core/meetings/modules/join/src/googlemeet/{selectors,join,admission}.ts
+and humanized/); see packages/sandbox-image/THIRD-PARTY-NOTICES.md. Key lessons: the lobby also shows "Leave call" and
+the mic/camera toggles, so waiting text must be checked before "in meeting"; the join button label may be longer than
+its text ("Ask to join without microphone & camera"), so match by prefix on aria-label or text; Meet scores input
+authenticity, so the pointer glides along a curved path and the name is typed with real keystrokes. Never close the
+browser's last tab (that quits Chromium).
+
+The audio recorder (AUDIO_INSTALL) adapts Vexa's Meet speaker detection (core/meetings/modules/join/src/googlemeet/
+gmeet-speakers.ts, same commit): participant tiles are `[data-participant-id]`, the name is `span.notranslate` (else the
+`data-self-name` marker), the local tile is the one carrying `data-self-name`, a tile speaks when it carries one of the
+known glow classes, and Meet's remote audio lives in `audio`/`video` elements whose srcObject has audio tracks. See
+THIRD-PARTY-NOTICES.md.
+
+Selectors: Meet's class names are obfuscated and change; only aria-labels, roles, visible button text and a few
+`data-*` attributes are used, all in the SELECTORS table below. English UI is assumed (the sandbox's browser locale).
+"""
+import argparse
+import hashlib
+import json
+import os
+import random
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+from typing import Any, Dict, List, Optional
+
+try:
+    from agent_browser_bounds import viewport_origin, window_metrics
+    from agent_browser_cdp import Cdp, HelperError, connect, create_tab, page_targets
+except ImportError as exc:
+    print(json.dumps({"ok": False, "error": "missing dependency: %s" % exc}))
+    raise SystemExit(1)
+
+BUDGET_S = 45.0
+POLL_S = 0.4
+LOAD_WAIT_S = 25.0
+AFTER_CLICK_WAIT_S = 8.0
+
+# Everything that knows what Meet looks like lives here. `re` values are case-insensitive regexes matched against a
+# control's aria-label, else its visible text.
+SELECTORS = {
+    "meet_url": r"^https://meet\.google\.com/[a-z0-9-]+(\?.*)?$",
+    "name_input": 'input[aria-label="Your name"], input[placeholder="Your name"]',
+    "dismiss_in_dialog": r"^(continue without microphone and camera|continue without (microphone|camera)|got it|dismiss|close)$",
+    # The aria-label can be longer than the visible text ("Ask to join without microphone & camera" when the computer has
+    # no mic/camera), so this prefix pattern is tried against the aria-label AND the visible text.
+    "join_button": r"^(ask to join|join now)\b",
+    "mic_on_button": r"^turn off microphone",
+    "cam_on_button": r"^turn off camera",
+    "leave_button": r"^leave call$",
+    "cancel_button": r"^cancel$",
+    "chat_button": r"^chat with everyone$",
+    "chat_input": 'textarea[aria-label*="send a message" i], input[aria-label*="send a message" i]',
+    "chat_send_button": r"^send (a )?message$",
+    "people_button": r"(show everyone|^people|participants)",
+    # Chat DOM (observed live): list > group `[jsname=Ypafjf]` (style order:N; class ydIQ1d on the local participant's own
+    # groups) > header (name `.poVWob`, absent in own groups and, in Meet, omitted when it repeats; time `[jsname=biJjHb]`)
+    # + one or more `div[data-message-id]` bodies holding the text in `[jsname=dTKtvb]`. The Pin button inside a message
+    # carries the same data-message-id (so only DIV matches count) next to a tooltip and a "keep" icon ligature.
+    "chat_message": "div[data-message-id]",
+    "chat_group": "[jsname=Ypafjf]",
+    "chat_group_self": "ydIQ1d",
+    "chat_sender": ".poVWob",
+    "chat_time": "[jsname=biJjHb]",
+    "chat_body": "[jsname=dTKtvb]",
+    "chat_noise": 'button, [role=button], [role=tooltip], i, [aria-hidden=true], .UaaITe',
+    # Who is speaking (Vexa): participant tiles, the name inside a tile, the local participant's marker, the obfuscated glow
+    # classes Meet puts on a speaking tile (the plain names are guesses that cost nothing), and names that are not people.
+    "tile": "[data-participant-id]",
+    "tile_name": "span.notranslate",
+    "self_marker": "[data-self-name]",
+    "speaking_classes": ["Oaajhc", "HX2H7", "wEsLMd", "OgVli", "speaking", "active-speaker", "speaker-active", "speaking-indicator"],
+    "junk_name": r"^Google Participant \(|spaces/|devices/",
+    # Remote audio: media elements carrying a MediaStream with audio tracks.
+    "media": "audio, video",
+    "captcha_frame":'iframe[src*="recaptcha"], iframe[title*="recaptcha" i]',
+}
+
+# Page texts (matched on the whole body text) for the states that have no control to key on.
+TEXTS = {
+    "waiting": r"asking to be let in|someone in the meeting should let you in|waiting for the host|let you in soon|"
+               r"until a meeting host brings you into the call|when someone lets you in|you.re in the waiting room",
+    "denied": r"denied your request|you can.t join this (video )?call|no one responded to your request|you.ve been removed from the meeting",
+    "ended": r"you left the meeting|you.ve left the (call|meeting)|the meeting has ended|return to home screen|rejoin",
+    "invalid": r"check your meeting code|invalid video call name|meeting code is invalid|can.t find (this|that) (meeting|call)|this meeting (has expired|link has expired)",
+}
+
+# Where Meet sends a link it does not recognise (or a guest it will not serve): the product marketing page.
+OFF_MEET_URL = r"^https://(workspace\.google\.com/products/meet|meet\.google\.com/?(landing)?(\?.*)?$)"
+
+# Runs in the page. `arg` is JSON-embedded by the caller, never string-concatenated user text.
+JS_LIB = r"""
+const S = %(selectors)s, T = %(texts)s;
+const vis = e => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e);
+  return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+const label = e => (e.getAttribute('aria-label') || e.innerText || e.textContent || '').trim();
+const labels = e => [e.getAttribute('aria-label'), e.innerText, e.textContent].map(s => (s || '').trim()).filter(Boolean);
+const matches = (rx, e) => labels(e).some(l => rx.test(l));
+const controls = scope => [...(scope || document).querySelectorAll('button,[role=button]')].filter(vis);
+const rectOf = e => { const r = e.getBoundingClientRect(); const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+  const top = document.elementFromPoint(cx, cy);
+  return {x: r.x, y: r.y, w: r.width, h: r.height, label: label(e), hit: !!top && (e === top || e.contains(top) || top.contains(e)),
+          disabled: e.disabled === true || e.getAttribute('aria-disabled') === 'true'}; };
+const findControl = (re, scope) => { const rx = new RegExp(re, 'i'); const e = controls(scope).find(c => matches(rx, c));
+  if (!e) return null; e.scrollIntoView({block: 'center'}); return rectOf(e); };
+const body = () => (document.body ? document.body.innerText : '');
+const captcha = () => [...document.querySelectorAll(S.captcha_frame)].some(f => { const r = f.getBoundingClientRect();
+  return vis(f) && r.width > 100 && r.height > 100; });
+const unavailable = () => {
+  if (new RegExp(T.off_meet_url, 'i').test(location.href)) return 'Meet redirected to ' + location.href + ' instead of the meeting: the link is not a live meeting (wrong, expired or ended code), or Meet will not serve it to this guest';
+  if (new RegExp(T.invalid, 'i').test(body())) return 'Meet says the meeting code is invalid ("check your meeting code")';
+  return null;
+};
+const classify = () => {
+  const text = body();
+  if (unavailable()) return 'ended';
+  if (captcha()) return 'captcha';
+  if (new RegExp(T.denied, 'i').test(text)) return 'denied';
+  // The lobby ALSO shows "Leave call" and the mic/camera toggles (Vexa: "DANGER"), so waiting text must win over them.
+  if (new RegExp(T.waiting, 'i').test(text)) return 'waiting_admission';
+  if (findLeave()) return 'in_meeting';
+  if (document.querySelector(S.name_input) || controls().some(c => matches(new RegExp(S.join_button, 'i'), c))) return 'prejoin';
+  if (new RegExp(T.ended, 'i').test(text)) return 'ended';
+  return 'unknown';
+};
+const findLeave = () => controls().some(c => new RegExp(S.leave_button, 'i').test(label(c)));
+"""
+
+
+def js_call(body, arg=None):
+    # type: (str, Any) -> str
+    """An expression that runs `body` (a function of `arg`) with the library in scope."""
+    lib = JS_LIB % {"selectors": json.dumps(SELECTORS), "texts": json.dumps(dict(TEXTS, off_meet_url=OFF_MEET_URL))}
+    return "(()=>{%s\nconst arg = %s;\n%s})()" % (lib, json.dumps(arg), body)
+
+
+def ev(cdp, body, arg=None):
+    # type: (Cdp, str, Any) -> Any
+    res = cdp.send("Runtime.evaluate", {"expression": js_call(body, arg), "returnByValue": True, "awaitPromise": True})
+    if res.get("exceptionDetails"):
+        detail = res["exceptionDetails"]
+        raise HelperError("page script failed: %s" % ((detail.get("exception") or {}).get("description") or detail.get("text")))
+    return (res.get("result") or {}).get("value")
+
+
+def poll(cdp, deadline_s, probe):
+    # type: (Cdp, float, Any) -> Any
+    """Call probe() until it returns something truthy or `deadline_s` seconds pass; returns the last value."""
+    end = min(time.monotonic() + deadline_s, cdp.deadline - 0.5)
+    value = probe()
+    while not value and time.monotonic() < end:
+        time.sleep(POLL_S)
+        value = probe()
+    return value
+
+
+def os_click(cdp, display, rect, what):
+    # type: (Cdp, int, Dict[str, Any], str) -> None
+    """A real OS click on the centre of a control whose CSS-pixel rect was just read."""
+    if rect.get("disabled"):
+        raise HelperError("%s is disabled" % what)
+    if not rect.get("hit"):
+        raise HelperError("%s is covered by something else on the page" % what)
+    cdp.send("Page.bringToFront")
+    metrics = window_metrics(cdp)
+    left, top, width, height, zoom = viewport_origin(metrics)
+    # Aim near the centre, not on the exact pixel.
+    x = left + (rect["x"] + rect["w"] * random.uniform(0.4, 0.6)) * zoom
+    y = top + (rect["y"] + rect["h"] * random.uniform(0.4, 0.6)) * zoom
+    if not (left <= x < left + width and top <= y < top + height):
+        raise HelperError("%s is outside the visible browser window" % what)
+    xdo(display, human_click_args(pointer_at(display), (x, y)), what)
+
+
+def xdo(display, args, what, stdin=None):
+    # type: (int, List[str], str, Optional[bytes]) -> None
+    env = dict(os.environ, DISPLAY=":%d" % display)
+    try:
+        done = subprocess.run(["xdotool"] + args, env=env, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise HelperError("xdotool on %s failed: %s" % (what, exc))
+    if done.returncode != 0:
+        raise HelperError("xdotool on %s failed: %s" % (what, done.stderr.decode("utf-8", "replace").strip()[:200]))
+
+
+def pointer_at(display):
+    # type: (int) -> Any
+    try:
+        out = subprocess.run(["xdotool", "getmouselocation", "--shell"], env=dict(os.environ, DISPLAY=":%d" % display),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5).stdout.decode("utf-8", "replace")
+        return float(re.search(r"X=(-?\d+)", out).group(1)), float(re.search(r"Y=(-?\d+)", out).group(1))
+    except Exception:
+        return 40.0, 40.0
+
+
+def human_click_args(start, end):
+    # type: (Any, Any) -> List[str]
+    """One chained xdotool command: the pointer glides along a curved, jittered path with uneven timing, settles, then
+    presses and releases with a human-length hold. Never `mousemove --sync` (it hangs when the pointer is already
+    there). Vexa's humanized layer replays recorded mouse trajectories for the same reason (Meet scores input
+    authenticity); this is the small version of it."""
+    (x0, y0), (x1, y1) = start, end
+    dist = max(1.0, ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5)
+    bend = random.uniform(-0.18, 0.18) * dist
+    cx, cy = (x0 + x1) / 2.0 - (y1 - y0) / dist * bend, (y0 + y1) / 2.0 + (x1 - x0) / dist * bend
+    steps = max(8, min(28, int(dist / 40) + 8))
+    args = []  # type: List[str]
+    for i in range(1, steps + 1):
+        t = i / float(steps)
+        t = t * t * (3 - 2 * t)  # ease in/out
+        px = (1 - t) ** 2 * x0 + 2 * (1 - t) * t * cx + t ** 2 * x1 + (random.uniform(-1.2, 1.2) if i < steps else 0)
+        py = (1 - t) ** 2 * y0 + 2 * (1 - t) * t * cy + t ** 2 * y1 + (random.uniform(-1.2, 1.2) if i < steps else 0)
+        args += ["mousemove", str(int(round(px))), str(int(round(py))), "sleep", "%.3f" % random.uniform(0.008, 0.03)]
+    args += ["sleep", "%.3f" % random.uniform(0.12, 0.3), "mousedown", "1", "sleep", "%.3f" % random.uniform(0.06, 0.14), "mouseup", "1"]
+    return args
+
+
+def click_control(cdp, display, pattern, what, scope=None):
+    # type: (Cdp, int, str, str, Optional[str]) -> None
+    rect = ev(cdp, "const sc = arg.scope ? document.querySelector(arg.scope) : null; return findControl(arg.re, sc);",
+              {"re": pattern, "scope": scope})
+    if not rect:
+        raise HelperError("no %s on the page" % what)
+    os_click(cdp, display, rect, what)
+
+
+def meet_tab(port, deadline):
+    # type: (int, float) -> str
+    for target in page_targets(port, deadline):
+        url = str(target.get("url") or "")
+        if re.match(r"^https://meet\.google\.com/[a-z0-9]+-[a-z0-9]+-[a-z0-9]+", url):
+            return target["id"]
+    raise HelperError("no Google Meet tab is open on this computer")
+
+
+def open_meet(port, deadline, url):
+    # type: (int, float, str) -> Any
+    """A page session on the tab for this meeting code, navigating a new tab if there is none."""
+    code = url.split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+    for target in page_targets(port, deadline):
+        if ("meet.google.com/" + code) in str(target.get("url") or ""):
+            return connect(port, deadline, target["id"])
+    target_id = create_tab(port, deadline)
+    cdp, tid = connect(port, deadline, target_id)
+    # Vexa pins the lobby language with ?hl=<lang> so the English selectors apply whatever the egress locale is.
+    nav = url if "?" in url else url + "?hl=en"
+    cdp.send("Page.navigate", {"url": nav})
+    return cdp, tid
+
+
+def close_tab(port, deadline, target_id):
+    # type: (int, float, str) -> None
+    """Close exactly this tab (never another); the browser's own endpoint, best effort after the work is done."""
+    if not re.match(r"^[A-Za-z0-9]+$", target_id):
+        return
+    try:
+        # Closing the browser's last tab quits Chromium (and with it the agent's CDP port): keep a blank tab instead.
+        if len(page_targets(port, deadline)) <= 1:
+            create_tab(port, deadline)
+    except Exception:
+        pass
+    try:
+        req = urllib.request.Request("http://127.0.0.1:%d/json/close/%s" % (port, target_id), headers={"Connection": "close"})
+        urllib.request.urlopen(req, timeout=max(0.5, min(3.0, deadline - time.monotonic()))).read()
+    except Exception:
+        pass
+
+
+def classify(cdp):
+    # type: (Cdp) -> str
+    return str(ev(cdp, "return classify();"))
+
+
+def describe(state):
+    # type: (str) -> str
+    return {
+        "in_meeting": "in the meeting",
+        "waiting_admission": "waiting for the host to let this guest in",
+        "denied": "the host denied the request to join (or the call cannot be joined)",
+        "captcha": "Meet is showing a visible captcha that a person has to solve",
+        "ended": "not in a meeting (left, removed or the meeting ended)",
+        "prejoin": "on the pre-join screen",
+        "unknown": "the page is not a recognised Meet screen",
+    }.get(state, state)
+
+
+def do_join(port, display, request, deadline):
+    # type: (int, int, Dict[str, Any], float) -> Dict[str, Any]
+    url, name = request.get("url"), request.get("name")
+    if not isinstance(url, str) or not re.match(SELECTORS["meet_url"], url):
+        raise ValueError("join needs a https://meet.google.com/<code> url")
+    if not isinstance(name, str) or not 1 <= len(name.strip()) <= 100:
+        raise ValueError("join needs a display name of 1..100 characters")
+    name = name.strip()
+    cdp, tid = open_meet(port, deadline, url)
+    result = None  # type: Optional[Dict[str, Any]]
+    try:
+        result = join_on(cdp, display, url, name)
+        return result
+    finally:
+        cdp.close()
+        # A terminal failure leaves no use for the tab; a captcha stays open for a person, waiting/in stay open.
+        if result is not None and result.get("state") in ("denied", "error", "ended"):
+            close_tab(port, deadline, tid)
+
+
+def join_on(cdp, display, url, name):
+    # type: (Cdp, int, str, str) -> Dict[str, Any]
+    if True:
+        state = poll(cdp, LOAD_WAIT_S, lambda: (lambda s: s if s not in ("unknown",) else "")(classify(cdp)))
+        if state in ("in_meeting", "waiting_admission", "denied", "captcha"):
+            return {"ok": True, "action": "join", "state": state, "detail": "already: " + describe(state)}
+        if state != "prejoin":
+            reason = ev(cdp, "return unavailable();")
+            if reason:
+                return {"ok": True, "action": "join", "state": "ended", "detail": reason}
+            return {"ok": True, "action": "join", "state": "error",
+                    "detail": "the Meet page did not reach the pre-join screen (%s)" % describe(state or "unknown")}
+        time.sleep(random.uniform(1.5, 2.5))  # let the lobby SPA finish rendering before touching it (Vexa waits too)
+        # The "do you want people to see and hear you" prompt, tips and similar dialogs.
+        for _ in range(3):
+            rect = ev(cdp, "const d = document.querySelector('[role=dialog]'); return d ? findControl(S.dismiss_in_dialog, d) : null;")
+            if not rect:
+                break
+            os_click(cdp, display, rect, "dialog button '%s'" % rect.get("label"))
+            time.sleep(0.5)
+        # Mic and camera first: toggling them re-renders the pre-join form and wipes a name typed before.
+        for key, what in (("mic_on_button", "microphone"), ("cam_on_button", "camera")):
+            rect = ev(cdp, "return findControl(S[arg], null);", key)
+            if rect:  # only a control that currently says "Turn off ..." means it is on
+                os_click(cdp, display, rect, "the %s button" % what)
+                time.sleep(0.5)
+        # Guest name; a signed-in profile has no such field and keeps its own name. Meet may still reset the field
+        # while it settles, so the name is typed again until it is still there after a pause.
+        value = None
+        for _ in range(4):
+            rect = ev(cdp, "const i = document.querySelector(S.name_input); if (!i || !vis(i)) return null;"
+                           "i.scrollIntoView({block: 'center'}); return rectOf(i);")
+            if not rect:
+                break
+            # Vexa: click the field, then real XTEST keystrokes with a per-character delay (not synthetic input).
+            os_click(cdp, display, rect, "the name field")
+            time.sleep(random.uniform(0.12, 0.3))
+            xdo(display, ["key", "--clearmodifiers", "ctrl+a"], "the name field")
+            xdo(display, ["type", "--clearmodifiers", "--delay", str(random.randint(55, 105)), "--", name], "the name field")
+            time.sleep(0.6)
+            value = ev(cdp, "const i = document.querySelector(S.name_input); return i ? i.value : null;")
+            if value == name:
+                break
+        else:
+            return {"ok": True, "action": "join", "state": "error",
+                    "detail": "could not enter the display name (the field holds %r)" % (value,)}
+        rect = poll(cdp, 4.0, lambda: (lambda r: r if r and not r.get("disabled") else None)(ev(cdp, "return findControl(S.join_button, null);"))) \
+            or ev(cdp, "return findControl(S.join_button, null);")
+        if not rect:
+            reason = ev(cdp, "return unavailable();")
+            if reason:
+                return {"ok": True, "action": "join", "state": "ended", "detail": reason}
+            return {"ok": True, "action": "join", "state": "error", "detail": "no Ask to join / Join now button on the pre-join screen"}
+        os_click(cdp, display, rect, "'%s'" % rect.get("label"))
+        after = poll(cdp, AFTER_CLICK_WAIT_S, lambda: (lambda s: s if s not in ("prejoin", "unknown") else "")(classify(cdp)))
+        if after == "waiting_admission":
+            return {"ok": True, "action": "join", "state": "waiting_admission",
+                    "detail": "clicked '%s' as %s; waiting for the host to admit" % (rect.get("label"), name)}
+        if after == "denied":
+            headline = (ev(cdp, "return body().split('\\n')[0];") or "").strip()
+            if re.search(r"can.t join this (video )?call", headline, re.I):
+                # Meet's own refusal page, shown at once without the host ever being asked: not a host decision.
+                return {"ok": True, "action": "join", "state": "denied",
+                        "detail": "clicked '%s' as %s but Meet refused at once with \"%s\" (the host was not asked): "
+                                  "this meeting does not accept this anonymous guest or network (guest access blocked or bot check failed)"
+                                  % (rect.get("label"), name, headline)}
+        if after in ("in_meeting", "denied", "captcha"):
+            return {"ok": True, "action": "join", "state": after, "detail": "clicked '%s' as %s; %s" % (rect.get("label"), name, describe(after))}
+        return {"ok": True, "action": "join", "state": "error",
+                "detail": "clicked '%s' but the page still shows %s after %ds" % (rect.get("label"), describe(classify(cdp)), int(AFTER_CLICK_WAIT_S))}
+
+
+def do_state(port, deadline):
+    # type: (int, float) -> Dict[str, Any]
+    cdp, _tid = connect(port, deadline, meet_tab(port, deadline))
+    try:
+        state = classify(cdp)
+        out = {"ok": True, "action": "state", "state": state, "detail": describe(state)}  # type: Dict[str, Any]
+        if state == "in_meeting":
+            count = ev(cdp, "const b = controls().find(c => new RegExp(S.people_button, 'i').test(label(c)));"
+                            "if (!b) return null; const m = (b.innerText + ' ' + (b.getAttribute('aria-label') || '')).match(/\\d+/);"
+                            "return m ? parseInt(m[0], 10) : null;")
+            if isinstance(count, int):
+                out["participants"] = count
+        return out
+    finally:
+        cdp.close()
+
+
+def open_chat(cdp, display):
+    # type: (Cdp, int) -> None
+    """The chat panel open with its input present; opens it with a real click when it is closed."""
+    if ev(cdp, "return !!document.querySelector(S.chat_input);"):
+        return
+    if classify(cdp) != "in_meeting":
+        raise HelperError("not in the meeting (chat is only available once admitted)")
+    click_control(cdp, display, SELECTORS["chat_button"], "'Chat with everyone' button")
+    if not poll(cdp, 6.0, lambda: ev(cdp, "return !!document.querySelector(S.chat_input);")):
+        raise HelperError("opened the chat panel but its message box never appeared")
+
+
+READ_CHAT = r"""
+const out = [];
+const seen = new Set();
+const selfName = (arg && arg.self) || 'You';
+const groups = [...document.querySelectorAll(S.chat_group)].filter(g => g.querySelector(S.chat_message));
+groups.sort((a, b) => (parseInt(a.style.order, 10) || 0) - (parseInt(b.style.order, 10) || 0));
+let lastSender = '';
+for (const g of groups) {
+  const own = g.classList.contains(S.chat_group_self);
+  const nameEl = g.querySelector(S.chat_sender);
+  const timeEl = g.querySelector(S.chat_time);
+  const at = timeEl ? (timeEl.textContent || '').trim() : null;
+  let sender = own ? selfName : ((nameEl && nameEl.textContent) || '').trim() || lastSender;
+  if (!own && nameEl) lastSender = sender;
+  for (const m of g.querySelectorAll(S.chat_message)) {
+    const id = m.getAttribute('data-message-id');
+    if (!id || seen.has(id)) continue;
+    let body = m.querySelector(S.chat_body);
+    if (!body) { body = m.cloneNode(true); body.querySelectorAll(S.chat_noise).forEach(n => n.remove()); }
+    const text = (body.innerText || body.textContent || '').trim();
+    if (!text) continue;
+    seen.add(id);
+    out.push({id, sender, text, at: at || null, self: own});
+  }
+}
+const panel = document.querySelector(S.chat_input);
+let raw = null;
+if (!out.length && panel) { const root = panel.closest('[role=complementary],[role=region],aside') || panel.parentElement; raw = (root ? root.innerText : '').slice(0, 2000); }
+return {messages: out, raw};
+"""
+
+
+def do_chat_read(port, display, request, deadline):
+    # type: (int, int, Dict[str, Any], float) -> Dict[str, Any]
+    since = request.get("since")
+    if since is not None and not isinstance(since, str):
+        raise ValueError("since must be a message id string")
+    cdp, _tid = connect(port, deadline, meet_tab(port, deadline))
+    try:
+        open_chat(cdp, display)
+        read = ev(cdp, READ_CHAT, {"self": request.get("name") if isinstance(request.get("name"), str) and request.get("name") else None})
+        messages = [m for m in (read or {}).get("messages", []) if isinstance(m, dict)]
+        for m in messages:
+            if m.get("at") is None:
+                m.pop("at", None)
+        if since:
+            ids = [m["id"] for m in messages]
+            if since in ids:
+                messages = messages[ids.index(since) + 1:]
+        out = {"ok": True, "action": "chat_read", "messages": messages[-200:]}  # type: Dict[str, Any]
+        if not messages and (read or {}).get("raw"):
+            out["raw"] = read["raw"]  # the panel's text when no message could be parsed, so a wrong selector is visible
+        return out
+    finally:
+        cdp.close()
+
+
+# Installs the audio recorder in the page once (guarded by window.__junoAudio) and returns its epoch. All remote audio is mixed
+# into one MediaRecorder that is restarted per segment, so every segment is a standalone webm file. Speech detection is a plain
+# RMS level on the mix; SPEECH_LEVEL (0..1) is the threshold to tune if quiet talkers are missed or room noise is kept (a
+# noise-only segment that slips through costs one Whisper call and is filtered by the backend).
+AUDIO_INSTALL = r"""
+if (window.__junoAudio) return window.__junoAudio.epoch;
+const SPEECH_LEVEL = 0.01, SILENCE_MS = 1200, MIN_MS = 3000, MAX_MS = 25000, IDLE_MS = 5000, KEEP = 40;
+const st = window.__junoAudio = {epoch: Math.random().toString(36).slice(2) + Date.now().toString(36), n: 0, segs: [], tracks: new Map()};
+const ctx = new AudioContext();
+ctx.resume().catch(() => {});
+const mix = ctx.createMediaStreamDestination();
+const analyser = ctx.createAnalyser();
+analyser.fftSize = 1024;
+const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+const junk = new RegExp(S.junk_name);
+const tileName = el => {
+  const nt = el.querySelector(S.tile_name);
+  let t = ((nt && nt.textContent) || '').trim();
+  if (!t) { const m = el.querySelector(S.self_marker); t = m ? (m.getAttribute('data-self-name') || '').trim() : ''; }
+  return t.length >= 2 && t.length <= 50 && !junk.test(t) ? t : '';
+};
+const isSelf = el => el.hasAttribute('data-self-name') || !!el.querySelector(S.self_marker);
+const lit = el => S.speaking_classes.some(c => el.classList.contains(c) || !!el.querySelector('.' + CSS.escape(c)));
+const speaking = () => [...document.querySelectorAll(S.tile)].filter(el => !isSelf(el) && lit(el)).map(tileName).filter(Boolean);
+const addTracks = () => {
+  for (const el of document.querySelectorAll(S.media)) {
+    const stream = el.srcObject;
+    if (!(stream instanceof MediaStream)) continue;
+    for (const t of stream.getAudioTracks()) {
+      if (st.tracks.has(t.id)) continue;
+      st.tracks.set(t.id, t);
+      const src = ctx.createMediaStreamSource(new MediaStream([t]));
+      src.connect(mix);
+      src.connect(analyser);
+    }
+  }
+};
+st.on = () => [...st.tracks.values()].some(t => t.readyState === 'live');
+let cur = null;
+const begin = () => {
+  const c = {chunks: [], t0: Date.now(), start: new Date().toISOString(), speech: false, lastLoud: 0, names: new Set(), seq: 0};
+  c.rec = new MediaRecorder(mix.stream, {mimeType: mime, audioBitsPerSecond: 32000});
+  c.rec.ondataavailable = e => { if (e.data && e.data.size) c.chunks.push(e.data); };
+  c.rec.onstop = () => {
+    if (!c.seq) return;
+    const end = new Date().toISOString();
+    const fr = new FileReader();
+    fr.onload = () => {
+      const data = String(fr.result).split(',')[1] || '';
+      st.segs.push({seq: c.seq, start: c.start, end, speakers: [...c.names], data});
+      st.segs.sort((a, b) => a.seq - b.seq);
+      if (st.segs.length > KEEP) st.segs.splice(0, st.segs.length - KEEP);
+    };
+    fr.readAsDataURL(new Blob(c.chunks, {type: 'audio/webm'}));
+  };
+  c.rec.start();
+  return c;
+};
+// Start the next recorder before stopping the old one so no audio falls between segments. A segment with no speech gets no seq
+// and is dropped in onstop.
+const cut = () => {
+  const old = cur;
+  cur = begin();
+  if (old.speech) old.seq = ++st.n;
+  old.rec.stop();
+};
+const buf = new Float32Array(analyser.fftSize);
+setInterval(() => {
+  try {
+    analyser.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    const now = Date.now();
+    if (Math.sqrt(sum / buf.length) > SPEECH_LEVEL) { cur.speech = true; cur.lastLoud = now; }
+    const age = now - cur.t0;
+    if (age >= MAX_MS || (cur.speech && age >= MIN_MS && now - cur.lastLoud >= SILENCE_MS) || (!cur.speech && age >= IDLE_MS)) cut();
+  } catch (e) {}
+}, 100);
+setInterval(() => { try { for (const n of speaking()) cur.names.add(n); } catch (e) {} }, 300);
+setInterval(() => { try { addTracks(); if (ctx.state === 'suspended') ctx.resume().catch(() => {}); } catch (e) {} }, 1000);
+cur = begin();
+addTracks();
+return st.epoch;
+"""
+
+# Segments after `since` (oldest first, at most 6 so the payload stays bounded); everything up to `since` is acknowledged and dropped.
+AUDIO_READ = r"""
+const st = window.__junoAudio;
+if (!st) return null;
+const since = (arg && arg.since) || 0;
+st.segs = st.segs.filter(s => s.seq > since);
+return {epoch: st.epoch, on: st.on(), segments: st.segs.slice(0, 6)};
+"""
+
+
+def do_audio_read(port, request, deadline):
+    # type: (int, Dict[str, Any], float) -> Dict[str, Any]
+    since = request.get("since")
+    if since is not None and (isinstance(since, bool) or not isinstance(since, int) or since < 0):
+        raise ValueError("since must be a non-negative integer")
+    cdp, _tid = connect(port, deadline, meet_tab(port, deadline))
+    try:
+        if classify(cdp) != "in_meeting":
+            raise HelperError("not in the meeting (audio is only available once admitted)")
+        ev(cdp, AUDIO_INSTALL)
+        read = ev(cdp, AUDIO_READ, {"since": since or 0}) or {}
+        segments = [s for s in read.get("segments", []) if isinstance(s, dict)]
+        return {"ok": True, "action": "audio_read", "on": bool(read.get("on")), "epoch": read.get("epoch"), "segments": segments}
+    finally:
+        cdp.close()
+
+
+def do_chat_send(port, display, request, deadline):
+    # type: (int, int, Dict[str, Any], float) -> Dict[str, Any]
+    text = request.get("text")
+    if not isinstance(text, str) or not 1 <= len(text.strip()) <= 4000:
+        raise ValueError("chat_send needs text of 1..4000 characters")
+    cdp, _tid = connect(port, deadline, meet_tab(port, deadline))
+    try:
+        open_chat(cdp, display)
+        rect = ev(cdp, "const i = document.querySelector(S.chat_input); if (!i) return null; i.scrollIntoView({block: 'center'}); return rectOf(i);")
+        if not rect:
+            raise HelperError("the chat message box disappeared")
+        os_click(cdp, display, rect, "the chat message box")
+        cdp.send("Input.insertText", {"text": text.strip()})
+        for event in ("keyDown", "keyUp"):
+            cdp.send("Input.dispatchKeyEvent", {"type": event, "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13,
+                                                "nativeVirtualKeyCode": 13, **({"text": "\r"} if event == "keyDown" else {})})
+        emptied = poll(cdp, 3.0, lambda: ev(cdp, "const i = document.querySelector(S.chat_input); return !!i && i.value === '';"))
+        if not emptied:  # Enter did not send: press the send button instead
+            click_control(cdp, display, SELECTORS["chat_send_button"], "chat send button")
+            if not poll(cdp, 3.0, lambda: ev(cdp, "const i = document.querySelector(S.chat_input); return !!i && i.value === '';")):
+                raise HelperError("typed the message but Meet did not send it")
+        return {"ok": True, "action": "chat_send", "sent": True}
+    finally:
+        cdp.close()
+
+
+def do_leave(port, display, deadline):
+    # type: (int, int, float) -> Dict[str, Any]
+    cdp, tid = connect(port, deadline, meet_tab(port, deadline))
+    closing = False
+    try:
+        state = classify(cdp)
+        if state == "in_meeting":
+            click_control(cdp, display, SELECTORS["leave_button"], "'Leave call' button")
+        elif state == "waiting_admission":
+            # The lobby's red hang-up button is also "Leave call"; older lobbies show "Cancel".
+            if ev(cdp, "return !!findControl(S.leave_button, null);"):
+                click_control(cdp, display, SELECTORS["leave_button"], "'Leave call' button")
+            else:
+                click_control(cdp, display, SELECTORS["cancel_button"], "'Cancel' button")
+        else:
+            closing = True  # already over (ended, denied, nothing recognisable): just drop this Meet tab
+            return {"ok": True, "action": "leave", "state": state, "detail": "nothing to leave: %s; closed the Meet tab" % describe(state)}
+        after = poll(cdp, 6.0, lambda: (lambda s: s if s not in ("in_meeting", "waiting_admission") else "")(classify(cdp)))
+        if not after:
+            raise HelperError("pressed the button but the meeting is still shown")
+        closing = True
+        return {"ok": True, "action": "leave", "state": "ended", "detail": "left the meeting and closed its tab"}
+    finally:
+        cdp.close()
+        if closing:
+            close_tab(port, deadline, tid)
+
+
+def run(port, display, raw_request, deadline):
+    # type: (int, int, str, float) -> Dict[str, Any]
+    if not 1 <= port <= 65535:
+        raise ValueError("invalid port %r" % (port,))
+    if not 0 <= display <= 999:
+        raise ValueError("invalid display %r" % (display,))
+    try:
+        request = json.loads(raw_request)
+    except ValueError:
+        raise ValueError("request is not valid JSON")
+    if not isinstance(request, dict):
+        raise ValueError("request must be a JSON object")
+    action = request.get("action")
+    allowed = {"join": ("action", "url", "name"), "state": ("action",), "chat_read": ("action", "since", "name"),
+               "chat_send": ("action", "text"), "audio_read": ("action", "since"), "leave": ("action",)}
+    if action not in allowed:
+        raise ValueError("unknown action %r" % (action,))
+    extra = set(request) - set(allowed[action])
+    if extra:
+        raise ValueError("unsupported fields: %s" % sorted(extra))
+    if action == "join":
+        return do_join(port, display, request, deadline)
+    if action == "state":
+        return do_state(port, deadline)
+    if action == "chat_read":
+        return do_chat_read(port, display, request, deadline)
+    if action == "chat_send":
+        return do_chat_send(port, display, request, deadline)
+    if action == "audio_read":
+        return do_audio_read(port, request, deadline)
+    return do_leave(port, display, deadline)
+
+
+def main(argv=None):
+    # type: (Any) -> int
+    parser = argparse.ArgumentParser(description="Attend a Google Meet in the sandboxed Chromium")
+    parser.add_argument("--port", required=True, type=int)
+    parser.add_argument("--display", required=True, type=int)
+    parser.add_argument("--request", required=True)
+    args = parser.parse_args(argv)
+    deadline = time.monotonic() + BUDGET_S
+    try:
+        print(json.dumps(run(args.port, args.display, args.request, deadline)))
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": "%s" % exc}))
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

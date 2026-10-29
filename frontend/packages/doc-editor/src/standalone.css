@@ -1,0 +1,18 @@
+/* The bundled iOS page: the token names the shared editor sheet uses, light and dark. */
+:root {
+  --fg: #111111;
+  --fg-muted: #6b6b6b;
+  --border: rgb(0 0 0 / 0.14);
+  --muted: rgb(0 0 0 / 0.05);
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #fcfcfc;
+    --fg-muted: #a0a0a0;
+    --border: rgb(252 252 252 / 0.2);
+    --muted: rgb(252 252 252 / 0.08);
+  }
+}
+html, body { margin: 0; background: transparent; -webkit-text-size-adjust: 100%; font-family: -apple-system, system-ui, sans-serif; }
+#root { padding: 16px 16px 120px; }

@@ -1,0 +1,6 @@
+---
+id: tool.request_secure_input
+placement: T
+vars: []
+---
+Ask the user for SECRETS only — password, card number, expiry, CVC, cardholder-only payment fields, one-time code, government ID number — without ever seeing them. Names, emails, phone numbers and addresses are not secrets: fill those yourself from "Your user's details" (browser.type / browser.fill), or ask the user in chat once and save the answer with profile_update; a request containing such a field is refused. Before calling, take a fresh snapshot and put EVERY empty secret field the visible form needs into ONE request (up to 8). Pass each page field with its ref from the latest browser snapshot; the kind, limits (month 1-12, year, max length), select options and required flag are read from the page itself, so pass kind only when the page gives no hint; the user types the values on their device, they are encrypted there and only the computer decrypts and types them into those fields, and the page shows them as dots afterwards. Never ask for these in chat and never type them yourself. The run waits; you then learn only which fields were filled, which the page rejected after filling (with its rule when it shows one; ask again for just those) or that the user declined, so take a fresh snapshot and continue, e.g. click Sign in or Pay.

@@ -1,0 +1,42 @@
+node_modules/
+dist/
+out/
+storybook-static/
+screenshots/
+*.log
+.DS_Store
+.data/
+
+# Local credentials and machine state
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.venv/
+__pycache__/
+coverage/
+*.tsbuildinfo
+
+# Local package and editor output
+release/
+*.dmg
+*.zip
+*.app/
+.idea/
+.vscode/
+
+# Paid-team push opt-in (iOS)
+frontend/ios/Config/Push.local.xcconfig
+
+# Personal Claude Code instructions
+CLAUDE.local.md
+.claude/

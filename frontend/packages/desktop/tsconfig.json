@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "vite/client", "react", "react-dom"],
+    "noEmit": true,
+    // Workspace packages export TypeScript sources (no build step), so `tsc` typechecks their
+    // internals as part of this program. Their own configs are looser, so we must not impose the
+    // desktop app's unused-symbol checks on them here.
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "baseUrl": ".",
+    // ui ships TS sources and imports them through its own `@/*` alias; mirror it here.
+    "paths": {
+      "@/*": ["../ui/src/*"]
+    }
+  },
+  "include": ["src", "electron.vite.config.ts"]
+}

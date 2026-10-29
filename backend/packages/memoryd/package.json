@@ -1,0 +1,32 @@
+{
+  "name": "@agent-desktop/memoryd",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "dev": "node --env-file-if-exists=../../../.env --import tsx src/main.ts"
+  },
+  "dependencies": {
+    "@agent-desktop/db": "workspace:*",
+    "@agent-desktop/log": "workspace:*",
+    "@agent-desktop/memory-graph": "workspace:*",
+    "@agent-desktop/public-contracts": "workspace:*",
+    "@hono/node-server": "^1.19.0",
+    "hono": "^4.13.0",
+    "juno-agent": "workspace:*",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  },
+  "exports": {
+    "./contract": "./src/contract.ts",
+    "./client": "./src/client.ts",
+    "./server": "./src/server.ts"
+  }
+}

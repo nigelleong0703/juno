@@ -1,0 +1,34 @@
+{
+  "name": "@agent-desktop/computerd",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "dev": "node --env-file-if-exists=../../../.env --import tsx src/main.ts"
+  },
+  "dependencies": {
+    "@agent-desktop/public-contracts": "workspace:*",
+    "@agent-desktop/contracts": "workspace:*",
+    "@agent-desktop/sandbox-adapters": "workspace:*",
+    "@agent-desktop/db": "workspace:*",
+    "@agent-desktop/log": "workspace:*",
+    "@hono/node-server": "^1.19.0",
+    "hono": "^4.13.0",
+    "postgres": "^3.4.0",
+    "ws": "^8.22.0",
+    "zod": "^4.0.0",
+    "juno-link": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.0",
+    "typescript": "^5.9.0",
+    "tsx": "^4.7.0",
+    "vitest": "^3.2.0"
+  },
+  "exports": {
+    "./*": "./src/*.ts"
+  }
+}

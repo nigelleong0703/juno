@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home</title>
+<style>
+  /* Tokens follow docs/design/VISUAL.md (neutral palette, system fonts, 8/14/full radii). */
+  :root {
+    --bg: #fcfcfc; --muted: #f4f4f4; --fg: #141414; --fg-muted: rgba(20,20,20,.6);
+    --border: rgba(20,20,20,.15); --hover: rgba(119,119,119,.09); --accent: #1084fe;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #070707; --muted: #151515; --fg: #fcfcfc; --fg-muted: rgba(252,252,252,.6);
+      --border: rgba(252,252,252,.15); --hover: rgba(119,119,119,.17);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 14px/20px -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, "Noto Sans CJK SC", sans-serif;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 40px; padding: 24px;
+  }
+  header { text-align: center; }
+  h1 { margin: 0; font-size: 14px; font-weight: 500; color: var(--fg-muted); }
+  #time { font-size: 56px; line-height: 64px; font-weight: 600; letter-spacing: -.02em; margin-top: 4px; }
+  #date { font-size: 17px; line-height: 24px; color: var(--fg-muted); }
+  form { width: min(560px, 100%); }
+  input {
+    width: 100%; height: 48px; padding: 0 20px; border-radius: 9999px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+    font: inherit; font-size: 15px; outline: none;
+  }
+  input::placeholder { color: var(--fg-muted); }
+  input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(16,132,254,.2); }
+  nav { display: grid; grid-template-columns: repeat(6, 112px); gap: 8px; justify-content: center; }
+  nav a {
+    display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 4px 12px;
+    border-radius: 14px; color: var(--fg); text-decoration: none;
+    transition: background 120ms cubic-bezier(.16,1,.3,1), transform 120ms cubic-bezier(.16,1,.3,1);
+  }
+  nav a:hover, nav a:focus-visible { background: var(--hover); outline: none; }
+  nav a:active { transform: scale(.98); }
+  nav img { width: 56px; height: 56px; }
+  nav span { font-size: 13px; line-height: 18px; text-align: center; }
+  @media (max-width: 760px) { nav { grid-template-columns: repeat(3, 112px); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>This computer</h1>
+  <div id="time"></div>
+  <div id="date"></div>
+</header>
+<form id="search">
+  <input id="q" type="text" placeholder="Search Google or type a URL" autocomplete="off" spellcheck="false" autofocus>
+</form>
+<!-- Apps open through the juno-app:// scheme (see juno-app-open); only its fixed allow-list can run. -->
+<nav>
+  <a href="https://www.google.com/" target="_blank"><img data-icon="chromium" alt=""><span>Browser</span></a>
+  <a href="juno-app://terminal"><img data-icon="org.xfce.terminal" alt=""><span>Terminal</span></a>
+  <a href="juno-app://editor"><img data-icon="org.xfce.mousepad" alt=""><span>Text editor</span></a>
+  <a href="juno-app://writer"><img data-icon="libreoffice-writer" alt=""><span>Documents</span></a>
+  <a href="juno-app://calc"><img data-icon="libreoffice-calc" alt=""><span>Spreadsheets</span></a>
+  <a href="juno-app://impress"><img data-icon="libreoffice-impress" alt=""><span>Slides</span></a>
+</nav>
+<script>
+  // Icons come from the image's own Papirus theme; a plain rounded square stands in if one is missing.
+  const blank = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 56 56"><rect width="56" height="56" rx="14" fill="#777" fill-opacity=".25"/></svg>');
+  for (const img of document.querySelectorAll('img[data-icon]')) {
+    img.onerror = () => { img.onerror = null; img.src = blank; };
+    img.src = 'file:///usr/share/icons/Papirus/64x64/apps/' + img.dataset.icon + '.svg';
+  }
+  const time = document.getElementById('time'), date = document.getElementById('date');
+  function tick() {
+    const now = new Date();
+    time.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    date.textContent = now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+  }
+  tick(); setInterval(tick, 10000);
+  document.getElementById('search').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = document.getElementById('q').value.trim();
+    if (!text) return;
+    const looksLikeUrl = /^[a-z][a-z0-9+.-]*:\/\/\S+$/i.test(text) || /^(localhost|[^\s/]+\.[a-z]{2,})(:\d+)?(\/\S*)?$/i.test(text);
+    location.href = looksLikeUrl ? (/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : 'https://' + text)
+                                 : 'https://www.google.com/search?q=' + encodeURIComponent(text);
+  });
+</script>
+</body>
+</html>

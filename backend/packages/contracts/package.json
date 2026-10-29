@@ -1,0 +1,10 @@
+{
+  "name": "@agent-desktop/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./secrets": "./src/secrets.ts", "./mcp": "./src/mcp.ts", "./net": "./src/net.ts", "./model-providers": "./src/model-providers.ts", "./chatgpt-login": "./src/chatgpt-login.ts" },
+  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run --passWithNoTests" },
+  "dependencies": { "juno-agent": "workspace:*", "zod": "^4.0.0" },
+  "devDependencies": { "typescript": "^5.9.0", "vitest": "^3.2.0", "@types/node": "^24.0.0" }
+}

@@ -1,0 +1,13 @@
+# Optional Linux local-computer support. Before using, set DOCKER_BRIDGE_HOST
+# in deploy/.env to the gateway reported by `docker network inspect bridge`.
+# The port is bound only to that bridge address, never to 127.0.0.1 or a public
+# interface. The socket grants host-level Docker control to the app container.
+services:
+  app:
+    user: "0:0"
+    environment:
+      COMPUTERD_LINK_URL: ws://host.docker.internal:${COMPUTERD_LINK_PORT:-8795}/v1/computer-link
+    ports:
+      - "${DOCKER_BRIDGE_HOST:?set DOCKER_BRIDGE_HOST to the Linux Docker bridge gateway}:${COMPUTERD_LINK_PORT:-8795}:8795"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

@@ -1,0 +1,126 @@
+{
+  "App/RootView.swift": {
+    "glassEffect": 1,
+    "systemFont": 1
+  },
+  "App/Sidebar.swift": {
+    "systemFont": 8,
+    "bareSheet": 1
+  },
+  "App/TabHeader.swift": {
+    "systemFont": 2
+  },
+  "DesignSystem/BrandIcon.swift": {
+    "worldInDesignSystem": 1
+  },
+  "DesignSystem/ChannelPlatform.swift": {
+    "worldInDesignSystem": 1
+  },
+  "Features/Agents/Agents.swift": {
+    "systemFont": 8,
+    "colorLiteral": 4,
+    "hexColor": 2
+  },
+  "Features/Agents/Permissions.swift": {
+    "capsuleBackground": 1
+  },
+  "Features/Automations/RoutinesCalendar.swift": {
+    "systemFont": 4,
+    "capsuleBackground": 1,
+    "bareSheet": 1
+  },
+  "Features/Chat/ChatElements.swift": {
+    "glassEffect": 1,
+    "systemFont": 2,
+    "capsuleBackground": 3
+  },
+  "Features/Chat/ChatFeed.swift": {
+    "capsuleBackground": 1
+  },
+  "Features/Chat/ChatList.swift": {
+    "glassEffect": 1,
+    "systemFont": 4,
+    "capsuleBackground": 4
+  },
+  "Features/Chat/Conversation.swift": {
+    "glassEffect": 3,
+    "systemFont": 7,
+    "capsuleBackground": 4
+  },
+  "Features/Chat/Items.swift": {
+    "systemFont": 13,
+    "capsuleBackground": 3
+  },
+  "Features/Chat/PublishedArtifact.swift": {
+    "capsuleBackground": 1
+  },
+  "Features/Chat/SpaceCard.swift": {
+    "capsuleBackground": 1
+  },
+  "Features/Chat/Today.swift": {
+    "systemFont": 1
+  },
+  "Features/Discover/DiscoverTab.swift": {
+    "capsuleBackground": 1
+  },
+  "Features/Feed/Feed.swift": {
+    "glassEffect": 1,
+    "capsuleBackground": 1,
+    "bareSheet": 4
+  },
+  "Features/Goals/Goals.swift": {
+    "systemFont": 1
+  },
+  "Features/Ideas/Ideas.swift": {
+    "bareSheet": 1
+  },
+  "Features/Library/Library.swift": {
+    "capsuleBackground": 1
+  },
+  "Features/Onboarding/Login.swift": {
+    "systemFont": 3
+  },
+  "Features/Onboarding/Onboarding.swift": {
+    "glassEffect": 4,
+    "systemFont": 2,
+    "capsuleBackground": 2
+  },
+  "Features/Search/SearchPage.swift": {
+    "capsuleBackground": 1
+  },
+  "Features/Settings/AddWatchSheet.swift": {
+    "serverCall": 1
+  },
+  "Features/Settings/Models/ConnectModel.swift": {
+    "bareSheet": 2
+  },
+  "Features/Settings/Models/ModelSettings.swift": {
+    "systemFont": 2,
+    "bareSheet": 2
+  },
+  "Features/Settings/Models/ModelSetupNotice.swift": {
+    "systemFont": 1
+  },
+  "Features/Settings/ProactiveRules.swift": {
+    "serverCall": 2
+  },
+  "Features/Team/TeamMemoryView.swift": {
+    "systemFont": 3
+  },
+  "Features/Team/TeamPeopleView.swift": {
+    "capsuleBackground": 1,
+    "bareSheet": 1
+  },
+  "Features/Team/TeamTab.swift": {
+    "systemFont": 2
+  },
+  "Features/Workspace/Screen/LiveScreen.swift": {
+    "hexColor": 1
+  },
+  "Features/Workspace/Takeover.swift": {
+    "glassEffect": 1,
+    "systemFont": 1,
+    "colorLiteral": 1,
+    "capsuleBackground": 3
+  }
+}

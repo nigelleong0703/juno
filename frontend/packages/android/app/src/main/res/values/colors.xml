@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The canvas colours of JunoTheme (light and dark), so the splash sits on the same surface as the first screen. -->
+    <color name="juno_splash_canvas">#FCFCFC</color>
+</resources>

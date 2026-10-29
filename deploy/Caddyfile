@@ -1,0 +1,83 @@
+# Juno edge reverse proxy (Caddy). One entry, three Host-routed sites, all to
+# the internal api (Host header preserved: the api routes artifact/Space
+# content by Host, backend packages/api/src/edge-hosts.ts + hostKind).
+#
+# Variables come from deploy/.env (compose substitutes {$VAR} here):
+#   API_SITE        public site of the API + web UI, e.g. http://127.0.0.1:18487 (QA)
+#                   or juno.example.com (server; Caddy does automatic HTTPS)
+#   ARTIFACT_SITE   published HTML pages, e.g. http://usercontent.localhost:18487
+#                   or juno-artifacts.example.com
+#   SPACE_WILDCARD  agent-built apps, e.g. *.spaces.localhost:18487
+#                   or *.juno-spaces.example.com
+#
+# Ports: Caddy listens :80/:443 in the container; compose maps them to
+# EDGE_HTTP_PORT/EDGE_HTTPS_PORT on the host. Nothing else is published:
+# agentd :8788, computerd :8791/:8795 and postgres stay inside the compose
+# network (the optional local overlay publishes 8795 on DOCKER_BRIDGE_HOST for sibling sandboxes).
+{
+  admin off
+  on_demand_tls {
+    ask http://app:8787/v1/edge/tls-check
+  }
+  # Plain-http QA origins (http://...) never trigger ACME; real domains do.
+  auto_https ignore_loaded_certs
+}
+
+# --- API + web UI -----------------------------------------------------------
+# / (built web), /v1/* (API incl. SSE streams + WS upgrades), /auth/*, /healthz.
+{$API_SITE} {
+  handle /v1/computer-link* {
+    reverse_proxy app:8795
+  }
+  # SSE (live event streams) must not be buffered: flush immediately.
+  handle /v1/* {
+    reverse_proxy app:8787 {
+      flush_interval -1
+    }
+  }
+  handle {
+    reverse_proxy app:8787
+  }
+  log {
+    output stdout
+    format console
+  }
+}
+
+# --- Published HTML pages (untrusted content, sandboxed CSP by the api) -----
+{$ARTIFACT_SITE} {
+  tls {
+    on_demand
+  }
+  handle /v1/* {
+    reverse_proxy app:8787 {
+      flush_interval -1
+    }
+  }
+  handle {
+    reverse_proxy app:8787
+  }
+  log {
+    output stdout
+    format console
+  }
+}
+
+# --- Spaces: every <spaceId>.<domain> is an agent-built app ------------------
+{$SPACE_WILDCARD} {
+  tls {
+    on_demand
+  }
+  handle /v1/* {
+    reverse_proxy app:8787 {
+      flush_interval -1
+    }
+  }
+  handle {
+    reverse_proxy app:8787
+  }
+  log {
+    output stdout
+    format console
+  }
+}

@@ -1,0 +1,35 @@
+# OPS2 — persistent dev Postgres 18 in Docker.
+#
+# Default dev database for `pnpm dev:infra` (INFRA_POSTGRES_MODE=docker). The
+# named volume uses an explicit `name:` so Compose does not prefix it with the
+# project name, and `restart: unless-stopped` keeps the container up across host
+# restarts. The infra launcher only runs `up -d postgres`; it never stops,
+# recreates or removes this container or its volume.
+#
+# Credentials come from the gitignored root .env (POSTGRES_USER,
+# POSTGRES_PASSWORD, POSTGRES_DB, POSTGRES_PORT); never commit real values.
+services:
+  postgres:
+    image: postgres:18
+    container_name: vomu-postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-54330}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-agents}
+      # Only applied when a fresh volume is initialised; keeps the cluster on the
+      # same C.UTF-8/C.UTF-8 collation as the existing local-use database.
+      POSTGRES_INITDB_ARGS: "--locale=C.UTF-8 --encoding=UTF8"
+    volumes:
+      - vomu-postgres18-local-use:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  vomu-postgres18-local-use:
+    name: vomu-postgres18-local-use

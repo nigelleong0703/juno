@@ -1,0 +1,39 @@
+name: JunoWatch
+options:
+  bundleIdPrefix: io.github.nigelleong0703
+  deploymentTarget:
+    watchOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+targets:
+  JunoWatch:
+    type: application
+    platform: watchOS
+    sources:
+      - JunoWatch
+      # The iPhone app's character art as HEIC (watchOS cannot decode WebP), only the clips the watch plays.
+      - path: Characters
+        buildPhase: resources
+    info:
+      path: Config/Info.plist
+      properties:
+        WKApplication: true
+        WKWatchOnly: true
+        JunoServerURL: $(JUNO_SERVER_URL)
+        # Dev servers are plain http on a LAN / Tailscale address. Point JUNO_SERVER_URL at https and drop this for release.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    configFiles:
+      Debug: Config/Watch.xcconfig
+      Release: Config/Watch.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.nigelleong0703.juno.watch
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Juno
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Juno listens while you talk to your character.
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"

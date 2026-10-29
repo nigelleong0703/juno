@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["react", "react-dom"],
+    "noEmit": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    // @agent-desktop/ui ships TypeScript sources (no build step) and imports its own modules
+    // through the `@/*` alias declared in packages/ui/tsconfig.json. Since this program compiles
+    // those sources too, the same alias must be resolvable here or every ui import fails.
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["../ui/src/*"]
+    }
+  },
+  "include": ["src"]
+}

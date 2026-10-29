@@ -1,0 +1,27 @@
+{
+  "name": "@agent-desktop/memory-graph",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./identity": "./src/identity/index.ts",
+    "./memory": "./src/memory/index.ts",
+    "./relations": "./src/relations/index.ts",
+    "./skills": "./src/skills/index.ts",
+    "./testing": "./src/testing/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@agent-desktop/durable": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "embedded-postgres": "^18.4.0-beta.17",
+    "postgres": "^3.4.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

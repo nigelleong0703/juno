@@ -1,0 +1,3 @@
+# Generated local deployment state. Never commit.
+.env
+*.log

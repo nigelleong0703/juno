@@ -1,0 +1,24 @@
+{
+  "name": "@agent-desktop/embedded",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Juno in one Node process for scripts and tests: an embedded Postgres, the public API and agentd on free ports (SDK-02).",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@agent-desktop/agentd": "workspace:*",
+    "@agent-desktop/api": "workspace:*",
+    "@agent-desktop/db": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

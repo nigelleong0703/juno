@@ -1,0 +1,21 @@
+{
+  "name": "@agent-desktop/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "echo e2e suite skipped here: run pnpm test:e2e from the repo root",
+    "test:e2e": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "test:e2e:real": "E2E_REAL_MODEL=${E2E_REAL_MODEL:-opencode-go/muse-spark-1.3-contributor} vitest run -c vitest.real.config.ts",
+    "test:e2e:tasks": "E2E_COMPUTER_PROVIDER=local E2E_REAL_MODEL=${E2E_REAL_MODEL:-opencode-go/muse-spark-1.3-contributor} vitest run -c vitest.real.config.ts real/tasks.test.ts"
+  },
+  "devDependencies": {
+    "@agent-desktop/public-contracts": "workspace:*",
+    "@types/node": "^24.0.0",
+    "juno-link": "workspace:*",
+    "postgres": "3.4.9",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

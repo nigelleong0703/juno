@@ -1,0 +1,2 @@
+# electron-builder output (was `dist/`, which the root .gitignore already covered).
+release/

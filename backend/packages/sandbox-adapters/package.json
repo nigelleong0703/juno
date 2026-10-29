@@ -1,0 +1,31 @@
+{
+  "name": "@agent-desktop/sandbox-adapters",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./live-link": "./src/live-link.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@agent-desktop/contracts": "workspace:*",
+    "@agent-desktop/log": "workspace:*",
+    "@e2b/desktop": "^2.4.0",
+    "e2b": "^2.52.0",
+    "juno-agent": "workspace:*",
+    "zod": "^4.0.0",
+    "ws": "^8.22.0",
+    "juno-link": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0",
+    "@types/ws": "^8.18.0",
+    "@agent-desktop/db": "workspace:*"
+  }
+}

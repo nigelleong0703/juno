@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Start browser
+Exec=sh -c "sleep 1; gtk-launch chromium"
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Juno app launcher
+Exec=/usr/local/bin/juno-app-open %u
+NoDisplay=true
+MimeType=x-scheme-handler/juno-app;

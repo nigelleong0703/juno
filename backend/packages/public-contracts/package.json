@@ -1,0 +1,14 @@
+{
+  "name": "@agent-desktop/public-contracts",
+  "version": "0.71.0",
+  "description": "Public wire contracts (models, API surface, live events) shared by the backend and every client. Depends only on zod.",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run --passWithNoTests" },
+  "dependencies": {
+    "@ag-ui/core": "1.0.3",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": { "typescript": "^5.9.0", "vitest": "^3.2.0" }
+}

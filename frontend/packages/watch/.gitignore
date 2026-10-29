@@ -1,0 +1,3 @@
+Config/Watch.local.xcconfig
+build/
+*.xcodeproj/xcuserdata/

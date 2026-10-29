@@ -1,0 +1,9 @@
+{
+  "name": "juno-opencli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pins the OpenCLI release the computer's login channels run (BACKEND 10.18). Installed by install-opencli.sh with package-lock.json.",
+  "dependencies": {
+    "@jackwener/opencli": "2.0.2"
+  }
+}

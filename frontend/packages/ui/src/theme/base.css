@@ -1,0 +1,150 @@
+/*
+ * Base element styles and shared utilities.
+ * Everything here reads semantic tokens only.
+ */
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    border-color: var(--border);
+  }
+
+  /* One scrollbar everywhere: a dim pill with no track that fades brighter only while the
+     pointer is on the thumb itself. */
+  ::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklab, var(--fg) 24%, transparent);
+    border: 4px solid transparent;
+    background-clip: content-box;
+    border-radius: 9999px;
+    transition: background-color 200ms ease;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklab, var(--fg) 48%, transparent);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    /* Electron only: smooths the window's rounded corners to match the native
+     * macOS look. Ignored by other browsers. Lives here so consumers do not
+     * have to add it themselves. */
+    -electron-corner-smoothing: 60%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 20px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: var(--accent-subtle);
+  }
+
+  :where(button, input, textarea, select) {
+    font: inherit;
+    color: inherit;
+  }
+
+  :where(h1, h2, h3, h4, h5, h6) {
+    font-weight: 600;
+  }
+}
+
+/* Visible keyboard focus, shared by every interactive primitive. Uses the
+ * opaque neutral focus ring (UI76, --focus-ring: #afafaf dark / #5d5d5d
+ * light); ambient component hover/pressed glow stays neutral via
+ * --interactive-* roles. Focus and status tones live on --ring/--info (neutral grey; the app has no blue). */
+@utility focus-ring {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+
+  &:focus-visible {
+    outline-color: var(--focus-ring);
+  }
+}
+
+/* Shared overlay surface (UI75, observed 2026-10-08): the dropdown main/sub
+ * content and the popover content render from these semantic tokens, so all
+ * three resolve identically in explicit and system themes. The inset shadow
+ * ring is the hairline, so the surface carries no border. Plain inline
+ * content elsewhere stays opaque and untouched. */
+@utility overlay-surface {
+  background-color: var(--overlay-background);
+  border: 0;
+  border-radius: var(--overlay-radius);
+  box-shadow: var(--overlay-shadow);
+  -webkit-backdrop-filter: var(--overlay-blur);
+  backdrop-filter: var(--overlay-blur);
+}
+
+/* Restrained scrollbars for ScrollArea and native overflow containers. */
+@utility scrollbar-thin {
+  /* The global scrollbar above already is the thin one; kept so existing call sites still resolve. */
+  scrollbar-gutter: auto;
+}
+
+/*
+ * Scroll without reserving a gutter: macOS draws its overlay scrollbar on scroll, so the
+ * content keeps the full width and a list's rows line up with the header above them.
+ */
+@utility scrollbar-none {
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Shared inline composer surface (UI75, observed 2026-10-08). Unlayered on
+ * purpose: it must beat the layered input-group defaults (shadow-xs,
+ * rounded-md, dark fill) deterministically in every theme without fighting
+ * Tailwind class merging. Resting shadow and surface stay identical on focus;
+ * the visible keyboard treatment is the neutral outline owned by the inline
+ * PromptInput, and error/reduced-motion behaviour from the base group is
+ * preserved. The composer stays opaque: no backdrop blur here. */
+.composer-surface {
+  background-color: var(--composer-background);
+  border: 0;
+  border-radius: var(--composer-radius);
+  box-shadow: var(--composer-shadow);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.composer-surface[data-expanded="true"]:has(textarea:not(:placeholder-shown)) {
+  border-radius: 24px;
+}
+
+.composer-surface:has([data-slot][aria-invalid="true"]) {
+  outline: 2px solid var(--destructive);
+  outline-offset: 2px;
+}

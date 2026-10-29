@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The launch theme: the system splash shows the app icon on the canvas colour, then hands over to the app theme. -->
+    <style name="Theme.Juno.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/juno_splash_canvas</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Juno</item>
+    </style>
+
+    <style name="Theme.Juno" parent="@android:style/Theme.Material.NoActionBar" />
+</resources>

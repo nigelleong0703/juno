@@ -1,0 +1,20 @@
+# Local development of the hosted Spaces Worker: `pnpm dev` runs `wrangler dev` with this file. Its entry adds the development
+# admin endpoints the local publisher writes through (src/dev-entry.ts). Never deploy this file: deploy uses wrangler.toml.
+# Put the secrets in `.dev.vars` next to this file (git-ignored): ADMIN_TOKEN=<any random string> and
+# SPACES_HOST_SIGNING_KEY=<any random string>. The API publishes here when SPACES_HOST_LOCAL_URL is set (see README.md).
+name = "juno-spaces-host-dev"
+main = "src/dev-entry.ts"
+compatibility_date = "2026-10-01"
+
+[vars]
+CONTENT_DOMAIN = "spaces-content.localhost"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "juno-spaces-dev"
+database_id = "local-dev"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "juno-spaces-dev"

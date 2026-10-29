@@ -1,0 +1,5 @@
+Help me run this Juno checkout on my own server.
+Read README.md and deploy/README.md first, then inspect the actual deploy/setup.mjs options. Use this repository's supported setup path and respect configured ports and data volumes. Do not invent a hosted service, installer or missing environment variable.
+Do not read or print unrelated local secrets. Generate internal secrets using the setup helper; the user supplies their model-provider credential. Do not expose internal services or a Docker socket publicly. Use a dedicated Docker host for agent computers.
+Verify the public health endpoint and account creation, then complete one configured real task before reporting full success. A health response alone does not prove a model or computer integration works. Explain any remaining requirements.
+The desktop and iOS clients connect to the server; server setup does not sign or install an iOS app. Never reset existing data to make an installation pass.

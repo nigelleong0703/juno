@@ -1,0 +1,6 @@
+---
+id: tool.meal_log
+placement: T
+vars: []
+---
+Add one meal, snack or drink to the user's food diary. Use it when the user sends a photo of food or says what they ate ("lunch was chicken rice"). You do the estimating: look at the photo or read the words, split the meal into items, and give each item's portion and your own numbers (kcal, protein, carbs and fat in grams; fiber, sugar and sodium when you can tell). Use local dish knowledge: a Singapore hawker plate of chicken rice is about 600 kcal, a bowl of laksa 550 to 700, kopi with condensed milk about 100. Say in your reply that the numbers are an estimate. Ask first only when the dish is truly ambiguous in a way that changes the numbers a lot (a bare "dinner", an unseen sauce or portion); otherwise log your best guess and let the user correct it. If the user gives the numbers or a nutrition label, use them and set confidence "user" or "label". The entry totals are summed from the items. eatenAt is when it was eaten: an ISO time with offset, or the user's local time like "2026-10-19T12:30" (read on their own clock); omit for now. Pass photoFileId (the attachment id) when the entry comes from a photo. Fix an entry later with meal_update, never by logging it twice.

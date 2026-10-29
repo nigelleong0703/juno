@@ -1,0 +1,10 @@
+{
+  "name": "@agent-desktop/channels",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { "./*": "./src/*.ts" },
+  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run --passWithNoTests" },
+  "dependencies": { "@agent-desktop/contracts": "workspace:*", "@agent-desktop/public-contracts": "workspace:*", "zod": "^4.0.0" },
+  "devDependencies": { "typescript": "^5.9.0", "vitest": "^3.2.0", "@types/node": "^24.0.0" }
+}

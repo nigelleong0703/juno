@@ -1,0 +1,23 @@
+# Juno server deploy: keep the build context to what the image needs.
+.git
+**/.git
+.gitignore
+**/.gitignore
+.data/
+**/.data/
+**/node_modules/
+**/dist/
+**/out/
+**/release/
+**/coverage/
+**/.cache/
+**/.turbo/
+.pnpm-store/
+deploy/.env
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.log
+*.tsbuildinfo
+.DS_Store

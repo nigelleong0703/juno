@@ -1,0 +1,326 @@
+#!/opt/juno/reach/venv/bin/python -I
+"""agent-reach as this computer exposes it (BACKEND 10.18): read-only platform content for the Web & video apps.
+
+Agent Reach itself (MIT, pinned in install-reach.sh) can install tools, update itself, log in and configure keys. None of that may happen at
+run time here: every tool is in the image, versions are pinned, and the sign-in happens in the agent's own browser (request_takeover), never
+in a command. So this entry point passes through only `channels`, `read <url>` and the actions of the channels below. Four channels read
+without a sign-in. Two read through the agent's own Chromium, over its DevTools port, with OpenCLI (install-opencli.sh): Xiaohongshu
+(search, a note, its comments) and the subtitles of a Bilibili video, which need that sign-in. Every other channel is taken out of the
+registry, which also keeps `read` from falling back to the anonymous web reader (it would send the URL to a third party).
+
+This file is a GUARDRAIL, not a security boundary (BACKEND 10.18). The real controls are the trimmed OpenCLI manifest (install-opencli.sh),
+the environment and tab hygiene below, and the firewall. The agent's own shell can drive its own browser, so a determined agent can script
+the browser; this file only narrows what the documented commands can do.
+
+Nothing here reads a browser's cookies or writes them to disk (Agent Reach would copy the host's cookies for Bilibili subtitles, and dump the
+session to session.json after OpenCLI calls; both are replaced below). The session stays in the agent's browser profile.
+"""
+import dataclasses
+import json
+import os
+import re
+import secrets
+import shutil
+import sys
+import tempfile
+import urllib.request
+
+ALLOWED = ("github", "youtube", "bilibili", "v2ex", "xiaohongshu")
+# Platform name and login page of the two channels that can need a sign-in on this computer.
+SIGN_IN = {
+    "xiaohongshu": ("Xiaohongshu", "https://www.xiaohongshu.com/explore"),
+    "bilibili": ("Bilibili", "https://passport.bilibili.com/login"),
+}
+# The only OpenCLI commands this entry point may run (the manifest keeps just these; this is the same list checked again per call).
+OPENCLI_COMMANDS = {("xiaohongshu", "search"), ("xiaohongshu", "note"), ("xiaohongshu", "comments"), ("bilibili", "subtitle")}
+OPENCLI = "/opt/juno/reach/opencli/node_modules/.bin/opencli"
+# The environment the commands run in: nothing from the caller's environment but these names (no PYTHON*, NODE_*, LD_*, proxies, OPENCLI_*).
+ENV_KEEP = ("DISPLAY", "JUNO_CDP_PORT", "LANG", "LC_ALL", "TZ", "USER", "LOGNAME", "HOME")
+REACH_PATH = "/opt/juno/reach/bili/bin:/opt/juno/reach/venv/bin:/usr/local/bin:/usr/bin:/bin"
+# The agent's own Chromium listens on 9222 + its display number (BACKEND 7.1 and 7.9); 127.0.0.1 only, and only this agent's uid may connect.
+CDP_BASE = 9222
+MAX_DISPLAY = 8
+HELP = """agent-reach: read-only platform content (all output is JSON)
+  agent-reach channels                    channels, actions and params
+  agent-reach <channel> <action> [args]   e.g. agent-reach youtube subtitle <link>
+  agent-reach read <url>                  read a YouTube, Bilibili, V2EX, GitHub or Xiaohongshu link
+Channels here: """ + ", ".join(ALLOWED) + "\n"
+BVID_TEXT = re.compile(r"BV[0-9A-Za-z]{10}")
+BVID_URL = re.compile(r"https://(?:www\.|m\.)?bilibili\.com/video/(BV[0-9A-Za-z]{10})(?:[/?#].*)?")
+SHORT_URL = re.compile(r"https://b23\.tv/[A-Za-z0-9]+")
+
+
+def clean_environment():
+    """Rebuild the environment from the allow-list, with the fixed PATH: nothing a caller set can point a tool elsewhere."""
+    kept = {name: os.environ[name] for name in ENV_KEEP if name in os.environ}
+    os.environ.clear()
+    os.environ.update(kept)
+    os.environ["PATH"] = REACH_PATH
+
+
+def sign_in_hint(channel):
+    name, url = SIGN_IN[channel]
+    return (name + " needs a sign-in on this computer. Its login page is " + url + ": open it in your own browser (browser.navigate), then hand "
+            "over with request_takeover. Never ask the person for a password or a cookie.")
+
+
+# The computer's browser is opened by the browser tools, not by this command. Its own code, so that the dispatcher does not pause the
+# channel for it (a pause would refuse the retry that follows the navigation).
+BROWSER_NOT_OPEN = "BROWSER_NOT_OPEN"
+
+
+def browser_not_open():
+    from agent_reach.runtime.result import ReachError
+
+    return ReachError(BROWSER_NOT_OPEN, "The browser of this computer is not open yet, so the site cannot be read from it.",
+                      hint="Open the platform's login page with browser.new_tab, then retry this command once.")
+
+
+def own_chromium_port():
+    """The debugging port of this agent's own browser. The shell gets JUNO_CDP_PORT with its screen (9222 + the display); a shell
+    without it (DISPLAY only) derives the port from DISPLAY the same way. The firewall lets this agent's user reach that port and
+    no other agent's (isolation.ts ownAgentCdpRules)."""
+    value = os.environ.get("JUNO_CDP_PORT", "")
+    if value.isdigit():
+        port = int(value)
+    else:
+        found = re.fullmatch(r":(\d+)(?:\.\d+)?", os.environ.get("DISPLAY", ""))
+        if not found:
+            raise browser_not_open()
+        port = CDP_BASE + int(found.group(1))
+    if not CDP_BASE + 1 <= port <= CDP_BASE + MAX_DISPLAY:
+        raise browser_not_open()
+    return port
+
+
+def cdp_answers(port):
+    """True when the browser answers on its DevTools port (127.0.0.1)."""
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:%d/json/version" % port, timeout=3) as response:
+            return response.status == 200
+    except OSError:
+        return False
+
+
+PLATFORM_HOME = "https://www.xiaohongshu.com/explore"
+
+
+def start_url(site, args):
+    """The page a call starts on: the platform page, or the note or video the call names (the second argument is the link or the id)."""
+    if site == "bilibili":
+        return "https://www.bilibili.com/video/" + args[1]
+    if args[0] in ("note", "comments") and len(args) > 1:
+        return args[1]
+    return PLATFORM_HOME
+
+
+def open_tab(port, url):
+    """A new tab of our own, opened directly at the platform page with a random fragment as its marker. OpenCLI attaches to this
+    tab only (OPENCLI_CDP_TARGET), so no tab the person or the agent has is used."""
+    from urllib.parse import quote
+
+    marker = "juno-reach-" + secrets.token_hex(8)
+    target = quote(url + "#" + marker, safe=":/?=&")
+    request = urllib.request.Request("http://127.0.0.1:%d/json/new?%s" % (port, target), method="PUT")
+    with urllib.request.urlopen(request, timeout=5) as response:
+        info = json.loads(response.read())
+    return info["id"], marker, info.get("webSocketDebuggerUrl", "")
+
+
+def wait_loaded(ws_url, timeout=10.0):
+    """Wait until the new tab's document is loaded (readyState complete), at most `timeout` seconds. A tab that cannot be asked
+    is not waited for: OpenCLI then waits on its own."""
+    import time
+
+    from websockets.sync.client import connect
+
+    if not ws_url:
+        return
+    deadline = time.monotonic() + timeout
+    try:
+        with connect(ws_url, open_timeout=5, close_timeout=2) as socket:
+            while time.monotonic() < deadline:
+                socket.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {"expression": "document.readyState", "returnByValue": True}}))
+                reply = json.loads(socket.recv(timeout=max(0.5, deadline - time.monotonic())))
+                if reply.get("id") == 1 and reply.get("result", {}).get("result", {}).get("value") == "complete":
+                    return
+                time.sleep(0.3)
+    except Exception:  # noqa: BLE001 - a page that cannot be asked is not a reason to fail the call
+        return
+
+
+def close_tab(port, tab_id):
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:%d/json/close/%s" % (port, tab_id), timeout=5):
+            pass
+    except OSError:
+        pass
+
+
+def opencli_call(site, args, *, timeout, login_hint=""):
+    """One bounded OpenCLI command against this agent's own Chromium, in its own tab and an empty HOME. No retry: the caller's error is the answer."""
+    from agent_reach.backends.opencli import _opencli_error
+    from agent_reach.runtime.result import BAD_INPUT, NOT_FOUND, ReachError
+    from agent_reach.runtime.run import CommandFailed, run_cmd
+
+    if (site, args[0] if args else "") not in OPENCLI_COMMANDS:
+        raise ReachError(BAD_INPUT, "that command is not available in this computer")
+    port = own_chromium_port()
+    if not cdp_answers(port):
+        raise browser_not_open()
+    tab_id, marker, ws_url = open_tab(port, start_url(site, args))
+    home = tempfile.mkdtemp(prefix="juno-reach-home-")
+    try:
+        wait_loaded(ws_url)
+        # CI=1 is the switch OpenCLI reads to skip its background update check; HOME is empty, so ~/.opencli plugins and adapters are not read.
+        env = {"CI": "1", "OPENCLI_CDP_ENDPOINT": "http://127.0.0.1:%d" % port, "OPENCLI_CDP_TARGET": marker, "HOME": home}
+        out = run_cmd([OPENCLI, site, *args, "-f", "json"], timeout=timeout, env=env)
+    except CommandFailed as exc:
+        text = exc.stdout or exc.stderr
+        # OpenCLI's "nothing there" (for example a video without subtitles) is a not-found, not an upstream failure.
+        if re.search(r'"code"\s*:\s*"EMPTY_RESULT"|^\s*code:\s*EMPTY_RESULT\s*$', text, re.M):
+            raise ReachError(NOT_FOUND, "the platform returned no content for this request") from None
+        # Xiaohongshu shows its sign-in page in place of the search box when the screen is not signed in (checked in the probe).
+        if site == "xiaohongshu" and "search_input_not_available" in text:
+            raise ReachError("NEED_LOGIN", "Xiaohongshu shows its sign-in page instead of the search, so this computer is not signed in", hint=login_hint) from None
+        raise _opencli_error(text, login_hint) from None
+    finally:
+        close_tab(port, tab_id)
+        shutil.rmtree(home, ignore_errors=True)
+    try:
+        data = json.loads(out)
+    except ValueError:
+        raise _opencli_error(out, login_hint) from None
+    if isinstance(data, dict) and data.get("ok") is False:
+        raise _opencli_error(out, login_hint)
+    # On success OpenCLI wraps the rows as {"ok": true, "data": [...]}; the channels read the rows.
+    return data["data"] if isinstance(data, dict) and "data" in data else data
+
+
+def safe_bvid(target, timeout, original):
+    """A Bilibili video id from a BV id, a bilibili.com/video/BV… link or a b23.tv short link; anything else is refused (no other URL
+    is ever fetched)."""
+    from agent_reach.runtime.result import BAD_INPUT, ReachError
+
+    text = str(target).strip()
+    if re.fullmatch(r"BV[0-9A-Za-z]{10}", text):
+        return text
+    video = BVID_URL.fullmatch(text)
+    if video:
+        return video.group(1)
+    if SHORT_URL.fullmatch(text):
+        return original(text, timeout)
+    raise ReachError(BAD_INPUT, "target must be a BV id, a bilibili.com/video/BV link or a b23.tv short link")
+
+
+def guarded(channel):
+    """Refuse arguments an option could read as a flag, and GitHub paths that climb ('.' or '..' segments)."""
+    from agent_reach.runtime.result import BAD_INPUT, ReachError
+
+    original = channel.validate_params
+
+    def validate(action, params):
+        for value in params.values():
+            if not isinstance(value, str):
+                continue
+            if value.lstrip().startswith("-"):
+                raise ReachError(BAD_INPUT, "arguments may not start with '-'")
+            if channel.name == "github" and any(segment in (".", "..") for segment in value.split("/")):
+                raise ReachError(BAD_INPUT, "a GitHub path may not contain '.' or '..' segments")
+        original(action, params)
+
+    channel.validate_params = validate
+    return channel
+
+
+def read_only_channels():
+    """The two channels with their browser actions run through opencli_call above, and nothing else of Agent Reach's browser or cookie code."""
+    from agent_reach.channels import bilibili as bilibili_module
+    from agent_reach.channels import xiaohongshu as xiaohongshu_module
+    from agent_reach.runtime.result import NOT_FOUND, ReachError, make_item
+
+    # Agent Reach's Xiaohongshu code calls the module-level opencli_call and login hint; both are replaced for this computer.
+    xiaohongshu_module.opencli_call = opencli_call
+    xiaohongshu_module._XHS_LOGIN_HINT = sign_in_hint("xiaohongshu")
+    original_bvid = bilibili_module._bvid
+    bilibili_module._bvid = lambda target, timeout: safe_bvid(target, timeout, original_bvid)
+
+    class Xiaohongshu(xiaohongshu_module.XiaoHongShuChannel):
+        # Optional channels fall back to the public web route until added. This one is on from the start: its queries stay on this computer.
+        level = "default"
+        login_url = SIGN_IN["xiaohongshu"][1]
+        # No public-web route at all (a third-party search); the actions are the same with the route taken out.
+        actions = tuple(dataclasses.replace(action, public_web=()) for action in xiaohongshu_module.XiaoHongShuChannel.actions)
+
+        def _opencli_comments(self, *, target, limit, timeout):
+            # Top-level comments only: `--with-replies` clicks through the page's reply controls, which this entry point does not do.
+            self._validate_comments(target, limit)
+            rows = opencli_call("xiaohongshu", ["comments", str(target).strip(), "--limit", str(limit)], timeout=timeout,
+                                login_hint=xiaohongshu_module._XHS_LOGIN_HINT)
+            items = xiaohongshu_module.opencli_items(rows)
+            for item in items:
+                item["url"] = str(target).strip()
+                raw = dict(item.get("raw") or {})
+                raw.update(content_scope="loaded_comments", exhaustive=False)
+                item["raw"] = raw
+            return items
+
+    class Bilibili(bilibili_module.BilibiliChannel):
+        # Subtitles come through OpenCLI, in the agent's own logged-in page. Agent Reach's bili-cli route for them copies the host's cookies.
+        actions = tuple(
+            dataclasses.replace(action, backends=(("opencli", "_opencli_subtitle"),)) if action.name == "subtitle" else action
+            for action in bilibili_module.BilibiliChannel.actions
+        )
+        login_url = SIGN_IN["bilibili"][1]
+
+        def _opencli_subtitle(self, *, target, timeout):
+            bvid = bilibili_module._bvid(target, timeout)
+            rows = opencli_call("bilibili", ["subtitle", bvid], timeout=timeout, login_hint=sign_in_hint("bilibili"))
+            rows = rows if isinstance(rows, list) else []
+            text = "\n".join(str(row.get("content", "")) for row in rows if isinstance(row, dict) and row.get("content"))
+            if not text.strip():
+                raise ReachError(NOT_FOUND, "this video has no subtitles")
+            language = next((row.get("language") for row in rows if isinstance(row, dict) and row.get("language")), None)
+            return [make_item(url="https://www.bilibili.com/video/" + bvid, text=text, raw={"bvid": bvid, "language": language})]
+
+    return {"xiaohongshu": Xiaohongshu(), "bilibili": Bilibili()}
+
+
+def install_guards():
+    """Public-web fallbacks are off, the registry ignores the state file's removed defaults, and yt-dlp reads no config or plugins."""
+    from agent_reach.channels import youtube as youtube_module
+    from agent_reach.runtime import manage, public_web
+
+    public_web.attempt = lambda *args, **kwargs: None
+    manage.is_added = lambda channel, data=None: channel.name in ALLOWED
+    original_argv = youtube_module._ytdlp_argv
+    youtube_module._ytdlp_argv = lambda *args: list(original_argv(*args)) + ["--ignore-config", "--no-plugin-dirs", "--no-remote-components", "--no-update"]
+
+
+def main(argv):
+    clean_environment()
+    head = argv[0] if argv else "help"
+    if head in ("help", "-h", "--help"):
+        sys.stdout.write(HELP)
+        return 0
+    from agent_reach.channels import ALL_CHANNELS
+    from agent_reach.runtime import cli
+
+    if head not in ("channels", "read") and head not in ALLOWED:
+        return cli._bad_input(
+            None, head, "'" + head + "' is not available in this computer; run `agent-reach channels` for what is. Installing, logging in and configuring are not done from here."
+        )
+    if any(arg == "--backend" or arg.startswith("--backend=") for arg in argv):
+        return cli._bad_input(None, head, "--backend is not available in this computer: each channel reads through its own route.")
+    install_guards()
+    replaced = read_only_channels()
+    ALL_CHANNELS[:] = [guarded(replaced.get(channel.name, channel)) for channel in ALL_CHANNELS if channel.name in ALLOWED]
+    for channel in ALL_CHANNELS:
+        if channel.name == "youtube":
+            # Speech-to-text needs a key this computer does not hold.
+            channel.actions = tuple(action for action in channel.actions if action.name != "transcribe")
+    return cli.main(argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,45 @@
+{
+  "DefaultBrowserSettingEnabled": false,
+  "BrowserSignin": 0,
+  "SyncDisabled": true,
+  "PasswordManagerEnabled": false,
+  "PromotionalTabsEnabled": false,
+  "MetricsReportingEnabled": false,
+  "PrivacySandboxPromptEnabled": false,
+  "PrivacySandboxAdTopicsEnabled": false,
+  "PrivacySandboxSiteEnabledAdsEnabled": false,
+  "PrivacySandboxAdMeasurementEnabled": false,
+  "CommandLineFlagSecurityWarningsEnabled": false,
+  "AutoLaunchProtocolsFromOrigins": [
+    {
+      "protocol": "juno-app",
+      "allowed_origins": [
+        "file://"
+      ]
+    }
+  ],
+  "PromotionsEnabled": false,
+  "TranslateEnabled": false,
+  "PasswordLeakDetectionEnabled": false,
+  "AutofillAddressEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "ShoppingListEnabled": false,
+  "FeedbackSurveysEnabled": false,
+  "SpellcheckEnabled": false,
+  "PromptForDownloadLocation": false,
+  "DefaultNotificationsSetting": 2,
+  "DefaultGeolocationSetting": 2,
+  "AudioCaptureAllowed": false,
+  "VideoCaptureAllowed": false,
+  "DefaultSensorsSetting": 2,
+  "DefaultClipboardSetting": 2,
+  "DefaultLocalFontsSetting": 2,
+  "DefaultWindowManagementSetting": 2,
+  "DefaultSerialGuardSetting": 2,
+  "DefaultWebUsbGuardSetting": 2,
+  "DefaultWebHidGuardSetting": 2,
+  "DefaultWebBluetoothGuardSetting": 2,
+  "DefaultFileSystemReadGuardSetting": 2,
+  "DefaultFileSystemWriteGuardSetting": 2,
+  "DefaultPopupsSetting": 1
+}

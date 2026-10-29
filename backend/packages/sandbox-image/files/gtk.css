@@ -1,0 +1,16 @@
+/* Juno dock: a floating light pill (colours from frontend-repo design/VISUAL.md).
+   The panel window is 80px tall and transparent; the 8px transparent top/bottom border is the
+   gap to the screen edge and to the maximized window. Needs xfwm4 compositing (ARGB panel window). */
+.xfce4-panel.background {
+  background-color: rgba(252, 252, 252, 0.95);
+  background-image: none;
+  background-clip: padding-box;
+  border: 0 solid transparent;
+  border-width: 8px 0;
+  border-radius: 26px;
+  box-shadow: inset 0 0 0 1px rgba(20, 20, 20, 0.12);
+}
+.xfce4-panel button { border-radius: 12px; min-height: 0; min-width: 0; padding: 4px 4px; margin: 8px 0; background-image: none; }
+.xfce4-panel tasklist button { margin: 10px 1px; }
+.xfce4-panel button:hover { background-color: rgba(20, 20, 20, 0.06); }
+.xfce4-panel button:checked, .xfce4-panel button:active { background-color: rgba(16, 132, 254, 0.14); }

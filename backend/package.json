@@ -1,0 +1,39 @@
+{
+  "name": "juno-backend",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.9.1",
+  "scripts": {
+    "typecheck": "pnpm --filter './packages/**' --filter './tests/**' --filter './services/**' -r typecheck",
+    "contracts:check": "node scripts/verify/single-source.mjs",
+    "build": "pnpm --filter './packages/**' --filter './tests/**' --filter './services/**' -r build",
+    "test": "pnpm --filter './packages/**' --filter './tests/**' --filter './services/**' -r test",
+    "lint": "eslint packages",
+    "quality:check": "node scripts/verify/quality-core.mjs",
+    "check": "pnpm lint && pnpm quality:check && pnpm typecheck && pnpm contracts:check && pnpm dup:check",
+    "e2e": "pnpm test:e2e",
+    "dev:infra": "node scripts/dev/infra.mjs",
+    "dev:api": "pnpm --filter @agent-desktop/api dev",
+    "dev:agentd": "pnpm --filter @agent-desktop/agentd dev",
+    "dev:computerd": "pnpm --filter @agent-desktop/computerd dev",
+    "dev:backend": "node scripts/dev/backend.mjs",
+    "db:migrate": "pnpm --filter @agent-desktop/db migrate",
+    "test:e2e": "pnpm --filter @agent-desktop/e2e test:e2e",
+    "test:e2e:real": "pnpm --filter @agent-desktop/e2e test:e2e:real",
+    "test:e2e:tasks": "pnpm --filter @agent-desktop/e2e test:e2e:tasks",
+    "dup:check": "jscpd --config .jscpd.json --silent",
+    "stack": "node scripts/dev/stack.mjs"
+  },
+  "devDependencies": {
+    "@agent-desktop/log": "workspace:*",
+    "@eslint/js": "^10.0.1",
+    "concurrently": "^8.2.0",
+    "embedded-postgres": "^18.4.0-beta.17",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "jscpd": "^4.3.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.71.0"
+  },
+  "license": "MIT"
+}

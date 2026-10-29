@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The character sprites are looked up by name (CharacterAtlasCache, CharacterSprite: getIdentifier("character_<name>_<clip>")),
+     so shrinking must not drop any of them. The wildcard covers every clip and poster. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:shrinkMode="strict"
+    tools:keep="@drawable/character_*" />

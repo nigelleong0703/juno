@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Juno Chrome Bridge",
+  "version": "0.1.0",
+  "description": "Explicit, per-tab Chrome control for Juno desktop.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtSngTRTwLGej2dzFvQz+zOzA1oQY8UdBMQlZrqg7QkuoYLXO+F7zCkVTUNH8TYxi+xu6Yjdpc9imzg+guwgpZ6dL50bA8dwOvoftVBcvhQAsoOYxnyXqjle/wKGqJMy12SKtFe7RSG8ZAXkBN03ZpE8gm7hpsLqhNHskLvAPrTBv0oZzOlSz+oldu5c67S2oJUGzQ33j+qZU0tDib1a8IaGtLrccoH5ow9qyx0nbGXagZkAKuSak77Bo8AwrdrxyG583ZwNAyPYWPejsYWg5cg9/Ig4E93ZwNIAXlHKyfCr6KF74DzPH3HlV786oVMhIoGz/ejpWvEPS5UEFDdJvEwIDAQAB",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "alarms",
+    "debugger",
+    "nativeMessaging",
+    "storage",
+    "tabs"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Juno browser access",
+    "default_popup": "popup.html"
+  }
+}

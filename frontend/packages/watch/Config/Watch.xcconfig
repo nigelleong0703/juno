@@ -1,0 +1,5 @@
+// The backend the watch talks to. `$()` keeps the `//` of the URL from starting an xcconfig comment.
+// 127.0.0.1 reaches the Mac from the simulator; on a real watch use the Mac's LAN / Tailscale address (or the https server).
+// Override locally in Watch.local.xcconfig (gitignored, next to this file).
+JUNO_SERVER_URL = http:/$()/127.0.0.1:8787
+#include? "Watch.local.xcconfig"

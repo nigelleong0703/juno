@@ -1,0 +1,7 @@
+/* Tailwind entry for the web build. The design system owns the theme; we only tell Tailwind
+   which workspace sources to scan for class names (v4 detects sources relative to the root). */
+@import "@agent-desktop/ui/styles.css";
+@import "../../app/src/styles/app.css";
+
+@source "../../app/src/**/*.{ts,tsx}";
+@source "../../ui/src/**/*.{ts,tsx}";

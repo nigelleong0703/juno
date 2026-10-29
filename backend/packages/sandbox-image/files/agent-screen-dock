@@ -1,0 +1,227 @@
+#!/bin/sh
+# agent-screen-dock: per-display bottom Dock for one agent screen.
+#
+# Usage: agent-screen-dock DISPLAY_NO CHROMIUM_PROFILE PID_DIR
+#
+# Starts a private real xfce4-panel under dbus-run-session with
+# XDG_CONFIG_HOME=PID_DIR/config (never shared with another display),
+# seeded with the fixed panel config and launcher assets from
+# /usr/local/share/agent-screen-dock. The Chromium launcher uses the
+# passed per-agent profile with --no-sandbox --start-maximized.
+# Terminal/app launchers inherit DISPLAY from this helper, so dock
+# clicks open on this display.
+#
+# Also starts xfdesktop for the wallpaper (files/wallpaper.png).
+#
+# Readiness is signalled by creating PID_DIR/dock.ready ONLY after
+# read-only probes (xprop/xwininfo) prove the panel advertised a
+# bottom strut and the root _NET_WORKAREA reserved that space. This
+# helper never clicks, moves, or resizes windows. It stays alive as the
+# Dock supervisor: on TERM it cleans up only its own DBus/panel
+# children and removes dock.ready. PID-file ownership stays with the
+# outer boot script, which restarts the Dock when dock.ready is absent.
+set -eu
+
+if [ "$#" -ne 3 ]; then
+  echo "agent-screen-dock: need 3 args: DISPLAY_NO CHROMIUM_PROFILE PID_DIR" >&2
+  exit 2
+fi
+DISP_NO="$1"
+PROFILE="$2"
+PIDDIR="$3"
+if [ -z "$PIDDIR" ]; then
+  echo "agent-screen-dock: empty PID_DIR" >&2
+  exit 2
+fi
+case "$DISP_NO" in
+  :*) DISP="$DISP_NO" ;;
+  *) DISP=":$DISP_NO" ;;
+esac
+case "$PROFILE" in
+  /*) ;;
+  *)
+    echo "agent-screen-dock: CHROMIUM_PROFILE must be absolute" >&2
+    exit 2
+    ;;
+esac
+case "$PROFILE" in
+  *"'"*|*'"'*)
+    echo "agent-screen-dock: bad CHROMIUM_PROFILE" >&2
+    exit 2
+    ;;
+esac
+
+export DISPLAY="$DISP"
+CONFIG_HOME="$PIDDIR/config"
+export XDG_CONFIG_HOME="$CONFIG_HOME"
+SEED_DIR="/usr/local/share/agent-screen-dock"
+PANEL_XML_DIR="$CONFIG_HOME/xfce4/xfconf/xfce-perchannel-xml"
+LAUNCH_BASE="$CONFIG_HOME/xfce4/panel"
+READY_FILE="$PIDDIR/dock.ready"
+
+mkdir -p "$PIDDIR" "$PANEL_XML_DIR" "$LAUNCH_BASE"
+rm -f "$READY_FILE"
+
+if [ ! -f "$SEED_DIR/xfce4-panel.xml" ]; then
+  echo "agent-screen-dock: seed config missing: $SEED_DIR/xfce4-panel.xml" >&2
+  exit 1
+fi
+cp -f "$SEED_DIR/xfce4-panel.xml" "$PANEL_XML_DIR/xfce4-panel.xml"
+# Dock look (rounded light shelf, needs xfwm4 compositing) and the wallpaper
+# settings; both read from this private XDG_CONFIG_HOME.
+mkdir -p "$CONFIG_HOME/gtk-3.0"
+[ -f "$SEED_DIR/gtk.css" ] && cp -f "$SEED_DIR/gtk.css" "$CONFIG_HOME/gtk-3.0/gtk.css"
+[ -f "$SEED_DIR/xfce4-desktop.xml" ] && cp -f "$SEED_DIR/xfce4-desktop.xml" "$PANEL_XML_DIR/xfce4-desktop.xml"
+
+write_chromium_launcher() {
+  dest="$1"
+  cat > "$dest" <<LAUNCHER_EOF
+[Desktop Entry]
+Version=1.0
+Name=Chromium
+Exec=env -u CHROMIUM_FLAGS /usr/bin/chromium --no-sandbox --start-maximized --user-data-dir="$PROFILE" --force-renderer-accessibility --hide-crash-restore-bubble --deny-permission-prompts --no-first-run --no-default-browser-check --password-store=basic --disable-extensions --disable-default-apps --disable-sync --disable-spell-check --disable-breakpad --metrics-recording-only --no-pings --mute-audio %U
+Terminal=false
+Icon=chromium
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml_xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupWMClass=chromium
+LAUNCHER_EOF
+}
+
+seed_launcher() {
+  app="$1"
+  dir="$2"
+  if [ -f "$SEED_DIR/launchers/$app.desktop" ]; then
+    cp -f "$SEED_DIR/launchers/$app.desktop" "$dir/$app.desktop"
+    return 0
+  fi
+  if [ -f "/usr/share/applications/$app.desktop" ]; then
+    cp -f "/usr/share/applications/$app.desktop" "$dir/$app.desktop"
+    return 0
+  fi
+  return 1
+}
+
+mkdir -p "$LAUNCH_BASE/launcher-1"
+write_chromium_launcher "$LAUNCH_BASE/launcher-1/chromium.desktop"
+
+mkdir -p "$LAUNCH_BASE/launcher-2"
+if ! seed_launcher xfce4-terminal "$LAUNCH_BASE/launcher-2"; then
+  if ! seed_launcher org.xfce.terminal "$LAUNCH_BASE/launcher-2"; then
+    echo "agent-screen-dock: warn: no terminal launcher found" >&2
+  fi
+fi
+n=3
+for app in org.xfce.mousepad libreoffice-writer libreoffice-calc libreoffice-impress; do
+  mkdir -p "$LAUNCH_BASE/launcher-$n"
+  if ! seed_launcher "$app" "$LAUNCH_BASE/launcher-$n"; then
+    echo "agent-screen-dock: warn: no launcher for $app" >&2
+  fi
+  n=$((n + 1))
+done
+
+PANEL_PID=""
+DESK_PID=""
+cleanup() {
+  rm -f "$READY_FILE"
+  if [ -n "$DESK_PID" ]; then
+    pkill -P "$DESK_PID" 2>/dev/null || true
+    kill "$DESK_PID" 2>/dev/null || true
+    DESK_PID=""
+  fi
+  if [ -n "$PANEL_PID" ]; then
+    pkill -P "$PANEL_PID" 2>/dev/null || true
+    kill "$PANEL_PID" 2>/dev/null || true
+    PANEL_PID=""
+  fi
+}
+trap 'cleanup; exit 143' TERM INT HUP
+trap cleanup EXIT
+
+dbus-run-session -- xfce4-panel >"$PIDDIR/dock-panel.log" 2>&1 &
+PANEL_PID=$!
+
+# Wallpaper: xfdesktop paints the root; nothing else in the screen boot starts it.
+# Best effort, its failure never blocks the Dock.
+if [ -f /usr/local/share/juno/wallpaper.png ] && command -v xfdesktop >/dev/null 2>&1; then
+  dbus-run-session -- xfdesktop --disable-wm-check >"$PIDDIR/dock-desktop.log" 2>&1 &
+  DESK_PID=$!
+fi
+
+panel_alive() {
+  [ -n "$PANEL_PID" ] && kill -0 "$PANEL_PID" 2>/dev/null
+}
+
+root_height() {
+  xwininfo -root 2>/dev/null | grep -i height | tr -cs '0-9' ' ' | awk '{print $1}'
+}
+
+work_height() {
+  xprop -root _NET_WORKAREA 2>/dev/null | tr -cs '0-9' ' ' | awk '{print $4}'
+}
+
+bottom_strut() {
+  # xfwm4 reparents clients into frame windows; the root children are not the panel clients.
+  ids=$(xprop -root _NET_CLIENT_LIST 2>/dev/null | grep -o '0x[0-9a-fA-F][0-9a-fA-F]*' || true)
+  for id in $ids; do
+    xprop -id "$id" WM_CLASS 2>/dev/null | grep -qi '"xfce4-panel"' || continue
+    s=$(xprop -id "$id" _NET_WM_STRUT_PARTIAL 2>/dev/null | tr -cs '0-9' ' ' | awk '{print $4}')
+    if [ -n "$s" ] && [ "$s" -gt 0 ] 2>/dev/null; then
+      return 0
+    fi
+    s=$(xprop -id "$id" _NET_WM_STRUT 2>/dev/null | tr -cs '0-9' ' ' | awk '{print $4}')
+    if [ -n "$s" ] && [ "$s" -gt 0 ] 2>/dev/null; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+dock_reserved() {
+  rh=$(root_height)
+  wh=$(work_height)
+  if [ -z "$rh" ] || [ -z "$wh" ]; then
+    return 1
+  fi
+  if [ "$wh" -le 0 ] 2>/dev/null; then
+    return 1
+  fi
+  if [ "$wh" -ge "$rh" ] 2>/dev/null; then
+    return 1
+  fi
+  bottom_strut
+}
+
+tries=0
+while [ "$tries" -lt 120 ]; do
+  if ! panel_alive; then
+    echo "agent-screen-dock: xfce4-panel on $DISP died before reserving work area" >&2
+    tail -n 30 "$PIDDIR/dock-panel.log" 2>/dev/null || true
+    exit 1
+  fi
+  if dock_reserved; then
+    break
+  fi
+  tries=$((tries + 1))
+  sleep 0.5
+done
+
+if ! dock_reserved; then
+  echo "agent-screen-dock: panel on $DISP never reserved bottom work area" >&2
+  echo "--- xprop -root _NET_WORKAREA ---" >&2
+  xprop -root _NET_WORKAREA >&2 2>&1 || true
+  echo "--- xwininfo -root ---" >&2
+  xwininfo -root >&2 2>&1 || true
+  echo "--- dock-panel.log ---" >&2
+  tail -n 30 "$PIDDIR/dock-panel.log" >&2 2>&1 || true
+  exit 1
+fi
+
+: > "$READY_FILE"
+echo "agent-screen-dock: dock on $DISP ready (profile $PROFILE)" >&2
+while panel_alive; do
+  sleep 2
+done
+echo "agent-screen-dock: xfce4-panel on $DISP exited" >&2
+exit 1

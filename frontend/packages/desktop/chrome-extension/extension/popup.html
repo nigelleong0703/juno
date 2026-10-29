@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Juno browser access</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <div class="eyebrow">JUNO</div>
+          <h1>Browser access</h1>
+        </div>
+        <span id="badge" class="badge">Offline</span>
+      </header>
+
+      <section class="tab-card" aria-live="polite">
+        <div id="page-title" class="page-title">Finding the current tab…</div>
+        <div id="page-url" class="page-url"></div>
+        <div id="tab-access" class="tab-access"></div>
+      </section>
+
+      <div id="message" class="message" role="status"></div>
+
+      <button id="connect" class="button primary" type="button">Connect to Juno</button>
+      <button id="allow" class="button" type="button">Allow this tab</button>
+      <button id="revoke" class="button quiet" type="button">Stop all tab access</button>
+
+      <p class="note">
+        Juno can control only tabs you allow here. Closing Chrome, disconnecting, or clicking
+        <strong>Cancel</strong> on Chrome's debugging notice releases active access.
+      </p>
+      <p class="meta"><span id="grant-count">0</span> allowed tabs · private local connection</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

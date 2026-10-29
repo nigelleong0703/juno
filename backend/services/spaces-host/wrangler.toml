@@ -1,0 +1,25 @@
+# The hosted Spaces Worker (BACKEND 5.12, option B). Deploy it with the owner's account; see README.md.
+# Nothing secret lives here: the signing key is a Worker secret (`wrangler secret put SPACES_HOST_SIGNING_KEY`).
+name = "juno-spaces-host"
+main = "src/worker.ts"
+compatibility_date = "2026-10-01"
+
+# CONTENT_DOMAIN: the domain published Spaces live under, `<slug>-<linkId>.<CONTENT_DOMAIN>`. It must not be the app's domain
+# (BACKEND 5.11). Set it before the first deploy; the API must be configured with the same value (SPACES_CONTENT_DOMAIN).
+[vars]
+CONTENT_DOMAIN = "juno-content.example"
+
+# The route that sends every <slug>-<linkId>.<CONTENT_DOMAIN> request to this Worker (zone = the content domain's zone). See README.md:
+# routes = [{ pattern = "*.juno-content.example/*", zone_name = "juno-content.example" }]  (a one-level wildcard: Universal SSL covers it)
+
+# The database and bucket names are the owner's choice; the API needs the database id (SPACES_HOST_D1_DATABASE_ID)
+# and the bucket name (SPACES_HOST_R2_BUCKET), both printed by `wrangler d1 create` / `wrangler r2 bucket create`.
+[[d1_databases]]
+binding = "DB"
+database_name = "juno-spaces"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "juno-spaces-files"

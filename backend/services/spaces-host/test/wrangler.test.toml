@@ -1,0 +1,18 @@
+# The integration test's Worker: the development entry (with its admin endpoints) under wrangler's local runtime, in memory.
+name = "juno-spaces-host-test"
+main = "../src/dev-entry.ts"
+compatibility_date = "2026-10-01"
+
+[vars]
+CONTENT_DOMAIN = "content.test"
+ADMIN_TOKEN = "test-admin-token-0123456789"
+SPACES_HOST_SIGNING_KEY = "test-signing-key-0123456789abcdef"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "test"
+database_id = "test"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "test"

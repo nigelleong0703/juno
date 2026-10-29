@@ -1,0 +1,481 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		083FA501D190BA3CCA71577B /* Client.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C01D6A044BE22C9D7608428 /* Client.swift */; };
+		0E2B854806FBAD473613C68C /* bean-thinking.heic in Resources */ = {isa = PBXBuildFile; fileRef = 39F8C121F5F728AB54D0FCC1 /* bean-thinking.heic */; };
+		1B4DAAE2A761088D6800786F /* mint-idle.heic in Resources */ = {isa = PBXBuildFile; fileRef = 1D6E0A21A21886982046ACF1 /* mint-idle.heic */; };
+		1BBA67BBAD3A15D9565C82F2 /* purple-idle.heic in Resources */ = {isa = PBXBuildFile; fileRef = C3BBEF97AAB6EDC511BBC963 /* purple-idle.heic */; };
+		1E9AAA07D8B446624547B5A4 /* pink-needs_you.heic in Resources */ = {isa = PBXBuildFile; fileRef = 38084DC85FAA07703E3562FA /* pink-needs_you.heic */; };
+		2211B278CA8B0A67B63FEE02 /* purple-sleeping.heic in Resources */ = {isa = PBXBuildFile; fileRef = 54A9A903C70E8A536AE1DC3E /* purple-sleeping.heic */; };
+		338A37B6C6E4BD3C150146B8 /* Sprite.swift in Sources */ = {isa = PBXBuildFile; fileRef = A138458237D061C4A910F0AF /* Sprite.swift */; };
+		3A5432700941401F5D6B098F /* Companion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 014C9CE65C003B107027E6EA /* Companion.swift */; };
+		3F8FBF964582C6CBCC31F20F /* mint-happy.heic in Resources */ = {isa = PBXBuildFile; fileRef = 640C89A27703D937A81A9C06 /* mint-happy.heic */; };
+		42F4846CD733A1A45015AD12 /* bean-failed.heic in Resources */ = {isa = PBXBuildFile; fileRef = C4927C7B81A2E6A368FE7B4A /* bean-failed.heic */; };
+		450944295058D18D112723D9 /* star-needs_you.heic in Resources */ = {isa = PBXBuildFile; fileRef = 16B2641573371AA6BEA4BA48 /* star-needs_you.heic */; };
+		5CC469626DB98B5BA0E676DC /* star-happy.heic in Resources */ = {isa = PBXBuildFile; fileRef = 2390DD14BF55BFD2B3225727 /* star-happy.heic */; };
+		5D5A454339CBD78327AF7970 /* purple-happy.heic in Resources */ = {isa = PBXBuildFile; fileRef = DF6EA1D124AC7CED81752211 /* purple-happy.heic */; };
+		60073B5DA9197139CA9156C8 /* pink-failed.heic in Resources */ = {isa = PBXBuildFile; fileRef = CB7A2662710923339B9D0656 /* pink-failed.heic */; };
+		60861A16A64DD60B968B32ED /* mint-needs_you.heic in Resources */ = {isa = PBXBuildFile; fileRef = AA52ABA00FE294836FB937DE /* mint-needs_you.heic */; };
+		616F6AF8B3D1FCA3F7F01165 /* blue-idle.heic in Resources */ = {isa = PBXBuildFile; fileRef = 043F4E22BA63D47301B46675 /* blue-idle.heic */; };
+		630F690ECE6278B85A0B95CA /* purple-thinking.heic in Resources */ = {isa = PBXBuildFile; fileRef = D338FE3283977DC290431D64 /* purple-thinking.heic */; };
+		6749A4BA2ABD377D232BCE85 /* mint-sleeping.heic in Resources */ = {isa = PBXBuildFile; fileRef = 66A765D4A993FF678413A26C /* mint-sleeping.heic */; };
+		6F62C149386DBB633D0D9832 /* bean-needs_you.heic in Resources */ = {isa = PBXBuildFile; fileRef = 6C403A5873AEBB8ABE30F200 /* bean-needs_you.heic */; };
+		78A2A1E71CF85A4D86942FE3 /* pink-sleeping.heic in Resources */ = {isa = PBXBuildFile; fileRef = 2C49414F7CB3D50266ED2903 /* pink-sleeping.heic */; };
+		7B0BD860F7C9D36748EA07EA /* mint-failed.heic in Resources */ = {isa = PBXBuildFile; fileRef = 34A92A4938DDC61D9CD23BDC /* mint-failed.heic */; };
+		7B50B595A601D6A1E6EF10A6 /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A29DFDC3B675786F91672A0 /* PairingView.swift */; };
+		84C3A9F120F0726129C2CBC6 /* star-thinking.heic in Resources */ = {isa = PBXBuildFile; fileRef = 1A842C2CAB6257486CA4B959 /* star-thinking.heic */; };
+		88DA46B6B40C881984329919 /* pink-thinking.heic in Resources */ = {isa = PBXBuildFile; fileRef = C33BCE4EAB697C95D1EAA5CA /* pink-thinking.heic */; };
+		898784BF03662FBD92FF66E4 /* JunoWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7DBD6D4E05BCEEC9AB23625 /* JunoWatchApp.swift */; };
+		8C41FD547B518A7D9DFB68B3 /* blue-thinking.heic in Resources */ = {isa = PBXBuildFile; fileRef = 4942AB635E5DE54625479BF5 /* blue-thinking.heic */; };
+		9138367B5AE02EEC78BACF72 /* bean-happy.heic in Resources */ = {isa = PBXBuildFile; fileRef = 045DB31F821B1A9EDEA38B22 /* bean-happy.heic */; };
+		9B8B04C15C1988F316E2B483 /* blue-needs_you.heic in Resources */ = {isa = PBXBuildFile; fileRef = 1246DCFFDA9F2C48A5A72F1D /* blue-needs_you.heic */; };
+		B4E65CAE4C97044BC0BD4E5B /* blue-sleeping.heic in Resources */ = {isa = PBXBuildFile; fileRef = 44131590E65A9083BFFC6972 /* blue-sleeping.heic */; };
+		BE1D8D2FAFEE0F2CFF31FA95 /* star-failed.heic in Resources */ = {isa = PBXBuildFile; fileRef = 2274FDE4E257E1ABF6DBAFFD /* star-failed.heic */; };
+		C028737B7FACC56ED9677C10 /* bean-sleeping.heic in Resources */ = {isa = PBXBuildFile; fileRef = 99ABCF10C498EBC609F61289 /* bean-sleeping.heic */; };
+		C6538DF562B90253EE335D5D /* blue-happy.heic in Resources */ = {isa = PBXBuildFile; fileRef = A3741A08925425BCCB3DC774 /* blue-happy.heic */; };
+		C6F52707913FF625CDD2D978 /* pink-idle.heic in Resources */ = {isa = PBXBuildFile; fileRef = ADA87B4BD1EB95237F4D7148 /* pink-idle.heic */; };
+		C80267B8F35751ED2DC8D510 /* purple-needs_you.heic in Resources */ = {isa = PBXBuildFile; fileRef = A5842335810BB0080F4CEF7F /* purple-needs_you.heic */; };
+		CD703EE7952B0D7DABD9E776 /* star-idle.heic in Resources */ = {isa = PBXBuildFile; fileRef = 4AD63EE5CCBCC6109833914B /* star-idle.heic */; };
+		D96F323D0DB0911A2EE91249 /* mint-thinking.heic in Resources */ = {isa = PBXBuildFile; fileRef = 6D2A294E38B6CC4360D63036 /* mint-thinking.heic */; };
+		D98AC54A0EEF14749D42107E /* star-sleeping.heic in Resources */ = {isa = PBXBuildFile; fileRef = 90E4A810E4D11B39CAF720C5 /* star-sleeping.heic */; };
+		DB80E1091CF80F47D11FF006 /* bean-idle.heic in Resources */ = {isa = PBXBuildFile; fileRef = F662D4BE35917E86001355DC /* bean-idle.heic */; };
+		E28A61F95F7C8CEAA3D3C7FA /* blue-failed.heic in Resources */ = {isa = PBXBuildFile; fileRef = 64E34656EB0DDBE0E63223E4 /* blue-failed.heic */; };
+		E9D4ABCB8060439AA8B2039B /* pink-happy.heic in Resources */ = {isa = PBXBuildFile; fileRef = D146139D751E412CDC162E57 /* pink-happy.heic */; };
+		EE2B190FBEB2AD5B29ED4DA5 /* purple-failed.heic in Resources */ = {isa = PBXBuildFile; fileRef = 7AD7E919840616DADF91E546 /* purple-failed.heic */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		014C9CE65C003B107027E6EA /* Companion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Companion.swift; sourceTree = "<group>"; };
+		043F4E22BA63D47301B46675 /* blue-idle.heic */ = {isa = PBXFileReference; path = "blue-idle.heic"; sourceTree = "<group>"; };
+		045DB31F821B1A9EDEA38B22 /* bean-happy.heic */ = {isa = PBXFileReference; path = "bean-happy.heic"; sourceTree = "<group>"; };
+		1246DCFFDA9F2C48A5A72F1D /* blue-needs_you.heic */ = {isa = PBXFileReference; path = "blue-needs_you.heic"; sourceTree = "<group>"; };
+		1646446C4A6D8B3E526060D9 /* Watch.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Watch.xcconfig; sourceTree = "<group>"; };
+		16B2641573371AA6BEA4BA48 /* star-needs_you.heic */ = {isa = PBXFileReference; path = "star-needs_you.heic"; sourceTree = "<group>"; };
+		1A842C2CAB6257486CA4B959 /* star-thinking.heic */ = {isa = PBXFileReference; path = "star-thinking.heic"; sourceTree = "<group>"; };
+		1D6E0A21A21886982046ACF1 /* mint-idle.heic */ = {isa = PBXFileReference; path = "mint-idle.heic"; sourceTree = "<group>"; };
+		2274FDE4E257E1ABF6DBAFFD /* star-failed.heic */ = {isa = PBXFileReference; path = "star-failed.heic"; sourceTree = "<group>"; };
+		2390DD14BF55BFD2B3225727 /* star-happy.heic */ = {isa = PBXFileReference; path = "star-happy.heic"; sourceTree = "<group>"; };
+		2C49414F7CB3D50266ED2903 /* pink-sleeping.heic */ = {isa = PBXFileReference; path = "pink-sleeping.heic"; sourceTree = "<group>"; };
+		34A92A4938DDC61D9CD23BDC /* mint-failed.heic */ = {isa = PBXFileReference; path = "mint-failed.heic"; sourceTree = "<group>"; };
+		38084DC85FAA07703E3562FA /* pink-needs_you.heic */ = {isa = PBXFileReference; path = "pink-needs_you.heic"; sourceTree = "<group>"; };
+		39F8C121F5F728AB54D0FCC1 /* bean-thinking.heic */ = {isa = PBXFileReference; path = "bean-thinking.heic"; sourceTree = "<group>"; };
+		44131590E65A9083BFFC6972 /* blue-sleeping.heic */ = {isa = PBXFileReference; path = "blue-sleeping.heic"; sourceTree = "<group>"; };
+		4942AB635E5DE54625479BF5 /* blue-thinking.heic */ = {isa = PBXFileReference; path = "blue-thinking.heic"; sourceTree = "<group>"; };
+		4AD63EE5CCBCC6109833914B /* star-idle.heic */ = {isa = PBXFileReference; path = "star-idle.heic"; sourceTree = "<group>"; };
+		54A9A903C70E8A536AE1DC3E /* purple-sleeping.heic */ = {isa = PBXFileReference; path = "purple-sleeping.heic"; sourceTree = "<group>"; };
+		5C01D6A044BE22C9D7608428 /* Client.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Client.swift; sourceTree = "<group>"; };
+		640C89A27703D937A81A9C06 /* mint-happy.heic */ = {isa = PBXFileReference; path = "mint-happy.heic"; sourceTree = "<group>"; };
+		64E34656EB0DDBE0E63223E4 /* blue-failed.heic */ = {isa = PBXFileReference; path = "blue-failed.heic"; sourceTree = "<group>"; };
+		664370B72C50F4E1FC6E99CE /* JunoWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = JunoWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		66A765D4A993FF678413A26C /* mint-sleeping.heic */ = {isa = PBXFileReference; path = "mint-sleeping.heic"; sourceTree = "<group>"; };
+		6C403A5873AEBB8ABE30F200 /* bean-needs_you.heic */ = {isa = PBXFileReference; path = "bean-needs_you.heic"; sourceTree = "<group>"; };
+		6D2A294E38B6CC4360D63036 /* mint-thinking.heic */ = {isa = PBXFileReference; path = "mint-thinking.heic"; sourceTree = "<group>"; };
+		7A29DFDC3B675786F91672A0 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
+		7AD7E919840616DADF91E546 /* purple-failed.heic */ = {isa = PBXFileReference; path = "purple-failed.heic"; sourceTree = "<group>"; };
+		90E4A810E4D11B39CAF720C5 /* star-sleeping.heic */ = {isa = PBXFileReference; path = "star-sleeping.heic"; sourceTree = "<group>"; };
+		99ABCF10C498EBC609F61289 /* bean-sleeping.heic */ = {isa = PBXFileReference; path = "bean-sleeping.heic"; sourceTree = "<group>"; };
+		A138458237D061C4A910F0AF /* Sprite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sprite.swift; sourceTree = "<group>"; };
+		A3741A08925425BCCB3DC774 /* blue-happy.heic */ = {isa = PBXFileReference; path = "blue-happy.heic"; sourceTree = "<group>"; };
+		A5842335810BB0080F4CEF7F /* purple-needs_you.heic */ = {isa = PBXFileReference; path = "purple-needs_you.heic"; sourceTree = "<group>"; };
+		AA52ABA00FE294836FB937DE /* mint-needs_you.heic */ = {isa = PBXFileReference; path = "mint-needs_you.heic"; sourceTree = "<group>"; };
+		ADA87B4BD1EB95237F4D7148 /* pink-idle.heic */ = {isa = PBXFileReference; path = "pink-idle.heic"; sourceTree = "<group>"; };
+		B7DBD6D4E05BCEEC9AB23625 /* JunoWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JunoWatchApp.swift; sourceTree = "<group>"; };
+		C33BCE4EAB697C95D1EAA5CA /* pink-thinking.heic */ = {isa = PBXFileReference; path = "pink-thinking.heic"; sourceTree = "<group>"; };
+		C3BBEF97AAB6EDC511BBC963 /* purple-idle.heic */ = {isa = PBXFileReference; path = "purple-idle.heic"; sourceTree = "<group>"; };
+		C4927C7B81A2E6A368FE7B4A /* bean-failed.heic */ = {isa = PBXFileReference; path = "bean-failed.heic"; sourceTree = "<group>"; };
+		CB7A2662710923339B9D0656 /* pink-failed.heic */ = {isa = PBXFileReference; path = "pink-failed.heic"; sourceTree = "<group>"; };
+		D146139D751E412CDC162E57 /* pink-happy.heic */ = {isa = PBXFileReference; path = "pink-happy.heic"; sourceTree = "<group>"; };
+		D338FE3283977DC290431D64 /* purple-thinking.heic */ = {isa = PBXFileReference; path = "purple-thinking.heic"; sourceTree = "<group>"; };
+		DF6EA1D124AC7CED81752211 /* purple-happy.heic */ = {isa = PBXFileReference; path = "purple-happy.heic"; sourceTree = "<group>"; };
+		F662D4BE35917E86001355DC /* bean-idle.heic */ = {isa = PBXFileReference; path = "bean-idle.heic"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		9782CF9CAA08777113857B64 /* Characters */ = {
+			isa = PBXGroup;
+			children = (
+				C4927C7B81A2E6A368FE7B4A /* bean-failed.heic */,
+				045DB31F821B1A9EDEA38B22 /* bean-happy.heic */,
+				F662D4BE35917E86001355DC /* bean-idle.heic */,
+				6C403A5873AEBB8ABE30F200 /* bean-needs_you.heic */,
+				99ABCF10C498EBC609F61289 /* bean-sleeping.heic */,
+				39F8C121F5F728AB54D0FCC1 /* bean-thinking.heic */,
+				64E34656EB0DDBE0E63223E4 /* blue-failed.heic */,
+				A3741A08925425BCCB3DC774 /* blue-happy.heic */,
+				043F4E22BA63D47301B46675 /* blue-idle.heic */,
+				1246DCFFDA9F2C48A5A72F1D /* blue-needs_you.heic */,
+				44131590E65A9083BFFC6972 /* blue-sleeping.heic */,
+				4942AB635E5DE54625479BF5 /* blue-thinking.heic */,
+				34A92A4938DDC61D9CD23BDC /* mint-failed.heic */,
+				640C89A27703D937A81A9C06 /* mint-happy.heic */,
+				1D6E0A21A21886982046ACF1 /* mint-idle.heic */,
+				AA52ABA00FE294836FB937DE /* mint-needs_you.heic */,
+				66A765D4A993FF678413A26C /* mint-sleeping.heic */,
+				6D2A294E38B6CC4360D63036 /* mint-thinking.heic */,
+				CB7A2662710923339B9D0656 /* pink-failed.heic */,
+				D146139D751E412CDC162E57 /* pink-happy.heic */,
+				ADA87B4BD1EB95237F4D7148 /* pink-idle.heic */,
+				38084DC85FAA07703E3562FA /* pink-needs_you.heic */,
+				2C49414F7CB3D50266ED2903 /* pink-sleeping.heic */,
+				C33BCE4EAB697C95D1EAA5CA /* pink-thinking.heic */,
+				7AD7E919840616DADF91E546 /* purple-failed.heic */,
+				DF6EA1D124AC7CED81752211 /* purple-happy.heic */,
+				C3BBEF97AAB6EDC511BBC963 /* purple-idle.heic */,
+				A5842335810BB0080F4CEF7F /* purple-needs_you.heic */,
+				54A9A903C70E8A536AE1DC3E /* purple-sleeping.heic */,
+				D338FE3283977DC290431D64 /* purple-thinking.heic */,
+				2274FDE4E257E1ABF6DBAFFD /* star-failed.heic */,
+				2390DD14BF55BFD2B3225727 /* star-happy.heic */,
+				4AD63EE5CCBCC6109833914B /* star-idle.heic */,
+				16B2641573371AA6BEA4BA48 /* star-needs_you.heic */,
+				90E4A810E4D11B39CAF720C5 /* star-sleeping.heic */,
+				1A842C2CAB6257486CA4B959 /* star-thinking.heic */,
+			);
+			path = Characters;
+			sourceTree = "<group>";
+		};
+		B21C046FCBEBF5D1F59111F2 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				664370B72C50F4E1FC6E99CE /* JunoWatch.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		D0963DD59093AAD9B9E54329 = {
+			isa = PBXGroup;
+			children = (
+				9782CF9CAA08777113857B64 /* Characters */,
+				D4BDDC9693E82BFD19EBD1E5 /* Config */,
+				F11A4E6A2144EED7EBCAC4C8 /* JunoWatch */,
+				B21C046FCBEBF5D1F59111F2 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		D4BDDC9693E82BFD19EBD1E5 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				1646446C4A6D8B3E526060D9 /* Watch.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
+		F11A4E6A2144EED7EBCAC4C8 /* JunoWatch */ = {
+			isa = PBXGroup;
+			children = (
+				5C01D6A044BE22C9D7608428 /* Client.swift */,
+				014C9CE65C003B107027E6EA /* Companion.swift */,
+				B7DBD6D4E05BCEEC9AB23625 /* JunoWatchApp.swift */,
+				7A29DFDC3B675786F91672A0 /* PairingView.swift */,
+				A138458237D061C4A910F0AF /* Sprite.swift */,
+			);
+			path = JunoWatch;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A506ACC07DE4DA5F7B80A1EE /* JunoWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 654D2F7F616F4149E171364D /* Build configuration list for PBXNativeTarget "JunoWatch" */;
+			buildPhases = (
+				994A9C1B026D8331D44BA5F7 /* Sources */,
+				2541F04198E3050D17DF5CC0 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = JunoWatch;
+			packageProductDependencies = (
+			);
+			productName = JunoWatch;
+			productReference = 664370B72C50F4E1FC6E99CE /* JunoWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		6B57721D83B9F8A23F9B4F9A /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					A506ACC07DE4DA5F7B80A1EE = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 5B208E57DB3E485F18E4B949 /* Build configuration list for PBXProject "JunoWatch" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = D0963DD59093AAD9B9E54329;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = B21C046FCBEBF5D1F59111F2 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A506ACC07DE4DA5F7B80A1EE /* JunoWatch */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		2541F04198E3050D17DF5CC0 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				42F4846CD733A1A45015AD12 /* bean-failed.heic in Resources */,
+				9138367B5AE02EEC78BACF72 /* bean-happy.heic in Resources */,
+				DB80E1091CF80F47D11FF006 /* bean-idle.heic in Resources */,
+				6F62C149386DBB633D0D9832 /* bean-needs_you.heic in Resources */,
+				C028737B7FACC56ED9677C10 /* bean-sleeping.heic in Resources */,
+				0E2B854806FBAD473613C68C /* bean-thinking.heic in Resources */,
+				E28A61F95F7C8CEAA3D3C7FA /* blue-failed.heic in Resources */,
+				C6538DF562B90253EE335D5D /* blue-happy.heic in Resources */,
+				616F6AF8B3D1FCA3F7F01165 /* blue-idle.heic in Resources */,
+				9B8B04C15C1988F316E2B483 /* blue-needs_you.heic in Resources */,
+				B4E65CAE4C97044BC0BD4E5B /* blue-sleeping.heic in Resources */,
+				8C41FD547B518A7D9DFB68B3 /* blue-thinking.heic in Resources */,
+				7B0BD860F7C9D36748EA07EA /* mint-failed.heic in Resources */,
+				3F8FBF964582C6CBCC31F20F /* mint-happy.heic in Resources */,
+				1B4DAAE2A761088D6800786F /* mint-idle.heic in Resources */,
+				60861A16A64DD60B968B32ED /* mint-needs_you.heic in Resources */,
+				6749A4BA2ABD377D232BCE85 /* mint-sleeping.heic in Resources */,
+				D96F323D0DB0911A2EE91249 /* mint-thinking.heic in Resources */,
+				60073B5DA9197139CA9156C8 /* pink-failed.heic in Resources */,
+				E9D4ABCB8060439AA8B2039B /* pink-happy.heic in Resources */,
+				C6F52707913FF625CDD2D978 /* pink-idle.heic in Resources */,
+				1E9AAA07D8B446624547B5A4 /* pink-needs_you.heic in Resources */,
+				78A2A1E71CF85A4D86942FE3 /* pink-sleeping.heic in Resources */,
+				88DA46B6B40C881984329919 /* pink-thinking.heic in Resources */,
+				EE2B190FBEB2AD5B29ED4DA5 /* purple-failed.heic in Resources */,
+				5D5A454339CBD78327AF7970 /* purple-happy.heic in Resources */,
+				1BBA67BBAD3A15D9565C82F2 /* purple-idle.heic in Resources */,
+				C80267B8F35751ED2DC8D510 /* purple-needs_you.heic in Resources */,
+				2211B278CA8B0A67B63FEE02 /* purple-sleeping.heic in Resources */,
+				630F690ECE6278B85A0B95CA /* purple-thinking.heic in Resources */,
+				BE1D8D2FAFEE0F2CFF31FA95 /* star-failed.heic in Resources */,
+				5CC469626DB98B5BA0E676DC /* star-happy.heic in Resources */,
+				CD703EE7952B0D7DABD9E776 /* star-idle.heic in Resources */,
+				450944295058D18D112723D9 /* star-needs_you.heic in Resources */,
+				D98AC54A0EEF14749D42107E /* star-sleeping.heic in Resources */,
+				84C3A9F120F0726129C2CBC6 /* star-thinking.heic in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		994A9C1B026D8331D44BA5F7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				083FA501D190BA3CCA71577B /* Client.swift in Sources */,
+				3A5432700941401F5D6B098F /* Companion.swift in Sources */,
+				898784BF03662FBD92FF66E4 /* JunoWatchApp.swift in Sources */,
+				7B50B595A601D6A1E6EF10A6 /* PairingView.swift in Sources */,
+				338A37B6C6E4BD3C150146B8 /* Sprite.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		423D0DD9172051089CBD1E71 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Release;
+		};
+		7E71DFEFDB5EB0A5515A09BF /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 1646446C4A6D8B3E526060D9 /* Watch.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Config/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Juno;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Juno listens while you talk to your character.";
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.nigelleong0703.juno.watch;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = 4;
+			};
+			name = Release;
+		};
+		CC9DB7D14CEBE04581A87772 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 1646446C4A6D8B3E526060D9 /* Watch.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Config/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Juno;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Juno listens while you talk to your character.";
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.nigelleong0703.juno.watch;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = 4;
+			};
+			name = Debug;
+		};
+		F0F681824423EE77FCD37BF6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		5B208E57DB3E485F18E4B949 /* Build configuration list for PBXProject "JunoWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F0F681824423EE77FCD37BF6 /* Debug */,
+				423D0DD9172051089CBD1E71 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		654D2F7F616F4149E171364D /* Build configuration list for PBXNativeTarget "JunoWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CC9DB7D14CEBE04581A87772 /* Debug */,
+				7E71DFEFDB5EB0A5515A09BF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 6B57721D83B9F8A23F9B4F9A /* Project object */;
+}

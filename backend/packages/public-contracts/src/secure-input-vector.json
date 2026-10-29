@@ -1,0 +1,19 @@
+{
+  "description": "Fixed vector for secure input (BACKEND 8.7). Seal: X25519(ephemeralPrivateKey, sandboxPublicKey) -> HKDF-SHA256(salt=UTF-8 requestId, info=\"juno-secure-input-v1\", 32 bytes) -> AES-256-GCM(nonce, AAD=\"<requestId>|<fieldId>|<ref>\"). ciphertext = encrypted bytes followed by the 16-byte tag. All binary values are base64.",
+  "alg": "X25519-HKDF-SHA256-AES256GCM",
+  "sandboxPrivateKey": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+  "sandboxPublicKey": "B6N8vBQgk8i3VdwbEOhstCY3StFqqFPtC9/AsrhtHHw=",
+  "keyId": "aaa8fff703b50b22",
+  "ephemeralPrivateKey": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8=",
+  "ephemeralPublicKey": "YFpyXSpK3+6xop4X7dYhwbdZPujNvESsbEq24vgF0jw=",
+  "nonce": "EBESExQVFhcYGRob",
+  "requestId": "req_secure_vector_1",
+  "fieldId": "f1",
+  "ref": "e12",
+  "value": "4242 4242 4242 4242 é",
+  "sealed": {
+    "epk": "YFpyXSpK3+6xop4X7dYhwbdZPujNvESsbEq24vgF0jw=",
+    "nonce": "EBESExQVFhcYGRob",
+    "ciphertext": "5ofwMWoFizczNi3M7AfXP4YSSPNzjaEv/awae7TtwSuGeLuie9g="
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "juno",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.9.1",
+  "scripts": {
+    "check": "pnpm --filter juno-backend check && pnpm --filter juno-frontend check",
+    "typecheck": "pnpm --filter juno-backend typecheck && pnpm --filter juno-frontend typecheck",
+    "lint": "pnpm --filter juno-backend lint && pnpm --filter juno-frontend lint",
+    "test": "pnpm --filter juno-backend test && pnpm --filter juno-frontend test",
+    "build": "pnpm --filter juno-backend build && pnpm --filter juno-frontend build",
+    "build:web": "pnpm --filter @agent-desktop/web build",
+    "contracts:check": "pnpm -C backend contracts:check && pnpm -C frontend contracts:check",
+    "source:check": "node scripts/verify/public-source.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=26 <27",
+    "pnpm": "12.9.1"
+  }
+}

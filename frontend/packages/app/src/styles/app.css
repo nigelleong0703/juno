@@ -1,0 +1,738 @@
+/*
+ * App-level style additions (E1). The design system owns the theme; this file carries only the
+ * rules that must apply app-wide and are not yet in packages/ui — each is listed as TODO(ui) in
+ * the handoff report so it can move upstream.
+ *
+ * Removed 2026-10-05 (owner feedback): the `-electron-corner-smoothing` rule and the popover/menu
+ * 14px-radius override now live in `@agent-desktop/ui` itself (theme/base.css, popover/dropdown/
+ * context-menu `rounded-lg`), so the app no longer overrides them.
+ */
+
+/*
+ * The chat list animates its 280px → 84px rail collapse, and the computer pane its open/close, over
+ * 180-240ms (owner feedback). The shell sizes the grid tracks inline from state, so the
+ * transition is scoped to a flag the shell sets while a toggle is in flight - a drag writes
+ * sizes without the flag and stays immediate.
+ */
+/*
+ * Owner feedback 2026-10-05 ("动画还是很奇怪"): the shared `--ease-standard` curve front-loads ~80%
+ * of the motion into the first frame or two, so a 208px width change read as a snap. Panel width
+ * uses a gentler ease-in-out over 240ms; the sidebar's fades and highlight use the same curve.
+ */
+/*
+ * Desktop window drag (lib/drag.ts). The shell paints one drag strip along the top of the main column
+ * and the computer pane; every control is carved out of it here, once, instead of per page. Chromium
+ * resolves `-webkit-app-region` boxes in DOM order (a later no-drag box cuts out an earlier drag box),
+ * so a control inside any drag row stays clickable. Ignored by browsers.
+ */
+:where(button, a[href], input, select, textarea, summary, [role="button"], [role="tab"], [role="radio"], [role="checkbox"], [role="switch"], [role="combobox"], [role="menuitem"], [role="slider"]) {
+  -webkit-app-region: no-drag;
+}
+
+:root {
+  --ease-panel: cubic-bezier(0.32, 0.72, 0, 1);
+  --duration-panel: 240ms;
+  /* Reference shell (UF6): one shared header height for the sidebar, conversation
+     and computer headers, so the three top rows always line up. */
+  --shell-header-height: 44px;
+  /* Reference shell (UF6): the collapsed chat list is an 84px avatar rail. */
+  --shell-rail-width: 84px;
+  /* The window's own corner radius: macOS resolves 16pt on every corner
+     (lib/windowChrome.ts MAC_WINDOW_CORNER_RADIUS_PX owns the number). */
+  --window-radius: 16px;
+  /* The window frame's ring. The owner's Codex reference (2026-10-21) measures 2 device
+     pixels at its own scale, drawn at roughly twice the window surface's tone (44 on a 21
+     surface). `--border` reads about 1.15:1 on the light theme, so the frame carries its own
+     width and alpha instead of reusing it. */
+  --window-frame-width: 1px;
+  --window-frame-border: color-mix(in oklab, var(--fg) 16%, transparent);
+}
+
+/*
+ * The window frame (owner reference 2026-10-21, Codex form): one hairline and one corner
+ * radius around the whole app. It lives on the shell root — never on a column — so the chat
+ * list, the feed and settings all sit inside the same frame and navigation cannot take the
+ * frame with it. The ring is an overlay because a border, or an inset shadow, is painted
+ * beneath the columns' own backgrounds and would never be seen.
+ *
+ * The root is already `overflow-hidden`, so the radius also clips the top row and the rail:
+ * on the desktop that corner is the native window's own, and the chrome behind it is the
+ * vibrancy material.
+ */
+/*
+ * Page frame (the chat header's form on every page): the header floats over the page on a solid surface that feathers
+ * into the content; the scroller is pulled up under it, so content scrolls behind the header and bubble and fades out.
+ * `--page-overlap` is how far the scroller reaches up under the header (and the padding that keeps the first row clear).
+ */
+[data-slot="page-frame"] {
+  --page-overlap: 28px;
+}
+
+.page-frame-fade {
+  height: 108px;
+  background: linear-gradient(to bottom, var(--background) 0, var(--background) 74px, transparent 100%);
+}
+
+[data-slot="page-body"] > :not([data-slot="scroll-area"]):not([data-slot="split-view"]):not(div:has(> [data-slot="scroll-area"])) {
+  position: relative;
+  z-index: 11;
+}
+
+[data-slot="page-body"] > [data-slot="scroll-area"],
+[data-slot="page-body"] > [data-slot="split-view"] {
+  margin-top: calc(-1 * var(--page-overlap));
+}
+
+[data-slot="page-body"] > [data-slot="scroll-area"] [data-slot="scroll-area-viewport"] > div {
+  padding-top: var(--page-overlap);
+}
+
+[data-slot="page-body"] > [data-slot="split-view"] > [data-slot="split-view-list"],
+[data-slot="page-body"] > [data-slot="split-view"] > [data-slot="split-view-detail"] {
+  padding-top: var(--page-overlap);
+}
+
+[data-slot="app-shell"] {
+  border-radius: var(--window-radius);
+}
+
+[data-slot="app-shell"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  /* Above the shell's own chrome (the top row at 20, the phone menu button at 30) and
+     below dialogs and sheets (50), which are portaled outside the shell. */
+  z-index: 40;
+  pointer-events: none;
+  border: var(--window-frame-width) solid var(--window-frame-border);
+  border-radius: inherit;
+}
+
+/*
+ * Reference shell (UF6): the shell is an actual three-column CSS Grid — chat
+ * list | conversation | computer — sized by one grid-template-columns value the
+ * shell sets from state (rail 84px when collapsed, user pixels otherwise).
+ * Width changes transition on the grid container, so rapid toggles retarget
+ * the same transition instead of stacking timers. Drags write sizes without
+ * the animating flag and stay immediate.
+ */
+[data-slot="panel-group"].shell-grid {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) minmax(0, auto);
+  position: relative;
+  height: 100%;
+  width: 100%;
+}
+
+[data-slot="panel-group"].shell-grid[data-animating="true"] {
+  transition: grid-template-columns var(--duration-panel) var(--ease-panel);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="panel-group"].shell-grid[data-animating="true"] {
+    transition: none;
+  }
+}
+
+/*
+ * Reference shell (UF6): separators keep a transparent 8px drag target with
+ * a hover/drag indicator on the computer boundary. Only the deliberate
+ * computer boundary draws a resting 0.5px hairline (`.shell-divider-line`);
+ * the sidebar/chat boundary (`.shell-divider-bare`) draws no decorative
+ * line at rest, on hover, or while dragging - it separates by background
+ * tone alone and stays keyboard-resizable, with a plain target outline for
+ * focus. Fixed header rows keep their own horizontal borders.
+ */
+[data-slot="panel-separator"].shell-divider {
+  position: relative;
+  width: 8px;
+  flex: none;
+  cursor: col-resize;
+  background: transparent;
+  outline: none;
+  touch-action: none;
+}
+
+/* Resting hairline, opt-in per separator (computer boundary only). */
+[data-slot="panel-separator"].shell-divider-line::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 0.5px;
+  transform: translateX(-50%);
+  background: var(--border-subtle, currentColor);
+  opacity: 0.7;
+}
+
+/* Transient indicator for every separator: hover, drag, keyboard focus. */
+[data-slot="panel-separator"].shell-divider::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1.5px;
+  transform: translateX(-50%);
+  background: var(--border-subtle, currentColor);
+  opacity: 0;
+}
+
+[data-slot="panel-separator"].shell-divider:hover::after,
+[data-slot="panel-separator"].shell-divider:active::after,
+[data-slot="panel-separator"].shell-divider:focus-visible::after {
+  opacity: 1;
+}
+
+/*
+ * Bare variant (sidebar/chat boundary): no decorative line in any state.
+ * Every pseudo-element is stripped for rest, hover, drag and focus alike,
+ * so no vertical mark can appear; keyboard focus uses a plain outline
+ * around the hit target instead.
+ */
+[data-slot="panel-separator"].shell-divider-bare::before,
+[data-slot="panel-separator"].shell-divider-bare::after,
+[data-slot="panel-separator"].shell-divider-bare:hover::before,
+[data-slot="panel-separator"].shell-divider-bare:hover::after,
+[data-slot="panel-separator"].shell-divider-bare:active::before,
+[data-slot="panel-separator"].shell-divider-bare:active::after,
+[data-slot="panel-separator"].shell-divider-bare:focus-visible::before,
+[data-slot="panel-separator"].shell-divider-bare:focus-visible::after {
+  content: none;
+  display: none;
+}
+
+[data-slot="panel-separator"].shell-divider-bare:focus-visible {
+  outline: 1.5px solid var(--border-strong, currentColor);
+  outline-offset: -1.5px;
+}
+
+/*
+ * Reference shell (UF6): new-message entrance. Fresh items (newer than the transcript
+ * mount) float in once — opacity plus a small rise — while remounted history stays
+ * still, so cached conversation switches never replay. Never a typewriter: stream
+ * chunks do not exist in the contract.
+ */
+.transcript-enter {
+  animation: transcript-enter 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes transcript-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Agent-status pill above the composer (AgentStatusPill): slides up in and fades down out, both
+ * under 200ms. Reduced motion skips the movement; the state still changes at once. */
+.agent-status-pill-in {
+  animation: agent-status-pill-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.agent-status-pill-out {
+  animation: agent-status-pill-out 150ms ease-in forwards;
+}
+
+@keyframes agent-status-pill-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes agent-status-pill-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-status-pill-in,
+  .agent-status-pill-out {
+    animation: none;
+  }
+}
+
+/* Awaiting-reply dots: three staggered pulses in place, no layout motion. */
+.typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 2px;
+}
+
+.typing-dots > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--fg-muted, currentColor);
+  animation: typing-dot 1.2s ease-in-out infinite;
+}
+
+.typing-dots > span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-dots > span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .transcript-enter,
+  .typing-dots > span {
+    animation: none;
+  }
+}
+
+/*
+ * Reference shell (UF6): collapsing-block height animation. The sidebar's
+ * titlebar/search block and the footer's new-chat button ride the same
+ * 240ms motion as the grid tracks (1fr <-> 0fr needs no measuring), so rows
+ * glide instead of jumping when the block mounts or unmounts.
+ */
+.collapse-rows {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--duration-panel) var(--ease-panel);
+}
+
+.collapse-rows[data-closed="true"] {
+  grid-template-rows: 0fr;
+}
+
+.collapse-rows > div {
+  min-height: 0;
+  overflow: hidden;
+  /* Content fades on the same clock as its height, so rows never pop in or out. */
+  transition: opacity var(--duration-panel) var(--ease-panel);
+}
+
+.collapse-rows[data-closed="true"] > div {
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .collapse-rows,
+  .collapse-rows > div {
+    transition: none;
+  }
+}
+
+/*
+ * Reference conversation header (UI91 + header-fade): the 120px chat header
+ * overlays the full-height transcript (messages scroll underneath it, ChatGPT
+ * reference) instead of reserving flow space. One pointer-events-none overlay
+ * under the sharp avatar/name/status/buttons fades the page background
+ * (`--background`, so light/dark follow the app canvas) from solid at the top
+ * to transparent across the full header plus 32px below it — no
+ * backdrop-filter, no tint, no agent colour wash. The top inset lives in
+ * `.conversation-view .transcript-content`, so a standalone Transcript keeps
+ * its own padding; `--conversation-header-height` is the single source.
+ */
+.conversation-view {
+  --conversation-header-height: 120px;
+}
+
+.conversation-header {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  z-index: 7;
+  height: var(--conversation-header-height, 120px);
+  background: transparent;
+}
+
+.conversation-header-fade {
+  position: absolute;
+  inset: 0 0 -32px 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(to bottom, var(--background) 0%, transparent 100%);
+}
+
+.conversation-header > :not([data-slot="conversation-header-fade"]) {
+  position: relative;
+  z-index: 1;
+}
+
+/* Initial top inset (scoped): at scrollTop 0 the first message starts below
+ * the overlaid header; scrolling moves content under the fade. */
+.conversation-view .transcript-content {
+  padding-top: calc(var(--conversation-header-height, 120px) + 16px);
+}
+
+.conversation-view [data-slot="conversation-empty"] {
+  padding-top: var(--conversation-header-height, 120px);
+}
+
+/*
+ * Scroll under composer (UI92): the transcript and the composer footer are two
+ * cells of the same 1x1 grid, so the message list fills the whole column under
+ * the header and keeps scrolling behind the pill. Before this, the footer was a
+ * flex sibling: the scroller stopped at the footer's top edge, so the fade's
+ * blur hit a hard horizontal cutoff there and blurred content met empty
+ * background as a grey strip. With one shared cell the transcript extends to
+ * the column bottom, the fade feathers real scrolled content all the way down
+ * (no cutoff), and the footer overlays its bottom.
+ * `.transcript-content` pads the last row by the real footer height (the
+ * `--conversation-footer-height` ConversationView writes with a ResizeObserver)
+ * plus the 64px fade, so a multiline or attachment footer never covers it.
+ */
+.conversation-thread-body {
+  display: grid;
+  grid-template-areas: "thread";
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1 1 0%;
+  min-height: 0;
+  position: relative;
+}
+
+.conversation-thread-body > [data-slot="transcript"],
+.conversation-thread-body > [data-slot="conversation-empty"],
+.conversation-thread-body > [data-slot="conversation-footer"] {
+  grid-area: thread;
+}
+
+.conversation-thread-body > [data-slot="transcript"],
+.conversation-thread-body > [data-slot="conversation-empty"] {
+  min-height: 0;
+}
+
+.conversation-thread-body > [data-slot="conversation-footer"] {
+  align-self: end;
+  z-index: 6;
+}
+
+.transcript-content {
+  padding-bottom: calc(var(--conversation-footer-height, 68px) + 64px);
+}
+
+/* Jump-to-latest pill sits 12px above the measured footer offset as a visual gap
+ * (not the 64px blur feather) so it stays above the fade and the composer. */
+.transcript-jump {
+  bottom: calc(var(--conversation-footer-height, 68px) + 12px);
+}
+
+/*
+ * Composer transition (UI91 geometry, layered by UI95): absolute overlays
+ * anchored to the footer container (the Composer root stays static, otherwise
+ * the fade would reanchor to the inner root). bottom 0 plus height
+ * calc(100% + 64px) extends the transition continuously behind the footer and
+ * 64px into the transcript, so no seam appears above the pill, never a flow
+ * spacer, so a multiline footer stays responsive. Neutral palette
+ * (`--background`), pointer pass-through and footer anchoring are unchanged.
+ * Layering: transition/fade z 5, pill form z 6, mention picker z 20 on top.
+ *
+ * UI95 progressive blur, tightened to a 32px visible transition (reference:
+ * the ChatGPT dot shade is ~32px; the old 64px band read as a large grey
+ * strip). A backdrop filter's filter region is clamped to its own border box
+ * and this renderer does not feather the filtered backdrop with mask-image, so
+ * a single 6px layer snapped the transcript from sharp to smeared on a hard
+ * line at the fade top. The transition now clips four blur siblings that
+ * overhang it by 12px on the sides and whose radius ramps 1/2/4/6px on 8px
+ * steps downward from the fade top, so each visible step is a 1px blur change
+ * instead of one 6px jump; their mask feather is the same 32px. A shade
+ * sibling, painted last, lays the 32px surface gradient over the blur: keeping
+ * the gradient off the blur's backdrop is why it is a sibling and not the
+ * clipped parent's background. The mask stays on the child, never on the
+ * clipped parent: a mask on the parent would become the child's backdrop root
+ * and the child would then blur nothing. The transcript keeps its footer + 64px
+ * scroll padding and the jump pill keeps its 12px gap. (Class names in prose
+ * drop the leading dot on purpose so the pinned selector checks keep matching
+ * the real rules below.)
+ */
+.conversation-footer {
+  position: relative;
+}
+
+.composer-transition {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: calc(100% + 32px);
+  margin: 0;
+  pointer-events: none;
+  z-index: 5;
+  overflow: hidden;
+}
+
+.composer-fade {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: calc(100% + 64px);
+  margin: 0;
+  pointer-events: none;
+  z-index: 5;
+  background: linear-gradient(to bottom, transparent, var(--background) 64px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 64px);
+  mask-image: linear-gradient(to bottom, transparent, black 64px);
+}
+
+/*
+ * Shade painted above the fade and clipped with it.
+ */
+.composer-shade {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  pointer-events: none;
+  z-index: 5;
+  background: linear-gradient(to bottom, transparent, var(--background) 32px);
+}
+
+.composer-pill {
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+}
+
+/*
+ * Pill above fade: only the form creates a positioned layer (z 6 over fade
+ * z 5), so the textarea stays clickable. The Composer root stays static to
+ * preserve the footer anchor; the mention picker keeps its z 20 above both.
+ */
+.conversation-footer .composer-pill {
+  position: relative;
+  z-index: 6;
+}
+
+/*
+ * Composer surface ownership (UI75): the shared inline PromptInput owns the
+ * composer surface, shadow, radius, controls and neutral focus treatment
+ * from semantic tokens. No descendant surface or focus overrides live here;
+ * the outer form keeps only its borderless transparent layout, and the field
+ * keeps its type scale below.
+ */
+/* Composer field sizing only: reference 16px/26px type lives in the shared
+ * inline PromptInput. Unlayered author CSS would beat the layered utility,
+ * so no typography may live here. */
+.composer-field {
+  max-height: 120px;
+}
+
+/*
+ * Reference shell (UF6): notification badges are centred numeric pills — a
+ * single digit reads as a circle, longer counts grow into a pill. The
+ * number is always laid out and centred, never clipped by its icon slot.
+ */
+.shell-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding-inline: 4px;
+  border-radius: 9999px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  overflow: visible;
+  white-space: nowrap;
+}
+
+
+/*
+ * Thin rounded muted thumb on a transparent track for the transcript scroller
+ * (`role=log > div` / `.transcript-scroller`); `auto` gutter keeps the centred 760px
+ * column aligned with the composer.
+ */
+[data-slot="transcript"] [role="log"] > div,
+[data-slot="transcript"] .transcript-scroller {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  scrollbar-color: color-mix(in srgb, var(--foreground) 28%, transparent) transparent;
+  scrollbar-gutter: auto !important;
+  background: transparent;
+  scroll-padding-bottom: 72px;
+}
+
+[data-slot="transcript"] [role="log"] > div::-webkit-scrollbar,
+[data-slot="transcript"] .transcript-scroller::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+  background: transparent;
+}
+
+[data-slot="transcript"] [role="log"] > div::-webkit-scrollbar-track,
+[data-slot="transcript"] .transcript-scroller::-webkit-scrollbar-track {
+  background: transparent;
+  border: none;
+}
+
+[data-slot="transcript"] [role="log"] > div::-webkit-scrollbar-thumb,
+[data-slot="transcript"] .transcript-scroller::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  background-color: color-mix(in srgb, var(--foreground) 28%, transparent);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+[data-slot="transcript"] [role="log"] > div::-webkit-scrollbar-thumb:hover,
+[data-slot="transcript"] .transcript-scroller::-webkit-scrollbar-thumb:hover {
+  background-color: var(--fg-muted);
+  background-clip: content-box;
+}
+
+/* Jump-to-latest pill stays clickable above the fade overlay. */
+/*
+ * Continuous sidebar row geometry (UI72): the row highlight always fills the live
+ * sidebar track, so the selected background keeps symmetric gutters and a full
+ * right radius at every frame of the collapse/expand and any reversal. The text
+ * column fades and clips inside the row while the 40px avatar slot drifts to
+ * centre through a transform on the same collapsed-state clock as the grid tracks:
+ * one interruptible transition, never a layout swap when a timer settles. No
+ * per-frame React measurement is involved; the browser interpolates the track,
+ * the fade and the avatar shift together.
+ */
+.chat-row {
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.chat-row-avatar {
+  transform: translateX(0);
+  transition: transform var(--duration-panel) var(--ease-panel);
+}
+
+[data-slot="sidebar-inner"][data-collapsed="true"][data-rail="84"] .chat-row-avatar {
+  transform: translateX(6px);
+}
+
+[data-slot="sidebar-inner"][data-collapsed="true"][data-rail="96"] .chat-row-avatar {
+  transform: translateX(12px);
+}
+
+.chat-row-text {
+  transition: opacity var(--duration-panel) var(--ease-panel);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-row-avatar,
+  .chat-row-text {
+    transition: none;
+  }
+}
+
+/*
+ * Stable sidebar collapse: one width shrink. The header, nav tree, draft row and
+ * footer profile keep their heights in both states; the Recents chrome folds its
+ * own height on the shared grid clock while its content fades and clips. Text
+ * fades in place, the nav icons and footer avatar drift horizontally to the rail
+ * centre — all on the shared 240ms panel clock, reversible mid-flight, no
+ * per-frame JS. Hidden controls sit behind inert + aria-hidden.
+ */
+.sidebar-fade {
+  transition: opacity var(--duration-panel) var(--ease-panel);
+}
+
+/* Anchor the toggle throughout the width transition; centring via flex would
+   jump it to the middle of the still-expanded header on the first frame. */
+.sidebar-toggle {
+  position: absolute;
+  right: 8px;
+  transition: right var(--duration-panel) var(--ease-panel);
+}
+
+[data-slot="sidebar-inner"][data-collapsed="true"][data-rail="84"] .sidebar-toggle {
+  right: 26px;
+}
+
+[data-slot="sidebar-inner"][data-collapsed="true"][data-rail="96"] .sidebar-toggle {
+  right: 32px;
+}
+
+.sidebar-nav-icon,
+.sidebar-footer-avatar {
+  transform: translateX(0);
+  transition: transform var(--duration-panel) var(--ease-panel);
+}
+
+/* Rail centre is x42 at 84px and x48 at 96px, so the icon shifts 13px/19px. The
+   count rides on the icon wrapper, so it travels with the icon and never clips. */
+[data-slot="sidebar-inner"][data-collapsed="true"][data-rail="84"] .sidebar-nav-icon {
+  transform: translateX(13px);
+}
+
+[data-slot="sidebar-inner"][data-collapsed="true"][data-rail="96"] .sidebar-nav-icon {
+  transform: translateX(19px);
+}
+
+/* The footer profile row shares the chat rows' geometry (40px avatar, px-2
+   gutters), so it reuses their 6px/12px centre drift. */
+[data-slot="sidebar-inner"][data-collapsed="true"][data-rail="84"] .sidebar-footer-avatar {
+  transform: translateX(6px);
+}
+
+[data-slot="sidebar-inner"][data-collapsed="true"][data-rail="96"] .sidebar-footer-avatar {
+  transform: translateX(12px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-fade,
+  .sidebar-toggle,
+  .sidebar-nav-icon,
+  .sidebar-footer-avatar {
+    transition: none;
+  }
+}
+
+/*
+ * Recents chrome content is sized once to the saved expanded width (the
+ * `--sidebar-chrome-width` var the sidebar root writes from the store), so the
+ * wrapping chips keep their wrap while the rail narrows underneath: the grid
+ * folds the height, the fixed-width content fades and clips, no reflow jump.
+ */
+.sidebar-chrome-content {
+  width: var(--sidebar-chrome-width, 248px);
+}
+
+/*
+ * The sidebar list never scrolls horizontally: the fixed-width chrome content
+ * and the fading rows clip inside the narrowing track — so no bottom scrollbar
+ * can appear at any intermediate width (e.g. the 245px step). Vertical
+ * scrolling is unchanged.
+ */
+[data-slot="sidebar-list"] {
+  overflow-x: hidden;
+}
+
+/*
+ * The sidebar list scrolls under a thin overlay scrollbar so an overflowing list
+ * never reserves a one-sided gutter: selected-row gutters stay symmetric with or
+ * without overflow, and collapsing never flips gutter modes. Where overlay
+ * scrollbars are unsupported the block is ignored and plain auto overflow applies.
+ */
+@supports (overflow: overlay) {
+  [data-slot="sidebar-list"] {
+    overflow-y: overlay;
+  }
+}
+[data-slot="transcript"] [role="log"] > button {
+  z-index: 10;
+}

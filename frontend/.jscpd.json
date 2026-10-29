@@ -1,0 +1,10 @@
+{
+  "pattern": "**/*.{ts,tsx}",
+  "path": ["packages"],
+  "ignore": ["**/node_modules/**", "**/dist/**", "**/out/**", "**/*.d.ts", "**/__tests__/**", "**/*.test.ts", "**/*.test.tsx", "packages/ios/**", "**/generated/**"],
+  "minTokens": 70,
+  "threshold": 1.5,
+  "reporters": ["consoleFull"],
+  "silent": false,
+  "absolute": false
+}

@@ -1,0 +1,97 @@
+/* Tailwind entry for the Electron renderer. Same design system as the web build; the only
+   difference is the relative path to the workspace sources. */
+@import "@agent-desktop/ui/styles.css";
+@import "../../../../app/src/styles/app.css";
+
+@source "../../../../app/src/**/*.{ts,tsx}";
+@source "../../../../ui/src/**/*.{ts,tsx}";
+
+/* Native vibrancy chrome (owner reference 2026-10-17): the document is clear so the macOS
+   material shows through the top bar, the rail and the sidebar; only the content card is
+   opaque. The chrome gets a light tint so text stays readable over the material. */
+html,
+body,
+#root,
+[data-slot="desktop-shell"],
+[data-slot="desktop-shell"] [data-slot="app-shell"] {
+  background-color: transparent;
+}
+
+/* Screens before the shell (onboarding, connect server, sign-in, model gate) have no native chrome: the
+   canvas colour fills the whole window, whatever height the screen itself reaches. */
+html:not(:has([data-slot="desktop-shell"])),
+html:not(:has([data-slot="desktop-shell"])) body,
+html:not(:has([data-slot="desktop-shell"])) #root {
+  background-color: var(--background);
+}
+
+[data-slot="desktop-shell"] [data-slot="shell-topbar"] {
+  background-color: color-mix(in oklab, var(--sidebar) 30%, transparent);
+}
+
+/* The rail's surface continues behind the chat list, so its rounded left corners reveal the
+   same chrome tone rather than the raw window material. Away from the chat surface the
+   conversation column takes that place, so it gets the same surface. */
+[data-slot="desktop-shell"] [data-slot="app-rail"],
+[data-slot="desktop-shell"] #sidebar,
+[data-slot="desktop-shell"] [data-rail-panel] {
+  background-color: transparent;
+}
+
+/* ChatGPT-style frame (owner reference 2026-10-21): the chrome tone runs round the content,
+   which is an inset card with rounded corners on every side — no hairline ring. */
+[data-slot="desktop-shell"] [data-slot="app-shell"]::after {
+  display: none;
+}
+
+[data-slot="desktop-shell"] #conversation,
+[data-slot="desktop-shell"] #computer {
+  background-color: transparent;
+}
+
+/* With the Computer pane open the two cards meet: the conversation's rounded top-right corner
+   sits on the pane's surface, not on the window chrome. */
+[data-slot="desktop-shell"] #conversation:has(> main[data-computer]) {
+  background-color: var(--panel-background);
+}
+
+/* Desktop only: the content card's right corners (the web build stays square). */
+[data-slot="desktop-shell"] #conversation > main {
+  border-top-right-radius: 16px !important;
+  border-bottom-right-radius: 16px;
+}
+
+[data-slot="desktop-shell"] #conversation > main[data-computer] {
+  border-bottom-right-radius: 0;
+}
+
+[data-slot="desktop-shell"] #computer {
+  border-radius: 0 16px 16px 0;
+}
+
+[data-slot="desktop-shell"] [data-slot="shell-body"] {
+  padding: 0 6px 6px 0;
+  background-color: color-mix(in oklab, var(--sidebar) 30%, transparent);
+}
+
+/* The chat list stays solid: only the window's own chrome is translucent. */
+[data-slot="desktop-shell"] [data-slot="sidebar"] {
+  background-color: var(--background);
+}
+
+/* Desktop shell: the App sizes itself to the viewport, but inside the shell it fills the
+   column. Unlayered, so it wins over the layered Tailwind utilities. */
+.desktop-shell-inner > .h-screen {
+  height: 100%;
+}
+
+.desktop-shell-inner > .w-screen {
+  width: 100%;
+}
+
+/* The app's own shell draws the chrome now, so it fills the window's column. */
+.desktop-shell-inner > [data-slot="app-shell"] {
+  height: 100%;
+  width: 100%;
+}
+

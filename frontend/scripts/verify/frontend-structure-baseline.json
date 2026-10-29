@@ -1,0 +1,41 @@
+{
+  "components/channel/QrCode.tsx": {
+    "hexColor": 1
+  },
+  "components/computer/LiveScreen.tsx": {
+    "hexColor": 1
+  },
+  "components/computer/live/NoVncSurface.tsx": {
+    "hexColor": 1
+  },
+  "components/computer/live/rfb.ts": {
+    "hexColor": 1
+  },
+  "components/conversation/FeedRefItem.tsx": {
+    "hexColor": 2
+  },
+  "components/request/DecisionCard.tsx": {
+    "hexColor": 1
+  },
+  "components/request/SecureInputDialog.tsx": {
+    "hexColor": 1
+  },
+  "components/request/cards.tsx": {
+    "hexColor": 2
+  },
+  "components/uidoc/UiDoc.tsx": {
+    "hexColor": 4
+  },
+  "components/uidoc/UiDocInput.tsx": {
+    "hexColor": 5
+  },
+  "features/agents/card/MemoryTab.tsx": {
+    "hexColor": 2
+  },
+  "features/automations/AutomationCalendar.tsx": {
+    "hexColor": 2
+  },
+  "features/chat/ReturningWelcome.tsx": {
+    "hexColor": 3
+  }
+}

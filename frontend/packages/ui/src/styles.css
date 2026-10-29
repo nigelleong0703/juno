@@ -1,0 +1,26 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@import "./theme/palette.css";
+@import "./theme/tokens.css";
+@import "./theme/base.css";
+
+/*
+ * Dark mode is driven by the `data-theme` attribute (set by ThemeProvider and
+ * the Storybook theme decorator), not the `.dark` class. `data-theme="system"`
+ * follows the OS. `.dark` is still honoured so shadcn components work anywhere
+ * a class-based toggle is used.
+ */
+@custom-variant dark {
+  &:is(.dark, .dark *) {
+    @slot;
+  }
+  &:is([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:is([data-theme="system"], [data-theme="system"] *) {
+      @slot;
+    }
+  }
+}

@@ -1,0 +1,544 @@
+/*
+ * Design tokens — VISUAL.md v0.3 (near-black, restrained, colour only in avatars
+ * and status chips).
+ *
+ * Two layers, shadcn-first:
+ *   1. shadcn semantic variables (--background, --foreground, --primary, ...) — the
+ *      canonical layer every shadcn component reads. Dark is the default; light is a
+ *      first-class alternative; `data-theme="system"` follows the OS.
+ *   2. Legacy product aliases (--bg, --fg, --surface, --success, ...) kept so pattern
+ *      code and stories keep working.
+ *
+ * Components must only ever use the semantic layer, never the raw palette
+ * (theme/palette.css).
+ */
+
+@theme {
+  /* Type — system stack (VISUAL.md). Sizes: 11 / 12 / 13 / 14 (base) / 15 / 17 / 22 / 26. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+    Arial, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --text-2xs: 11px;
+  --text-2xs--line-height: 15px;
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 13px;
+  --text-sm--line-height: 18px;
+  --text-base: 14px;
+  --text-base--line-height: 20px;
+  --text-md: 15px;
+  --text-md--line-height: 22px;
+  --text-lg: 17px;
+  --text-lg--line-height: 24px;
+  --text-xl: 22px;
+  --text-xl--line-height: 30px;
+  --text-2xl: 26px;
+  --text-2xl--line-height: 34px;
+
+  /* Radii: 4 / 8 / 10 / 14 / 16 / 18 and full (pills). */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 16px;
+  --radius-2xl: 18px;
+
+  /* Control heights (VISUAL.md): 20 / 24 / 28 / 32. */
+  --control-height-xs: 20px;
+  --control-height-sm: 24px;
+  --control-height-md: 28px;
+  --control-height-lg: 32px;
+
+  /* Motion 50–300 ms on a single easing curve. */
+  --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 100ms;
+  --duration-base: 180ms;
+  --duration-slow: 300ms;
+
+  /* Shadows: light mode only, flat in dark (overridden below). */
+  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.06);
+  --shadow-sm: 0 10px 20px -3px rgb(0 0 0 / 0.1), 0 0 0 1px rgb(0 0 0 / 0.05);
+  --shadow-md: 0 10px 20px -3px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 20px -3px rgb(0 0 0 / 0.1);
+  --shadow-raised: 0 1px 2px 0 rgb(0 0 0 / 0.06);
+  --shadow-overlay: 0 10px 20px -3px rgb(0 0 0 / 0.1);
+}
+
+/* ------------------------------------------------------------------ *
+ * Layer 1 — shadcn semantic variables. Dark is the default.
+ * ------------------------------------------------------------------ */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --radius: 10px;
+
+  /* Reference canvas/text (UI75, observed 2026-10-08): page #0e0e0e, primary
+   * #ededed, secondary #cdcdcd. The earlier owner charcoal #222222 is kept
+   * here only as a record; the live surface follows the observation.
+   * UI76: surface/text roles below reference the shared achromatic palette
+   * (palette.css) so every neutral resolves from one scale. */
+  --background: var(--color-neutral-12);
+  --foreground: var(--color-neutral-4);
+
+  /* Shared surface cards: dark #212121, light #ffffff (UI76). */
+  --card: var(--color-neutral-10);
+  --card-foreground: var(--foreground);
+
+  --popover: var(--color-neutral-10);
+  --popover-foreground: var(--color-neutral-4);
+
+  /* Neutral primary: a white pill (VISUAL.md). */
+  --primary: #fafafa;
+  --primary-foreground: #070707;
+  --primary-hover: #d5d5d5;
+  --primary-pressed: var(--color-neutral-6);
+
+  --secondary: var(--color-neutral-10);
+  --secondary-foreground: var(--color-neutral-2);
+
+  --muted: var(--color-neutral-10);
+  --muted-foreground: var(--color-neutral-5);
+
+  /* UI76: ghost hover follows the shared interaction hover; selected states
+   * use --interactive-selected / --accent-subtle below. */
+  --accent: var(--interactive-hover);
+  --accent-foreground: var(--foreground);
+
+  --destructive: #ff263c;
+  --destructive-foreground: #ffffff;
+
+  --border: rgb(252 252 252 / 0.15);
+  --input: rgb(252 252 252 / 0.15);
+  --ring: #8f8f8f;
+
+  /* Chat bubbles (AI Elements Message). Owner reference: agent #333, user pale with dark text. */
+  --bubble-agent: #333333;
+  --bubble-agent-foreground: #fcfcfc;
+  --bubble-user: #f4efe6;
+  --bubble-user-foreground: #141414;
+
+  --input-background: var(--color-neutral-9);
+
+  /* UI76 component roles (product adaptations, not measured ChatGPT values):
+   * secondary-panel #171717 plus solid interaction steps #2f2f2f /
+   * #404040 / #3a3a3a — no oversubtle opacity hover drift. --ring is
+   * neutral grey (the app has no blue); keyboard focus uses the
+   * opaque neutral --focus-ring. */
+  --panel-background: var(--color-neutral-11);
+  --interactive-hover: var(--color-neutral-9);
+  --interactive-pressed: var(--color-neutral-pressed-dark);
+  --interactive-selected: var(--color-neutral-selected-dark);
+  --focus-ring: var(--color-neutral-6);
+
+  --chart-1: #8f8f8f;
+  --chart-2: #45c4d1;
+  --chart-3: #00c972;
+  --chart-4: #ff9800;
+  --chart-5: #e2699f;
+
+  /* Reference rail (UI75, observed 2026-10-08): the leftmost user rail is
+   * black; its foreground follows the primary text hierarchy. */
+  --sidebar: var(--color-neutral-0);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: #fafafa;
+  --sidebar-primary-foreground: #070707;
+  --sidebar-accent: rgb(119 119 119 / 0.17);
+  --sidebar-accent-foreground: #fcfcfc;
+  --sidebar-border: rgb(252 252 252 / 0.15);
+  --sidebar-ring: #8f8f8f;
+
+  /* Dark mode is flat: no shadows. */
+  --shadow-xs: 0 0 #0000;
+  --shadow-sm: 0 0 #0000;
+  --shadow-md: 0 0 #0000;
+  --shadow-lg: 0 0 #0000;
+  --shadow-raised: 0 0 #0000;
+  --shadow-overlay: 0 0 #0000;
+
+  /* Layer 2 — legacy product aliases. */
+  --bg: var(--background);
+  --bg-subtle: var(--color-neutral-11);
+  --surface: var(--card);
+  --surface-raised: var(--popover);
+  --border-subtle: rgb(252 252 252 / 0.05);
+  --border-strong: rgb(252 252 252 / 0.3);
+  --fg: var(--foreground);
+  --fg-muted: var(--color-neutral-5);
+  --fg-subtle: var(--color-neutral-6);
+  --accent-subtle: var(--interactive-selected);
+  --accent-link: #fcfcfc;
+  --success: #00c972;
+  --success-subtle: rgb(0 201 114 / 0.16);
+  --warning: #ff9800;
+  --warning-subtle: rgb(255 152 0 / 0.16);
+  --danger: var(--destructive);
+  --danger-subtle: rgb(255 38 60 / 0.16);
+  --danger-fg: #ffffff;
+  --info: #8f8f8f;
+  --info-subtle: rgb(127 127 127 / 0.16);
+
+  /* Agent palette, theme-independent. `--agent-N` is the base fill and
+   * `--agent-N-soft` the lighter gradient stop (VISUAL.md "Avatars"). These
+   * alias the raw palette in palette.css; do NOT redeclare `--color-agent-*` in
+   * the `@theme inline` block below, or the two alias each other and resolve to
+   * nothing (which made every avatar render black). */
+  --agent-1: var(--color-agent-1);
+  --agent-2: var(--color-agent-2);
+  --agent-3: var(--color-agent-3);
+  --agent-4: var(--color-agent-4);
+  --agent-5: var(--color-agent-5);
+  --agent-6: var(--color-agent-6);
+  --agent-7: var(--color-agent-7);
+  --agent-8: var(--color-agent-8);
+  --agent-9: var(--color-agent-9);
+  --agent-10: var(--color-agent-10);
+  --agent-1-soft: var(--color-agent-1-soft);
+  --agent-2-soft: var(--color-agent-2-soft);
+  --agent-3-soft: var(--color-agent-3-soft);
+  --agent-4-soft: var(--color-agent-4-soft);
+  --agent-5-soft: var(--color-agent-5-soft);
+  --agent-6-soft: var(--color-agent-6-soft);
+  --agent-7-soft: var(--color-agent-7-soft);
+  --agent-8-soft: var(--color-agent-8-soft);
+  --agent-9-soft: var(--color-agent-9-soft);
+  --agent-10-soft: var(--color-agent-10-soft);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --background: var(--color-neutral-2);
+  --foreground: #0d0d0d;
+
+  --card: var(--color-neutral-1);
+  --card-foreground: var(--foreground);
+
+  --popover: var(--color-neutral-1);
+  --popover-foreground: #0d0d0d;
+
+  --primary: #070707;
+  --primary-foreground: #ffffff;
+  --primary-hover: var(--color-neutral-9);
+  --primary-pressed: var(--color-neutral-8);
+
+  --secondary: #f4f4f4;
+  --secondary-foreground: #141414;
+
+  --muted: #f4f4f4;
+  --muted-foreground: #5d5d5d;
+
+  /* UI76: ghost hover follows the shared interaction hover. */
+  --accent: var(--interactive-hover);
+  --accent-foreground: var(--foreground);
+
+  --destructive: #ff263c;
+  --destructive-foreground: #ffffff;
+
+  --border: rgb(20 20 20 / 0.15);
+  --input: rgb(20 20 20 / 0.15);
+  --ring: #8f8f8f;
+
+  --bubble-agent: #eeeeee;
+  --bubble-agent-foreground: #141414;
+  --bubble-user: #070707;
+  --bubble-user-foreground: #fcfcfc;
+
+  --input-background: var(--color-neutral-2);
+
+  /* UI76 component roles, light adaptations: panel #f9f9f9, hover #f1f1f1,
+   * pressed #e3e3e3, selected #ededed. Keyboard focus is opaque #5d5d5d. */
+  --panel-background: var(--color-neutral-3);
+  --interactive-hover: var(--color-neutral-hover-light);
+  --interactive-pressed: var(--color-neutral-pressed-light);
+  --interactive-selected: var(--color-neutral-4);
+  --focus-ring: var(--color-neutral-8);
+
+  --sidebar: #f7f7f7;
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: #070707;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: rgb(119 119 119 / 0.09);
+  --sidebar-accent-foreground: #141414;
+  --sidebar-border: rgb(20 20 20 / 0.15);
+  --sidebar-ring: #8f8f8f;
+
+  --bg: var(--background);
+  --bg-subtle: #f4f4f4;
+  --surface: var(--card);
+  --surface-raised: var(--popover);
+  --border-subtle: rgb(20 20 20 / 0.05);
+  --border-strong: rgb(20 20 20 / 0.3);
+  --fg: var(--foreground);
+  --fg-muted: var(--color-neutral-8);
+  --fg-subtle: var(--color-neutral-7);
+  --accent-subtle: var(--interactive-selected);
+  --accent-link: #0d0d0d;
+  --success: #00c972;
+  --success-subtle: rgb(0 201 114 / 0.14);
+  --warning: #ff9800;
+  --warning-subtle: rgb(255 152 0 / 0.14);
+  --danger: var(--destructive);
+  --danger-subtle: rgb(255 38 60 / 0.12);
+  --danger-fg: #ffffff;
+  --info: #8f8f8f;
+  --info-subtle: rgb(127 127 127 / 0.16);
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    color-scheme: light;
+
+    --background: var(--color-neutral-2);
+    --foreground: #0d0d0d;
+
+    --card: var(--color-neutral-1);
+    --card-foreground: var(--foreground);
+
+    --popover: var(--color-neutral-1);
+    --popover-foreground: #0d0d0d;
+
+    --primary: #070707;
+    --primary-foreground: #ffffff;
+    --primary-hover: var(--color-neutral-9);
+    --primary-pressed: var(--color-neutral-8);
+
+    --secondary: #f4f4f4;
+    --secondary-foreground: #141414;
+
+    --muted: #f4f4f4;
+    --muted-foreground: #5d5d5d;
+
+    --accent: var(--interactive-hover);
+    --accent-foreground: var(--foreground);
+
+    --destructive: #ff263c;
+    --destructive-foreground: #ffffff;
+
+    --border: rgb(20 20 20 / 0.15);
+    --input: rgb(20 20 20 / 0.15);
+    --ring: #8f8f8f;
+
+    --bubble-agent: #eeeeee;
+    --bubble-agent-foreground: #141414;
+    --bubble-user: #070707;
+    --bubble-user-foreground: #fcfcfc;
+
+    --input-background: var(--color-neutral-2);
+
+    /* UI76 component roles mirror explicit light so system resolves identically. */
+    --panel-background: var(--color-neutral-3);
+    --interactive-hover: var(--color-neutral-hover-light);
+    --interactive-pressed: var(--color-neutral-pressed-light);
+    --interactive-selected: var(--color-neutral-4);
+    --focus-ring: var(--color-neutral-8);
+
+    --sidebar: #f7f7f7;
+    --sidebar-foreground: var(--foreground);
+    --sidebar-primary: #070707;
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: rgb(119 119 119 / 0.09);
+    --sidebar-accent-foreground: #141414;
+    --sidebar-border: rgb(20 20 20 / 0.15);
+    --sidebar-ring: #8f8f8f;
+
+    --bg: var(--background);
+    --bg-subtle: #f4f4f4;
+    --surface: var(--card);
+    --surface-raised: var(--popover);
+    --border-subtle: rgb(20 20 20 / 0.05);
+    --border-strong: rgb(20 20 20 / 0.3);
+    --fg: var(--foreground);
+    --fg-muted: var(--color-neutral-8);
+    --fg-subtle: var(--color-neutral-7);
+    --accent-subtle: var(--interactive-selected);
+    --accent-link: #0d0d0d;
+    --success: #00c972;
+    --success-subtle: rgb(0 201 114 / 0.14);
+    --warning: #ff9800;
+    --warning-subtle: rgb(255 152 0 / 0.14);
+    --danger: var(--destructive);
+    --danger-subtle: rgb(255 38 60 / 0.12);
+    --danger-fg: #ffffff;
+    --info: #8f8f8f;
+    --info-subtle: rgb(127 127 127 / 0.16);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Map tokens to Tailwind utilities (bg-background, text-foreground, ...).
+ * ------------------------------------------------------------------ */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-pressed: var(--primary-pressed);
+
+  --color-panel: var(--panel-background);
+  --color-interactive-hover: var(--interactive-hover);
+  --color-interactive-pressed: var(--interactive-pressed);
+  --color-interactive-selected: var(--interactive-selected);
+  --color-focus-ring: var(--focus-ring);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-bubble-agent: var(--bubble-agent);
+  --color-bubble-agent-foreground: var(--bubble-agent-foreground);
+  --color-bubble-user: var(--bubble-user);
+  --color-bubble-user-foreground: var(--bubble-user-foreground);
+
+  --color-input-background: var(--input-background);
+  --color-composer-background: var(--composer-background);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Legacy product aliases. */
+  --color-bg: var(--bg);
+  --color-bg-subtle: var(--bg-subtle);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-accent-link: var(--accent-link);
+  --color-success: var(--success);
+  --color-success-subtle: var(--success-subtle);
+  --color-warning: var(--warning);
+  --color-warning-subtle: var(--warning-subtle);
+  --color-danger: var(--danger);
+  --color-danger-subtle: var(--danger-subtle);
+  --color-danger-fg: var(--danger-fg);
+  --color-info: var(--info);
+  --color-info-subtle: var(--info-subtle);
+
+/* NOTE: `--color-agent-*` is intentionally NOT redeclared here. It is defined
+ * once in palette.css (which also registers `bg-agent-1` &c. for Tailwind);
+ * mapping it back to `var(--agent-N)` — itself `var(--color-agent-N)` — is a
+ * cycle that resolves to nothing and renders avatars black. */
+}
+
+/* ------------------------------------------------------------------ *
+ * Reference surfaces (UI75, observed chatgpt.com 2026-10-08).
+ * Token layers: raw neutral values -> semantic surface/text/state above ->
+ * component roles below. No new configuration system. Explicit light/dark
+ * and system resolve identically. Global --input-background is untouched so
+ * unrelated forms keep their current surface. The light overlay is an
+ * explicit product adaptation (white 90%); the dark overlay was measured
+ * (#212121 at 90%). Composer stays opaque: no blur token is referenced by
+ * the inline PromptInput.
+ * ------------------------------------------------------------------ */
+:root,
+:root[data-theme="dark"] {
+  --composer-background: #212121;
+  --composer-shadow: inset 0 0 1px 0 rgb(255 255 255 / 20%);
+  --composer-focus-outline: rgb(255 255 255 / 0.3);
+  --composer-radius: 26px;
+  --composer-control-size: 36px;
+  --overlay-background: rgb(33 33 33 / 0.9);
+  --overlay-shadow:
+    inset 0 0 1px 0 rgb(255 255 255 / 20%),
+    0 8px 16px -4px rgb(0 0 0 / 0.12);
+  --overlay-blur: blur(8px);
+  --overlay-radius: 16px;
+}
+
+:root[data-theme="light"] {
+  --composer-background: #ffffff;
+  --composer-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.04),
+    0 2px 8px rgb(0 0 0 / 0.04),
+    0 4px 80px 8px rgb(0 0 0 / 0.024);
+  --composer-focus-outline: rgb(0 0 0 / 0.25);
+  --composer-radius: 26px;
+  --composer-control-size: 36px;
+  --overlay-background: rgb(255 255 255 / 0.9);
+  --overlay-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.04),
+    0 8px 16px -4px rgb(0 0 0 / 0.12);
+  --overlay-blur: blur(8px);
+  --overlay-radius: 16px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    --composer-background: #ffffff;
+    --composer-shadow:
+      0 0 0 1px rgb(0 0 0 / 0.04),
+      0 2px 8px rgb(0 0 0 / 0.04),
+      0 4px 80px 8px rgb(0 0 0 / 0.024);
+    --composer-focus-outline: rgb(0 0 0 / 0.25);
+    --composer-radius: 26px;
+    --composer-control-size: 36px;
+    --overlay-background: rgb(255 255 255 / 0.9);
+    --overlay-shadow:
+      0 0 0 1px rgb(0 0 0 / 0.04),
+      0 8px 16px -4px rgb(0 0 0 / 0.12);
+    --overlay-blur: blur(8px);
+    --overlay-radius: 16px;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    --composer-background: #212121;
+    --composer-shadow: inset 0 0 1px 0 rgb(255 255 255 / 20%);
+    --composer-focus-outline: rgb(255 255 255 / 0.3);
+    --composer-radius: 26px;
+    --composer-control-size: 36px;
+    --overlay-background: rgb(33 33 33 / 0.9);
+    --overlay-shadow:
+      inset 0 0 1px 0 rgb(255 255 255 / 20%),
+      0 8px 16px -4px rgb(0 0 0 / 0.12);
+    --overlay-blur: blur(8px);
+    --overlay-radius: 16px;
+
+    /* UI76 roles mirror the explicit dark base so system resolves identically. */
+    --primary-pressed: var(--color-neutral-6);
+    --panel-background: var(--color-neutral-11);
+    --interactive-hover: var(--color-neutral-9);
+    --interactive-pressed: var(--color-neutral-pressed-dark);
+    --interactive-selected: var(--color-neutral-selected-dark);
+    --focus-ring: var(--color-neutral-6);
+  }
+}

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only the downloaded library files, in the cache: nothing else is shared through the FileProvider. -->
+<paths>
+    <cache-path name="juno-files" path="juno-files/" />
+</paths>

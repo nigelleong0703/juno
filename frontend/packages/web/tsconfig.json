@@ -1,0 +1,24 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["vite/client", "react", "react-dom"],
+    "noEmit": true,
+    // Workspace packages export TypeScript sources (no build step), so `tsc` typechecks their
+    // internals as part of this program. Their own configs are looser than the app's (no DOM lib,
+    // no unused-symbol checks), so we must not impose the app's strictness on them here — the
+    // client package is verified by its own `typecheck`/`test` scripts.
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "jsx": "react-jsx",
+    // ui ships TS sources and imports them through its own `@/*` alias; mirror it here.
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["../ui/src/*"]
+    }
+  },
+  // `globals.d.ts` gives the client package's ambient timer declarations the same shape its own
+  // program sees; without it the DOM lib's `clearInterval(number)` overload rejects the mock's
+  // `unknown` handle.
+  "include": ["src", "vite.config.ts", "../client/src/globals.d.ts"]
+}

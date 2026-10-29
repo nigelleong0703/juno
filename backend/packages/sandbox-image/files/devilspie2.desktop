@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Maximize windows
+Exec=devilspie2
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

@@ -1,0 +1,41 @@
+# Loopback-only QA variant. Public deployments use ./Caddyfile for TLS.
+{
+  admin off
+  auto_https off
+}
+
+http://127.0.0.1 {
+  handle /v1/computer-link* {
+    reverse_proxy app:8795
+  }
+  handle /v1/* {
+    reverse_proxy app:8787 {
+      flush_interval -1
+    }
+  }
+  handle {
+    reverse_proxy app:8787
+  }
+}
+
+http://usercontent.localhost {
+  handle /v1/* {
+    reverse_proxy app:8787 {
+      flush_interval -1
+    }
+  }
+  handle {
+    reverse_proxy app:8787
+  }
+}
+
+http://*.spaces.localhost {
+  handle /v1/* {
+    reverse_proxy app:8787 {
+      flush_interval -1
+    }
+  }
+  handle {
+    reverse_proxy app:8787
+  }
+}
