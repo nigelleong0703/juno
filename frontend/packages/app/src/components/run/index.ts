@@ -4,4 +4,4 @@ export { RunStatusRow } from "./RunStatusRow";
 export { ScreenshotThumb, type ScreenshotThumbProps } from "./ScreenshotThumb";
 export { StepDetail } from "./StepDetail";
 export { StepRow, StepTimeline, type StepRowProps } from "./StepRow";
-export { ChildRuns, type ChildRunsProps } from "./ChildRuns";
+export { SubagentRuns, type SubagentRunsProps } from "./SubagentRuns";

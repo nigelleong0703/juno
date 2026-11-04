@@ -60,6 +60,10 @@ export const qk = {
   document: (id: string) => ["document", id] as const,
   documentDraft: (id: string) => ["document-draft", id] as const,
   documentVersion: (id: string, version: number) => ["document-version", id, version] as const,
+  /** Outgoing messages: the pause switches and the failing connected apps. */
+  delivery: () => ["delivery"] as const,
+  /** The kept earlier versions of one file of an agent's computer. */
+  fileHistory: (agentId: string, path: string) => ["file-history", agentId, path] as const,
   settings: () => ["settings"] as const,
   profile: () => ["profile"] as const,
   modelProviders: () => ["model-providers"] as const,

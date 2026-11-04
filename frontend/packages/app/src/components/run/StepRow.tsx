@@ -14,7 +14,7 @@ import {
   Terminal,
   type LucideIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { isRefusedPurchase, stepDomain, stepIconKey, stepLine, visibleSteps, type StepIconKey } from "../../lib/stepLine";
 import { Reveal, StepDetail } from "./StepDetail";
 
@@ -36,10 +36,12 @@ export interface StepRowProps {
   run?: readonly Step[];
   first?: boolean;
   last?: boolean;
+  /** More under the opened step's detail (the file's earlier versions); only built while the step is open. */
+  extra?: (step: Step) => ReactNode;
 }
 
 /** One step in plain words: a round icon on the thread, one sentence, a muted domain. Click for detail. */
-export function StepRow({ step, run = [step], first = true, last = true }: StepRowProps) {
+export function StepRow({ step, run = [step], first = true, last = true, extra }: StepRowProps) {
   const [open, setOpen] = useState(false);
   const live = step.status === "running" || step.status === "pending";
   const failed = step.status === "failed" && !isRefusedPurchase(step);
@@ -81,6 +83,7 @@ export function StepRow({ step, run = [step], first = true, last = true }: StepR
         </button>
         <Reveal open={open}>
           <StepDetail step={step} />
+          {open ? extra?.(step) : null}
         </Reveal>
       </div>
     </div>
@@ -88,12 +91,12 @@ export function StepRow({ step, run = [step], first = true, last = true }: StepR
 }
 
 /** The steps as one timeline: a thread joins their icons, so they read as one piece of work. */
-export function StepTimeline({ steps, limit }: { steps: readonly Step[]; limit?: number }) {
+export function StepTimeline({ steps, limit, extra }: { steps: readonly Step[]; limit?: number; extra?: StepRowProps["extra"] }) {
   const shown = visibleSteps(steps).slice(0, limit);
   return (
     <div className="flex flex-col">
       {shown.map((step, index) => (
-        <StepRow key={step.id} step={step} run={steps} first={index === 0} last={index === shown.length - 1} />
+        <StepRow key={step.id} step={step} run={steps} first={index === 0} last={index === shown.length - 1} extra={extra} />
       ))}
     </div>
   );

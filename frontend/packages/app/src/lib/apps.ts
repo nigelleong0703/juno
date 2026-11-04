@@ -15,8 +15,16 @@ export const sourceNote = (app: App): string | null => (app.source === "composio
 /** Whether the app has at least one account or workspace. */
 export const isAdded = (app: App): boolean => app.installations.length > 0;
 
-/** An installation whose sign-in is rejected (it worked before) or never worked: the row says "Sign in". */
-export const needsSignIn = (app: App): boolean => app.installations.some((installation) => installation.status !== "connected");
+/** An installation whose sign-in is rejected (it worked before) or never worked, or whose sign-in lacks a permission a tool needs (`needsScope`, still `connected`): it is signed in again to fix it. */
+export const installationNeedsSignIn = (installation: AppInstallation): boolean => installation.status !== "connected" || installation.needsScope === true;
+
+/** The provider said the sign-in lacks a permission: "Needs another permission" (whatever the status says, a refused call also marks the sign-in rejected). */
+export const installationNeedsScope = (installation: AppInstallation): boolean => installation.needsScope === true;
+
+export const needsSignIn = (app: App): boolean => app.installations.some(installationNeedsSignIn);
+
+/** Every installation that needs signing in only lacks a permission: the row and detail say so instead of "Sign in". */
+export const needsScopeOnly = (app: App): boolean => needsSignIn(app) && app.installations.filter(installationNeedsSignIn).every(installationNeedsScope);
 
 /** A Web & video app the backend cannot add yet (it still needs a sandbox sign-in). The no-sign-in ones are `available` and add like any app. */
 export const isComingSoon = (app: App): boolean => app.category === "web" && !app.available;
@@ -26,14 +34,14 @@ export function canAdd(app: App): boolean {
 }
 
 /** The state a row shows on its right: nothing when all is well. */
-export function rowState(app: App): "sign-in" | "coming-soon" | null {
+export function rowState(app: App): "sign-in" | "needs-scope" | "coming-soon" | null {
   if (isComingSoon(app) && !isAdded(app)) return "coming-soon";
-  if (needsSignIn(app)) return "sign-in";
-  return null;
+  if (!needsSignIn(app)) return null;
+  return needsScopeOnly(app) ? "needs-scope" : "sign-in";
 }
 
-/** The first installation that needs signing in, for "Sign in again". */
-export const expiredInstallation = (app: App): AppInstallation | undefined => app.installations.find((installation) => installation.status !== "connected");
+/** The first installation that needs signing in, for "Sign in again" / "Reconnect". */
+export const expiredInstallation = (app: App): AppInstallation | undefined => app.installations.find(installationNeedsSignIn);
 
 const inPill = (app: App, pill: AppPill): boolean => {
   if (pill === "connected") return isAdded(app);
@@ -58,10 +66,11 @@ export function featuredApps(apps: readonly App[], limit = 5): App[] {
 }
 
 /** The label under the name on the detail page: "Chat · Connected". */
-export function stateLabel(app: App): "connected" | "sign-in" | "not-added" | "coming-soon" {
+export function stateLabel(app: App): "connected" | "sign-in" | "needs-scope" | "not-added" | "coming-soon" {
   if (isComingSoon(app) && !isAdded(app)) return "coming-soon";
   if (!isAdded(app)) return "not-added";
-  return needsSignIn(app) ? "sign-in" : "connected";
+  if (!needsSignIn(app)) return "connected";
+  return needsScopeOnly(app) ? "needs-scope" : "sign-in";
 }
 
 /** Agents that may use a work or custom app (no row = on, so the server lists every agent that is on). */
@@ -76,6 +85,7 @@ export const workspacesOf = (app: App, agentId: string): AppInstallation[] =>
 /** Why an agent cannot use the app now, worked out from the list (a card from the server states it itself). Null when it can. */
 export function appProblem(app: App | undefined, agentId: string): AppProblem | null {
   if (app === undefined || !isAdded(app)) return "not_added";
+  if (needsScopeOnly(app)) return "scope_missing";
   if (needsSignIn(app)) return app.installations.some((installation) => installation.status === "expired") ? "expired" : "needs_reconnect";
   if (app.category !== "chat" && !app.enabledAgents.some((entry) => entry.agentId === agentId)) return "not_enabled";
   return null;

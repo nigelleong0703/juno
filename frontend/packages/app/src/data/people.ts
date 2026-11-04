@@ -276,16 +276,19 @@ export function useUpdateMemoryItem() {
     mutationFn: ({ id, patch }: { id: string; patch: UpdateMemoryItemInput }) => client.memoryItems.update(id, patch),
     onMutate: async ({ id, patch }) => {
       await cancelAll(qc, [MEMORY, REVIEW]);
-      return patchMemory(qc, (item) =>
-        item.id === id
-          ? {
-              ...item,
-              ...(patch.text !== undefined ? { text: patch.text } : {}),
-              ...(patch.sensitive !== undefined ? { sensitive: patch.sensitive } : {}),
-              ...(patch.audience !== undefined ? { audience: { ...item.audience, kind: patch.audience } } : {}),
-            }
-          : item,
-      );
+      return patchMemory(qc, (item) => {
+        if (item.id !== id) return item;
+        // `agentId: null` shares the item with every agent, which the view shows as no agentId.
+        const { agentId: _keeper, ...rest } = item;
+        const keeper = patch.agentId === undefined ? item.agentId : patch.agentId;
+        return {
+          ...rest,
+          ...(keeper ? { agentId: keeper } : {}),
+          ...(patch.text !== undefined ? { text: patch.text } : {}),
+          ...(patch.sensitive !== undefined ? { sensitive: patch.sensitive } : {}),
+          ...(patch.audience !== undefined ? { audience: { ...item.audience, kind: patch.audience } } : {}),
+        };
+      });
     },
     onError: (_error, _vars, snapshot) => snapshot && restoreMemory(qc, snapshot),
     onSettled: () => invalidateMemory(qc),

@@ -1,6 +1,6 @@
 /**
- * PH12 visible child runs: the original chat shows each child under its parent with the exact
- * run id, truthful status, target agent and the child own reply — linked to the existing run
+ * PH12 visible subagent runs: the original chat shows each subagent under its parent with the exact
+ * run id, truthful status, target agent and the subagent's own reply — linked to the existing run
  * thread, cancellable through the actual run callback, and never a hidden conversation.
  */
 import type { Agent, ApiClient, Item, Run, RunStatus } from "@agent-desktop/client";
@@ -15,7 +15,7 @@ import { ClientProvider } from "../../../data/ClientProvider";
 import { applyEvent } from "../../../data/liveSync";
 import { t } from "../../../lib/i18n";
 import { Transcript } from "../../conversation/Transcript";
-import { ChildRuns } from "../ChildRuns";
+import { SubagentRuns } from "../SubagentRuns";
 
 beforeAll(() => {
   class ResizeObserverStub implements ResizeObserver {
@@ -175,22 +175,22 @@ function agentById(id: string): Agent | undefined {
   return AGENTS.find((agent) => agent.id === id);
 }
 
-function renderChildren(runs: Run[], items: Item[], props: Partial<Parameters<typeof ChildRuns>[0]> = {}, clientOpts: ClientOpts = {}, queryClient: QueryClient = newQueryClient()) {
+function renderChildren(runs: Run[], items: Item[], props: Partial<Parameters<typeof SubagentRuns>[0]> = {}, clientOpts: ClientOpts = {}, queryClient: QueryClient = newQueryClient()) {
   const onOpenRun = vi.fn();
   const onStopRun = vi.fn();
-  render(<ChildRuns parentRunId={PARENT} conversationId={CONV} agentById={agentById} onOpenRun={onOpenRun} onStopRun={onStopRun} {...props} />, {
+  render(<SubagentRuns parentRunId={PARENT} conversationId={CONV} agentById={agentById} onOpenRun={onOpenRun} onStopRun={onStopRun} {...props} />, {
     wrapper: wrapperFor(clientWith(runs, items, clientOpts), queryClient),
   });
   return { onOpenRun, onStopRun, queryClient };
 }
 
-describe("ChildRuns", () => {
+describe("SubagentRuns", () => {
   it("shows a running child with its exact id, agent and own reply plus open and stop", async () => {
     const { onOpenRun, onStopRun } = renderChildren(
       [makeRun({ id: PARENT, agentId: "agent-a", status: "running" }), makeRun({ id: "run-child-1", agentId: "agent-a", status: "running", title: "Summarize inbox", parentRunId: PARENT, childResult: "CHILD-RESULT" })],
       [],
     );
-    expect(await screen.findByTestId("child-run-run-child-1")).toBeDefined();
+    expect(await screen.findByTestId("subagent-run-run-child-1")).toBeDefined();
     expect(screen.getByText(t("status.run.running"))).toBeDefined();
     expect(screen.getByText(/Juno/)).toBeDefined();
     expect(await screen.findByText("CHILD-RESULT")).toBeDefined();
@@ -209,7 +209,7 @@ describe("ChildRuns", () => {
       ],
       [],
     );
-    expect(await screen.findByTestId("child-run-run-queued")).toBeDefined();
+    expect(await screen.findByTestId("subagent-run-run-queued")).toBeDefined();
     expect(screen.getByText(t("status.run.queued"))).toBeDefined();
     expect(screen.getByText(t("status.run.waiting"))).toBeDefined();
     expect(screen.getByRole("button", { name: t("run.stop") + " run-queued" })).toBeDefined();
@@ -221,7 +221,7 @@ describe("ChildRuns", () => {
       [makeRun({ id: PARENT, agentId: "agent-a", status: "running" }), makeRun({ id: "run-child-1", agentId: "agent-a", status: "completed", parentRunId: PARENT, childResult: "DONE-BY-CHILD" })],
       [],
     );
-    expect(await screen.findByTestId("child-run-run-child-1")).toBeDefined();
+    expect(await screen.findByTestId("subagent-run-run-child-1")).toBeDefined();
     expect(screen.getByText(t("status.run.completed"))).toBeDefined();
     expect(await screen.findByText("DONE-BY-CHILD")).toBeDefined();
     expect(screen.queryByRole("button", { name: t("run.stop") + " run-child-1" })).toBeNull();
@@ -232,12 +232,12 @@ describe("ChildRuns", () => {
       [makeRun({ id: PARENT, agentId: "agent-a", status: "running" }), makeRun({ id: "run-child-1", agentId: "agent-a", status: "blocked", parentRunId: PARENT })],
       [],
     );
-    expect(await screen.findByTestId("child-run-run-child-1")).toBeDefined();
+    expect(await screen.findByTestId("subagent-run-run-child-1")).toBeDefined();
     expect(screen.getByText(t("status.run.blocked"))).toBeDefined();
   });
 
   it("hides children of another parent in a foreign conversation", async () => {
-    const { container } = render(<ChildRuns parentRunId={PARENT} conversationId={CONV} agentById={agentById} />, {
+    const { container } = render(<SubagentRuns parentRunId={PARENT} conversationId={CONV} agentById={agentById} />, {
       wrapper: wrapperFor(
         clientWith(
           [
@@ -250,7 +250,7 @@ describe("ChildRuns", () => {
         newQueryClient(),
       ),
     });
-    await waitFor(() => expect(container.querySelector('[data-testid^="child-run-"]')).toBeNull());
+    await waitFor(() => expect(container.querySelector('[data-testid^="subagent-run-"]')).toBeNull());
     expect(screen.queryByText("run-foreign")).toBeNull();
     expect(screen.queryByText("run-wrongscope")).toBeNull();
   });
@@ -262,7 +262,7 @@ describe("ChildRuns", () => {
         reply("itm-stale", "run-child-1", "agent-a", "NOT-A-CARD", "2026-10-08T00:00:01.000Z"),
       ],
     );
-    expect(await screen.findByTestId("child-run-run-child-1")).toBeDefined();
+    expect(await screen.findByTestId("subagent-run-run-child-1")).toBeDefined();
     expect(screen.queryByText("NOT-A-CARD")).toBeNull();
   });
 
@@ -278,7 +278,7 @@ describe("ChildRuns", () => {
         ]),
       },
     );
-    expect(await screen.findByTestId("child-run-run-old-child")).toBeDefined();
+    expect(await screen.findByTestId("subagent-run-run-old-child")).toBeDefined();
   });
 
   it("finds a late-page child with its result past the first runs page", async () => {
@@ -307,13 +307,13 @@ describe("ChildRuns", () => {
         get: async (id: string) => makeRun({ id, agentId: "agent-a", status: "running" }),
       },
     };
-    const { container } = render(<ChildRuns parentRunId={PARENT} conversationId={CONV} agentById={agentById} />, {
+    const { container } = render(<SubagentRuns parentRunId={PARENT} conversationId={CONV} agentById={agentById} />, {
       wrapper: wrapperFor(gated, newQueryClient()),
     });
-    expect(container.querySelector('[aria-label="' + t("run.childTask") + '"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid^="child-run-"]')).toBeNull();
+    expect(container.querySelector('[aria-label="' + t("run.subagentTask") + '"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid^="subagent-run-"]')).toBeNull();
     gate.release?.({ items: [makeRun({ id: "run-child-1", agentId: "agent-a", status: "running", parentRunId: PARENT })], nextCursor: null });
-    expect(await screen.findByTestId("child-run-run-child-1")).toBeDefined();
+    expect(await screen.findByTestId("subagent-run-run-child-1")).toBeDefined();
   });
 
   it("shows a truthful error with retry when runs fail", async () => {
@@ -329,13 +329,13 @@ describe("ChildRuns", () => {
         },
       },
     };
-    render(<ChildRuns parentRunId={PARENT} conversationId={CONV} agentById={agentById} />, {
+    render(<SubagentRuns parentRunId={PARENT} conversationId={CONV} agentById={agentById} />, {
       wrapper: wrapperFor(flaky, newQueryClient()),
     });
     expect(await screen.findByText(t("common.error"))).toBeDefined();
     fail = false;
     fireEvent.click(screen.getByText(t("common.retry")));
-    expect(await screen.findByTestId("child-run-run-child-1")).toBeDefined();
+    expect(await screen.findByTestId("subagent-run-run-child-1")).toBeDefined();
   });
 
   it("flips the pill when a live run event updates the child", async () => {
@@ -374,7 +374,7 @@ describe("ChildRuns", () => {
     );
     expect(await screen.findByText("TOP-LEVEL-REPLY")).toBeDefined();
     expect(await screen.findByText("VISIBLE-IN-CARD")).toBeDefined();
-    expect(screen.getByTestId("child-run-run-child-1")).toBeDefined();
+    expect(screen.getByTestId("subagent-run-run-child-1")).toBeDefined();
     expect(screen.queryByText(/parent run-parent/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: t("chat.thread.open") + " run-child-1" }));
     expect(onOpenRun).toHaveBeenCalledWith("run-child-1");

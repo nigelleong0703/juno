@@ -8,6 +8,7 @@ import { qk } from "../../../data/keys";
 import { useResolveRequest } from "../../../data/mutations";
 import type { ApiClient } from "@agent-desktop/client";
 import { createMockClient } from "@agent-desktop/test-fixtures";
+import type { ComputerControl } from "../cards";
 import { RequestCard } from "../RequestCard";
 
 const ISO = "2026-10-06T00:00:00.000Z";
@@ -57,6 +58,61 @@ function failingClient(): { client: ApiClient; seen: string[] } {
 }
 
 afterEach(cleanup);
+
+function takeoverRequest(status: Request["status"] = "pending"): Request {
+  return {
+    id: "req-tk1",
+    kind: "computer",
+    status,
+    title: "Your help is needed on the screen",
+    summary: "Enter your phone number, then tap Return control",
+    agentId: "agent-juno",
+    conversationId: "conv-juno",
+    createdAt: ISO,
+    resolvedAt: status === "pending" ? undefined : ISO,
+    payload: { kind: "computer", reason: "Enter your phone number, then tap Return control" },
+  };
+}
+
+function renderTakeover(request: Request, control: ComputerControl, onResolve = vi.fn()) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <ClientProvider client={createMockClient({ seed: 3 })} queryClient={queryClient}>
+      <RequestCard request={request} computer={control} onResolve={onResolve} />
+    </ClientProvider>,
+  );
+  return onResolve;
+}
+
+describe("take-over card", () => {
+  const control = (patch: Partial<ComputerControl> = {}): ComputerControl => ({ inControl: false, busy: false, onTakeOver: vi.fn(), onReturnControl: vi.fn(), ...patch });
+
+  it("pending: states what to do, offers Take over as the primary action, and Skip only on its own button", () => {
+    const takeOver = vi.fn();
+    const onResolve = renderTakeover(takeoverRequest(), control({ onTakeOver: takeOver }));
+    expect(screen.getByText("Enter your phone number, then tap Return control")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Take over" }));
+    // Taking over opens the live screen; it does not decide the request.
+    expect(takeOver).toHaveBeenCalledTimes(1);
+    expect(onResolve).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    expect(onResolve).toHaveBeenCalledWith({ action: "deny" });
+  });
+
+  it("in control: the only way out is Return control, which hands the screen back and approves", () => {
+    const onReturnControl = vi.fn();
+    const onResolve = renderTakeover(takeoverRequest(), control({ inControl: true, onReturnControl }));
+    expect(screen.queryByRole("button", { name: "Take over" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Return control" }));
+    expect(onReturnControl).toHaveBeenCalledTimes(1);
+    expect(onResolve).toHaveBeenCalledWith({ action: "approve" });
+  });
+
+  it("decided: a slim row, no actions", () => {
+    renderTakeover({ ...takeoverRequest("approved"), decision: { by: "member-robin", at: ISO, mode: "manual", scope: "once" } }, control());
+    expect(screen.queryByRole("button", { name: "Take over" })).toBeNull();
+  });
+});
 
 describe("owner-claim question", () => {
   it("reads as a title, facts and two choices", () => {

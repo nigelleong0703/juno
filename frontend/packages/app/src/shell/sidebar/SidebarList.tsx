@@ -5,6 +5,7 @@ import { StackedAvatars } from "../../components/agent/StackedAvatars";
 import { ChatRow } from "../../components/agent/ChatRow";
 import { useNeedsYouRequests, useRuns } from "../../data/queries";
 import { t } from "../../lib/i18n";
+import { runShowsWork } from "../../lib/stepLine";
 import type { ComposeRecipient } from "../../store/ui";
 import { ROW_AVATAR, ROW_RADIUS } from "./SidebarWidgets";
 import { SectionHeader } from "./SidebarNav";
@@ -79,7 +80,7 @@ export function SidebarList({
   const needsYouCount = pending?.length ?? entries.reduce((sum, entry) => sum + (entry.conversation.needsYou ?? 0), 0);
   const rowState = (conversationId: string) => {
     const working = runs?.find(
-      (run) => run.conversationId === conversationId && !run.parentRunId && (run.status === "running" || run.status === "queued"),
+      (run) => run.conversationId === conversationId && !run.parentRunId && (run.status === "running" || run.status === "queued") && runShowsWork(run),
     );
     const waiting = pending?.find((request) => request.conversationId === conversationId);
     return { ...(working ? { working } : {}), ...(waiting ? { waiting } : {}) };

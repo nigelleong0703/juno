@@ -16,6 +16,10 @@ describe("Apps page", () => {
     const gmail = screen.getByRole("button", { name: /Gmail/u });
     expect(gmail.textContent).not.toMatch(/Sign in/u);
     expect(screen.getByRole("button", { name: /Slack/u })).toBeTruthy();
+    // A connected account whose sign-in lacks a permission says so, not "Sign in".
+    const spotify = screen.getByRole("button", { name: /Spotify/u });
+    expect(spotify.textContent).toMatch(/Needs another permission/u);
+    expect(spotify.textContent).not.toMatch(/Sign in/u);
     // Not added: not in this pill (the featured banner has its own Add button, so look for rows by their blurb).
     expect(screen.queryByText("Search and work with your pages")).toBeNull();
     expect(rowNames().some((name) => name.startsWith("Discord"))).toBe(false);

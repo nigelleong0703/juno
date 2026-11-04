@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		073DAA650449E52B5A576B24 /* Speaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = D498EC3DAA68261CBC3466B9 /* Speaker.swift */; };
 		083FA501D190BA3CCA71577B /* Client.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C01D6A044BE22C9D7608428 /* Client.swift */; };
 		0E2B854806FBAD473613C68C /* bean-thinking.heic in Resources */ = {isa = PBXBuildFile; fileRef = 39F8C121F5F728AB54D0FCC1 /* bean-thinking.heic */; };
 		1B4DAAE2A761088D6800786F /* mint-idle.heic in Resources */ = {isa = PBXBuildFile; fileRef = 1D6E0A21A21886982046ACF1 /* mint-idle.heic */; };
@@ -18,6 +19,7 @@
 		3F8FBF964582C6CBCC31F20F /* mint-happy.heic in Resources */ = {isa = PBXBuildFile; fileRef = 640C89A27703D937A81A9C06 /* mint-happy.heic */; };
 		42F4846CD733A1A45015AD12 /* bean-failed.heic in Resources */ = {isa = PBXBuildFile; fileRef = C4927C7B81A2E6A368FE7B4A /* bean-failed.heic */; };
 		450944295058D18D112723D9 /* star-needs_you.heic in Resources */ = {isa = PBXBuildFile; fileRef = 16B2641573371AA6BEA4BA48 /* star-needs_you.heic */; };
+		57CA6160AA7C0B85F8550740 /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E1B0E377A3FF80128DFC218 /* Voice.swift */; };
 		5CC469626DB98B5BA0E676DC /* star-happy.heic in Resources */ = {isa = PBXBuildFile; fileRef = 2390DD14BF55BFD2B3225727 /* star-happy.heic */; };
 		5D5A454339CBD78327AF7970 /* purple-happy.heic in Resources */ = {isa = PBXBuildFile; fileRef = DF6EA1D124AC7CED81752211 /* purple-happy.heic */; };
 		60073B5DA9197139CA9156C8 /* pink-failed.heic in Resources */ = {isa = PBXBuildFile; fileRef = CB7A2662710923339B9D0656 /* pink-failed.heic */; };
@@ -42,6 +44,7 @@
 		C6F52707913FF625CDD2D978 /* pink-idle.heic in Resources */ = {isa = PBXBuildFile; fileRef = ADA87B4BD1EB95237F4D7148 /* pink-idle.heic */; };
 		C80267B8F35751ED2DC8D510 /* purple-needs_you.heic in Resources */ = {isa = PBXBuildFile; fileRef = A5842335810BB0080F4CEF7F /* purple-needs_you.heic */; };
 		CD703EE7952B0D7DABD9E776 /* star-idle.heic in Resources */ = {isa = PBXBuildFile; fileRef = 4AD63EE5CCBCC6109833914B /* star-idle.heic */; };
+		D23D1BE996B6CED5B28D6954 /* Models in Resources */ = {isa = PBXBuildFile; fileRef = D1CAC30C3B53DBB63241C304 /* Models */; };
 		D96F323D0DB0911A2EE91249 /* mint-thinking.heic in Resources */ = {isa = PBXBuildFile; fileRef = 6D2A294E38B6CC4360D63036 /* mint-thinking.heic */; };
 		D98AC54A0EEF14749D42107E /* star-sleeping.heic in Resources */ = {isa = PBXBuildFile; fileRef = 90E4A810E4D11B39CAF720C5 /* star-sleeping.heic */; };
 		DB80E1091CF80F47D11FF006 /* bean-idle.heic in Resources */ = {isa = PBXBuildFile; fileRef = F662D4BE35917E86001355DC /* bean-idle.heic */; };
@@ -54,8 +57,8 @@
 		014C9CE65C003B107027E6EA /* Companion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Companion.swift; sourceTree = "<group>"; };
 		043F4E22BA63D47301B46675 /* blue-idle.heic */ = {isa = PBXFileReference; path = "blue-idle.heic"; sourceTree = "<group>"; };
 		045DB31F821B1A9EDEA38B22 /* bean-happy.heic */ = {isa = PBXFileReference; path = "bean-happy.heic"; sourceTree = "<group>"; };
+		0E1B0E377A3FF80128DFC218 /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
 		1246DCFFDA9F2C48A5A72F1D /* blue-needs_you.heic */ = {isa = PBXFileReference; path = "blue-needs_you.heic"; sourceTree = "<group>"; };
-		1646446C4A6D8B3E526060D9 /* Watch.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Watch.xcconfig; sourceTree = "<group>"; };
 		16B2641573371AA6BEA4BA48 /* star-needs_you.heic */ = {isa = PBXFileReference; path = "star-needs_you.heic"; sourceTree = "<group>"; };
 		1A842C2CAB6257486CA4B959 /* star-thinking.heic */ = {isa = PBXFileReference; path = "star-thinking.heic"; sourceTree = "<group>"; };
 		1D6E0A21A21886982046ACF1 /* mint-idle.heic */ = {isa = PBXFileReference; path = "mint-idle.heic"; sourceTree = "<group>"; };
@@ -91,7 +94,9 @@
 		C4927C7B81A2E6A368FE7B4A /* bean-failed.heic */ = {isa = PBXFileReference; path = "bean-failed.heic"; sourceTree = "<group>"; };
 		CB7A2662710923339B9D0656 /* pink-failed.heic */ = {isa = PBXFileReference; path = "pink-failed.heic"; sourceTree = "<group>"; };
 		D146139D751E412CDC162E57 /* pink-happy.heic */ = {isa = PBXFileReference; path = "pink-happy.heic"; sourceTree = "<group>"; };
+		D1CAC30C3B53DBB63241C304 /* Models */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Models; sourceTree = SOURCE_ROOT; };
 		D338FE3283977DC290431D64 /* purple-thinking.heic */ = {isa = PBXFileReference; path = "purple-thinking.heic"; sourceTree = "<group>"; };
+		D498EC3DAA68261CBC3466B9 /* Speaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Speaker.swift; sourceTree = "<group>"; };
 		DF6EA1D124AC7CED81752211 /* purple-happy.heic */ = {isa = PBXFileReference; path = "purple-happy.heic"; sourceTree = "<group>"; };
 		F662D4BE35917E86001355DC /* bean-idle.heic */ = {isa = PBXFileReference; path = "bean-idle.heic"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -151,19 +156,11 @@
 		D0963DD59093AAD9B9E54329 = {
 			isa = PBXGroup;
 			children = (
+				D1CAC30C3B53DBB63241C304 /* Models */,
 				9782CF9CAA08777113857B64 /* Characters */,
-				D4BDDC9693E82BFD19EBD1E5 /* Config */,
 				F11A4E6A2144EED7EBCAC4C8 /* JunoWatch */,
 				B21C046FCBEBF5D1F59111F2 /* Products */,
 			);
-			sourceTree = "<group>";
-		};
-		D4BDDC9693E82BFD19EBD1E5 /* Config */ = {
-			isa = PBXGroup;
-			children = (
-				1646446C4A6D8B3E526060D9 /* Watch.xcconfig */,
-			);
-			path = Config;
 			sourceTree = "<group>";
 		};
 		F11A4E6A2144EED7EBCAC4C8 /* JunoWatch */ = {
@@ -173,7 +170,9 @@
 				014C9CE65C003B107027E6EA /* Companion.swift */,
 				B7DBD6D4E05BCEEC9AB23625 /* JunoWatchApp.swift */,
 				7A29DFDC3B675786F91672A0 /* PairingView.swift */,
+				D498EC3DAA68261CBC3466B9 /* Speaker.swift */,
 				A138458237D061C4A910F0AF /* Sprite.swift */,
+				0E1B0E377A3FF80128DFC218 /* Voice.swift */,
 			);
 			path = JunoWatch;
 			sourceTree = "<group>";
@@ -238,6 +237,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D23D1BE996B6CED5B28D6954 /* Models in Resources */,
 				42F4846CD733A1A45015AD12 /* bean-failed.heic in Resources */,
 				9138367B5AE02EEC78BACF72 /* bean-happy.heic in Resources */,
 				DB80E1091CF80F47D11FF006 /* bean-idle.heic in Resources */,
@@ -288,7 +288,9 @@
 				3A5432700941401F5D6B098F /* Companion.swift in Sources */,
 				898784BF03662FBD92FF66E4 /* JunoWatchApp.swift in Sources */,
 				7B50B595A601D6A1E6EF10A6 /* PairingView.swift in Sources */,
+				073DAA650449E52B5A576B24 /* Speaker.swift in Sources */,
 				338A37B6C6E4BD3C150146B8 /* Sprite.swift in Sources */,
+				57CA6160AA7C0B85F8550740 /* Voice.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -355,14 +357,12 @@
 		};
 		7E71DFEFDB5EB0A5515A09BF /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 1646446C4A6D8B3E526060D9 /* Watch.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Juno;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Juno listens while you talk to your character.";
 				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.nigelleong0703.juno.watch;
 				SDKROOT = watchos;
@@ -373,14 +373,12 @@
 		};
 		CC9DB7D14CEBE04581A87772 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 1646446C4A6D8B3E526060D9 /* Watch.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Juno;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Juno listens while you talk to your character.";
 				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.nigelleong0703.juno.watch;
 				SDKROOT = watchos;

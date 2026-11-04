@@ -25,6 +25,10 @@ final class JunoTabBarController: UITabBarController, UITabBarControllerDelegate
     ]
     private let world: World
     private var generation = 0
+    /// Keeps the real bar hidden while the selected stack has a page over its root (UIKit shows it again by itself).
+    private var barObservation: NSKeyValueObservation?
+    /// A pop back to the root is sliding: UIKit has already dropped the page, the bar must stay away until it lands.
+    private var barHold = false
 
     init(world: World, regular: Bool) {
         self.world = world
@@ -32,6 +36,13 @@ final class JunoTabBarController: UITabBarController, UITabBarControllerDelegate
         delegate = self
         view.tintColor = UIColor(Theme.primary) // the web is neutral: no blue anywhere
         tabBar.tintColor = UIColor(Theme.fg)
+        barObservation = tabBar.observe(\.isHidden, options: [.new]) { [weak self] bar, _ in
+            MainActor.assumeIsolated {
+                // UIKit brings the bar back by itself when a pop starts; while the selected stack still has a page (or
+                // that pop is still sliding) it goes back at once, in the same runloop, so it is never drawn over the page.
+                if !bar.isHidden, self?.selectedStackHasPage == true || self?.barHold == true { bar.isHidden = true }
+            }
+        }
 
         let chat: UIViewController = regular ? host(ChatScreen()) : ChatsNavigationController(world: world)
         // Every tab is a UIKit navigation stack (Chats has its own, driven by the open chat): a page pushed from any
@@ -50,6 +61,7 @@ final class JunoTabBarController: UITabBarController, UITabBarControllerDelegate
             vc.tabBarItem.accessibilityLabel = tab.title
         }
         setViewControllers(controllers, animated: false)
+        syncTabBar()
         refresh()
         watchAgentPage()
         watchPostPage()
@@ -88,8 +100,9 @@ final class JunoTabBarController: UITabBarController, UITabBarControllerDelegate
         viewControllers?[0].tabBarItem.badgeValue = pending > 0 ? "\(pending)" : nil
     }
 
-    /// `world.agentPage` → the agent card, a full-screen cover with UIKit's native zoom out of the tapped avatar
-    /// (`AgentZoomSources`). Without a source on screen it is the plain cover animation.
+    /// `world.agentPage` → the agent card, pushed onto the selected tab's stack like any page (back button, edge swipe, the
+    /// bar's items changing through UIKit's normal bar transition) with UIKit's native zoom out of the tapped avatar
+    /// (`AgentZoomSources`). Without a source on screen it is the plain push.
     private var agentGeneration = 0
     private func watchAgentPage() {
         agentGeneration += 1
@@ -102,26 +115,24 @@ final class JunoTabBarController: UITabBarController, UITabBarControllerDelegate
                 self.watchAgentPage()
             }
         }
-        var top: UIViewController = self
-        while let next = top.presentedViewController { top = next }
+        guard let nav = selectedViewController as? UINavigationController else { return }
+        if let coordinator = nav.transitionCoordinator {
+            // A push or pop is sliding (a card zooming back included): UIKit refuses another change until it ends. The
+            // card's own cancel callback runs first, so a cancelled swipe puts its target back before this looks again.
+            coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.watchAgentPage() } }
+            }
+            return
+        }
+        let top = nav.viewControllers.compactMap { $0 as? AgentCardController }.last
         if let target {
-            if let closing = top as? CoverHostingController, !closing.isPost {
-                // Tapped again while the last card is still zooming back: open once that transition ends.
-                guard closing.isBeingDismissed, let coordinator = closing.transitionCoordinator else { return }
-                coordinator.animate(alongsideTransition: nil) { [weak self] _ in self?.watchAgentPage() }
-                return
-            }
-            let card = CoverHostingController(AgentCardView(agentId: target.agentId, tab: target.tab), world: world)
-            card.onDismiss = { [weak self] in if self?.world.agentPage == target { self?.world.agentPage = nil } }
-            card.onDismissCancelled = { [weak self] in if self?.world.agentPage == nil { self?.world.agentPage = target } }
-            card.modalPresentationStyle = .fullScreen
-            let source = target.sourceId
-            if AgentZoomSources.view(for: source) != nil {
-                card.preferredTransition = .zoom { _ in AgentZoomSources.view(for: source) }
-            }
-            top.present(card, animated: true)
-        } else if let card = top as? CoverHostingController, !card.isPost, !card.isBeingDismissed {
-            card.dismiss(animated: true)
+            if top?.target == target { return }
+            // The drawer closes with this open, so a row in it is no place to zoom out of.
+            let source = target.sourceId.hasPrefix("sidebar-") ? nil : AgentZoomSources.view(for: target.sourceId)
+            let card = AgentCardController(target: target, world: world, source: source)
+            nav.pushViewController(card, animated: view.window != nil)
+        } else if let top, let index = nav.viewControllers.firstIndex(of: top), index > 0 {
+            nav.popToViewController(nav.viewControllers[index - 1], animated: view.window != nil)
         }
     }
 
@@ -138,13 +149,16 @@ final class JunoTabBarController: UITabBarController, UITabBarControllerDelegate
                 self.watchPendingRoute()
             }
         }
-        guard let route else { return }
-        world.pendingRoute = nil
-        switch selectedViewController {
-        case let nav as PageNavigationController: nav.push(route)
-        case let nav as ChatsNavigationController: nav.push(route)
-        default: break
+        guard let route, let nav = selectedViewController as? (UINavigationController & RoutePushing) else { return }
+        if let coordinator = nav.transitionCoordinator {
+            // E.g. the agent card popping before the Apps page: push when that ends.
+            coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.watchPendingRoute() } }
+            }
+            return
         }
+        world.pendingRoute = nil
+        nav.push(route)
     }
 
     /// `world.postPage` → a Feed post, covered the same way as the agent card: over the tab bar, which is never touched.
@@ -163,12 +177,12 @@ final class JunoTabBarController: UITabBarController, UITabBarControllerDelegate
         var top: UIViewController = self
         while let next = top.presentedViewController { top = next }
         if let id = target {
-            if let closing = top as? CoverHostingController, closing.isPost {
+            if let closing = top as? CoverHostingController {
                 guard closing.isBeingDismissed, let coordinator = closing.transitionCoordinator else { return }
                 coordinator.animate(alongsideTransition: nil) { [weak self] _ in self?.watchPostPage() }
                 return
             }
-            let post = CoverHostingController(FeedPostDetail(postId: id), world: world, isPost: true)
+            let post = CoverHostingController(FeedPostDetail(postId: id), world: world)
             post.onDismiss = { [weak self] in if self?.world.postPage == id { self?.world.postPage = nil } }
             post.onDismissCancelled = { [weak self] in if self?.world.postPage == nil { self?.world.postPage = id } }
             post.modalPresentationStyle = .fullScreen
@@ -176,14 +190,58 @@ final class JunoTabBarController: UITabBarController, UITabBarControllerDelegate
                 post.preferredTransition = .zoom { _ in AgentZoomSources.view(for: "feed-\(id)") }
             }
             top.present(post, animated: true)
-        } else if let post = top as? CoverHostingController, post.isPost, !post.isBeingDismissed {
+        } else if let post = top as? CoverHostingController, !post.isBeingDismissed {
             post.dismiss(animated: true)
         }
     }
 
-    /// A tab switch while a page was pushed: the bar is the new tab's again, no snapshot of the old one stays behind.
+    /// A tab switch: the bar on screen is the selected stack's. Derived every time from that stack's depth, never
+    /// remembered per tab, so no tab can leave the bar hidden (nothing over its root) or borrow another tab's state.
     private func restoreBars() {
-        for case let nav as UINavigationController in viewControllers ?? [] { restoreTabBar(of: nav) }
+        barHold = false
+        dropSnapshotsAtRoot()
+        syncTabBar()
+    }
+
+    /// The one rule: the bar is hidden exactly while the selected stack has a page over its root, or a pop back to that
+    /// root is still sliding. Called on every tab switch and every stack change (animated or not: a chat pushed while
+    /// its tab is off screen changes the stack with no transition to hook).
+    func syncTabBar() {
+        tabBar.isHidden = selectedStackHasPage || barHold
+    }
+
+    /// A stack back at its root no longer carries the picture of the bar.
+    private func dropSnapshotsAtRoot() {
+        for case let nav as UINavigationController in viewControllers ?? [] where nav.viewControllers.count < 2 {
+            dropBarSnapshot(in: nav)
+        }
+    }
+
+    /// A pop back to the root: UIKit has already taken the page off the stack, so the depth alone would bring the bar
+    /// back over the page still sliding away. Hold it hidden (the picture on the root rides in with the root) until the
+    /// slide ends, a cancelled one included.
+    func holdBar(through coordinator: UIViewControllerTransitionCoordinator) {
+        barHold = true
+        syncTabBar()
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.barHold = false
+                self.syncTabBar()
+            }
+        }
+    }
+
+    /// A stack that gained a page with no transition at all (a chat opened while this tab was off screen): the root
+    /// takes the picture of the bar now, so the eventual pop slides a bar in with it.
+    func takeBarPicture(in navigation: UINavigationController) {
+        placeBarSnapshot(in: navigation)
+        syncTabBar()
+    }
+
+    fileprivate var selectedStackHasPage: Bool {
+        guard let nav = selectedViewController as? UINavigationController else { return false }
+        return nav.viewControllers.count > 1
     }
 
     func tabBarController(_ tabBarController: UITabBarController, didSelect viewController: UIViewController) {
@@ -195,64 +253,61 @@ final class JunoTabBarController: UITabBarController, UITabBarControllerDelegate
 }
 
 /// The tab bar belongs to the tab's root page and moves with it (WhatsApp, Telegram, Messages): when a page is pushed
-/// from the root, a snapshot of the bar is placed in the root's view and the real bar is hidden at once, so the
-/// push slides the root away with its bar and the page covers both; an interactive swipe back drags them 1:1 and a
-/// cancelled one leaves them covered. When the pop to the root finishes (and was not cancelled) the real bar returns and the
-/// snapshot goes in the same runloop. UIKit alone cannot do this: its bar is a global overlay that it fades or slides
-/// by itself on iOS 26 (the Liquid Glass platter ignores alpha).
+/// from the root, a picture of the bar is placed in the root's view and the real bar is hidden at once, so the push
+/// slides the root away with its bar and the page covers both; an interactive swipe back drags them 1:1 and a cancelled
+/// one leaves them covered. When the pop to the root finishes (and was not cancelled) the real bar returns and the
+/// picture goes in the same runloop. UIKit alone cannot do this: its bar is a global overlay that it fades or slides by
+/// itself on iOS 26 (the Liquid Glass platter ignores alpha), so it neither moves with the page nor leaves with it.
 private let tabBarSnapshotTag = 0x7AB5
 
-/// Keeps the real bar hidden while its snapshot is in a root page: UIKit shows it again by itself when a pop starts.
+/// A push from the root of `navigation`: its bar rides in the root's view from now on.
 @MainActor
-private final class TabBarHider {
-    private var observations: [NSKeyValueObservation] = []
-    func hold(_ bar: UITabBar) {
-        bar.isHidden = true
-        observations = [bar.observe(\.isHidden, options: [.new]) { bar, _ in
-            if !bar.isHidden { MainActor.assumeIsolated { bar.isHidden = true } }
-        }]
+private func placeBarSnapshot(in navigation: UINavigationController) {
+    guard let root = navigation.viewControllers.first, let bar = navigation.tabBarController?.tabBar,
+          root.isViewLoaded, !bar.isHidden, root.view.viewWithTag(tabBarSnapshotTag) == nil,
+          let window = bar.window else { return }
+    // A picture of the bar's strip of the screen: `snapshotView` loses the Liquid Glass platter's icons.
+    let strip = CGRect(x: 0, y: bar.frame.minY, width: window.bounds.width, height: window.bounds.height - bar.frame.minY)
+    let image = UIGraphicsImageRenderer(bounds: strip).image { _ in
+        window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
     }
-    func release(_ bar: UITabBar) {
-        observations = []
-        bar.isHidden = false
-    }
+    let snapshot = UIImageView(image: image)
+    snapshot.tag = tabBarSnapshotTag
+    snapshot.frame = window.convert(strip, to: root.view)
+    snapshot.autoresizingMask = [.flexibleTopMargin, .flexibleWidth]
+    root.view.addSubview(snapshot)
 }
-@MainActor private let tabBarHider = TabBarHider()
 
 @MainActor
-private func carryTabBar(of navigation: UINavigationController, showing page: UIViewController) {
-    guard let root = navigation.viewControllers.first, let bar = navigation.tabBarController?.tabBar else { return }
-    let coordinator = navigation.transitionCoordinator
-    if page !== root {
-        // Pushed from the root: its bar goes into the root's view. (Not animated: UIKit hides the bar at once, nothing to carry.)
-        guard coordinator?.viewController(forKey: .from) === root, root.isViewLoaded, !bar.isHidden,
-              root.view.viewWithTag(tabBarSnapshotTag) == nil,
-              let window = bar.window else { return }
-        // A picture of the bar's strip of the screen: `snapshotView` loses the Liquid Glass platter's icons.
-        let strip = CGRect(x: 0, y: bar.frame.minY, width: window.bounds.width, height: window.bounds.height - bar.frame.minY)
-        let image = UIGraphicsImageRenderer(bounds: strip).image { _ in
-            window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
-        }
-        let snapshot = UIImageView(image: image)
-        snapshot.tag = tabBarSnapshotTag
-        snapshot.frame = window.convert(strip, to: root.view)
-        snapshot.autoresizingMask = [.flexibleTopMargin, .flexibleWidth]
-        root.view.addSubview(snapshot)
-        tabBarHider.hold(bar)
-    } else if let coordinator {
-        coordinator.animate(alongsideTransition: nil) { context in
-            if !context.isCancelled { MainActor.assumeIsolated { restoreTabBar(of: navigation) } }
-        }
+private func dropBarSnapshot(in navigation: UINavigationController) {
+    guard let root = navigation.viewControllers.first, root.isViewLoaded else { return }
+    root.view.viewWithTag(tabBarSnapshotTag)?.removeFromSuperview()
+}
+
+/// A stack's page will show: a push from the root carries the bar into the root's picture; any change re-derives the
+/// bar's state.
+@MainActor
+private func tabStackWillShow(_ navigation: UINavigationController, _ page: UIViewController) {
+    guard let tabs = navigation.tabBarController as? JunoTabBarController else { return }
+    if page === navigation.viewControllers.first, let coordinator = navigation.transitionCoordinator {
+        // The way back: hold the bar to the end of the slide (see `holdBar`).
+        tabs.holdBar(through: coordinator)
     } else {
-        restoreTabBar(of: navigation)
+        if page !== navigation.viewControllers.first,
+           let coordinator = navigation.transitionCoordinator,
+           coordinator.viewController(forKey: .from) === navigation.viewControllers.first {
+            placeBarSnapshot(in: navigation)
+        }
+        tabs.syncTabBar()
     }
 }
 
+/// A stack's page did show: back at the root the picture goes and the real bar returns, in the same runloop.
 @MainActor
-private func restoreTabBar(of navigation: UINavigationController) {
-    guard let bar = navigation.tabBarController?.tabBar else { return }
-    navigation.viewControllers.first?.view.viewWithTag(tabBarSnapshotTag)?.removeFromSuperview()
-    if navigation.viewControllers.count == 1 { tabBarHider.release(bar) }
+private func tabStackDidShow(_ navigation: UINavigationController, _ page: UIViewController) {
+    guard let tabs = navigation.tabBarController as? JunoTabBarController else { return }
+    if page === navigation.viewControllers.first { dropBarSnapshot(in: navigation) }
+    tabs.syncTabBar()
 }
 
 /// The Chats tab: the list, and a chat pushed over it with the tab bar sliding away (`hidesBottomBarWhenPushed`).
@@ -302,6 +357,11 @@ final class ChatsNavigationController: UINavigationController, UINavigationContr
         } else if viewControllers.count > 1 {
             popToRootViewController(animated: visible)
         }
+        // A stack can change with no transition at all (a chat opened while this tab was off screen), which no
+        // navigation callback reports: the bar's state follows the stack here, and the root keeps a picture of it.
+        if let tabs = tabBarController as? JunoTabBarController {
+            if viewControllers.count > 1 { tabs.takeBarPicture(in: self) } else { tabs.syncTabBar() }
+        }
     }
 
     /// A route opened from a row inside a chat: the same page `junoDestinations` would show, pushed on this stack.
@@ -314,11 +374,12 @@ final class ChatsNavigationController: UINavigationController, UINavigationContr
     }
 
     func navigationController(_ navigationController: UINavigationController, willShow viewController: UIViewController, animated: Bool) {
-        carryTabBar(of: navigationController, showing: viewController)
+        tabStackWillShow(navigationController, viewController)
     }
 
     /// After the transition, so also after an interactive swipe back: the list is showing, no chat is open.
     func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool) {
+        tabStackDidShow(navigationController, viewController)
         if viewController === viewControllers.first, world.currentConversationId != nil { world.currentConversationId = nil }
     }
 }
@@ -344,7 +405,11 @@ final class PageNavigationController: UINavigationController, UINavigationContro
     }
 
     func navigationController(_ navigationController: UINavigationController, willShow viewController: UIViewController, animated: Bool) {
-        carryTabBar(of: navigationController, showing: viewController)
+        tabStackWillShow(navigationController, viewController)
+    }
+
+    func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool) {
+        tabStackDidShow(navigationController, viewController)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -542,14 +607,12 @@ private final class ChatHostingController: UIHostingController<AnyView> {
     #endif
 }
 
-/// A full-screen cover over the tab bar that zooms out of its source view: the agent card and a Feed post.
+/// A full-screen cover over the tab bar that zooms out of its source view: a Feed post.
 private final class CoverHostingController: UIHostingController<AnyView> {
     var onDismiss: () -> Void = {}
     var onDismissCancelled: () -> Void = {}
-    let isPost: Bool
 
-    init(_ root: some View, world: World, isPost: Bool = false) {
-        self.isPost = isPost
+    init(_ root: some View, world: World) {
         super.init(rootView: AnyView(root.environment(world)))
         view.backgroundColor = UIColor(Theme.canvas)
     }
@@ -567,3 +630,12 @@ private final class CoverHostingController: UIHostingController<AnyView> {
         }
     }
 }
+
+/// A tab's stack that pages push routes onto (the Chats stack and every other tab's).
+@MainActor
+protocol RoutePushing: AnyObject {
+    func push(_ route: Route)
+}
+
+extension ChatsNavigationController: RoutePushing {}
+extension PageNavigationController: RoutePushing {}

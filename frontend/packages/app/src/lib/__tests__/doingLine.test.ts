@@ -30,8 +30,15 @@ describe("resolveDoingLine", () => {
 
   it("shows a line when the user is needed, or a run is active whatever the status", () => {
     expect(resolveDoingLine({ agentId: "a1", status: "needs_you", agentDoing: "Waiting on approval" })).toBe("Waiting on approval");
-    const runs = [run({ id: "r1", status: "waiting_for_input", title: "Needs input", titleGenerated: true, startedAt: "2026-10-11T10:00:00Z" })];
-    expect(resolveDoingLine({ agentId: "a1", status: "idle", runs })).toBe("Needs input");
+    const runs = [run({ id: "r1", status: "running", title: "Active task", titleGenerated: true, startedAt: "2026-10-11T10:00:00Z" })];
+    expect(resolveDoingLine({ agentId: "a1", status: "idle", runs })).toBe("Active task");
+  });
+
+  it("says 'Waiting for you' for a run waiting on the person, unless another run is working", () => {
+    const waiting = run({ id: "r1", status: "waiting_for_input", title: "Needs input", titleGenerated: true, startedAt: "2026-10-11T10:00:00Z" });
+    expect(resolveDoingLine({ agentId: "a1", status: "idle", agentDoing: "Doing", runs: [waiting] })).toBe("Waiting for you");
+    const working = run({ id: "r2", status: "running", title: "Other task", titleGenerated: true, startedAt: "2026-10-11T09:00:00Z" });
+    expect(resolveDoingLine({ agentId: "a1", status: "working", runs: [waiting, working] })).toBe("Other task");
   });
 
   it("uses the newest active top-level run and ignores child runs", () => {

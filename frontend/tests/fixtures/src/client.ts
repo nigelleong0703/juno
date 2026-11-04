@@ -57,6 +57,7 @@ import type {
   ComposerPayload,
   Conversation,
   FeedPost,
+  GroupSettings,
   Inspiration,
   FileDownload,
   Goal,
@@ -94,6 +95,7 @@ import { SHARED_COMPUTER_ID, buildWorld, refreshConversation } from './world.js'
 import { mockArtifactDownload, mockRenderUrl } from './artifact-bytes.js';
 import { createAppsMock } from './apps.js';
 import { createDocumentsMock } from './documents.js';
+import { createDeliveryMock, type DeliveryMock } from './delivery.js';
 import { createModelProvidersMock, providerCatalog } from './model-providers.js';
 
 // ---------------------------------------------------------------------------
@@ -116,6 +118,8 @@ export interface MockClientOptions {
 }
 
 export interface MockClient extends ApiClient, EventSource, EventResetSource {
+  /** Test aid: outbox rows, kept file versions and pause state the mock serves. */
+  delivery: DeliveryMock;
   /** Rebuild the world from scratch (fresh simulation). */
   reset(): void;
   /** Stop the live simulation (keeps emitting nothing until resumed). */
@@ -426,6 +430,17 @@ export function createMockClient(opts: MockClientOptions = {}): MockClient {
     agent.title === BLANK_AGENT_TITLE && !state.home.some((f) => f.path === `agents/${agent.id}/IDENTITY.md`);
   const runOf = (id: string): Run => mustFind(state.runs, id, 'run');
   const convOf = (id: string): Conversation => mustFind(state.conversations, id, 'conversation');
+  /** Group settings of a platform group (a `room` that lives on a platform); anything else is the server's 404 NOT_A_GROUP. */
+  const groupSettings = new Map<string, GroupSettings>();
+  const groupOf = (id: string): GroupSettings => {
+    const conv = convOf(id);
+    if (conv.kind !== 'room' || conv.channel === undefined) throw apiError(404, 'NOT_A_GROUP', 'This conversation is not a platform group');
+    const existing = groupSettings.get(id);
+    if (existing) return existing;
+    const created: GroupSettings = { platform: conv.channel.kind, ...(conv.title === undefined ? {} : { title: conv.title }), observes: true, speak: false, delegated: [] };
+    groupSettings.set(id, created);
+    return created;
+  };
 
   const directConversationFor = (agentId: string): Conversation | undefined =>
     state.conversations.find((c) => c.kind === 'direct' && c.agentIds.includes(agentId));
@@ -1519,6 +1534,17 @@ export function createMockClient(opts: MockClientOptions = {}): MockClient {
       await delay();
       convOf(id);
     },
+    async groupSettings(id) {
+      await delay();
+      return { ...groupOf(id) };
+    },
+    async updateGroupSettings(id, input) {
+      await delay();
+      const settings = groupOf(id);
+      if (input.speak !== undefined) settings.speak = input.speak;
+      if (input.delegated !== undefined) settings.delegated = [...new Set(input.delegated)];
+      return { ...settings };
+    },
   };
 
   const items: ApiClient['items'] = {
@@ -2507,6 +2533,8 @@ export function createMockClient(opts: MockClientOptions = {}): MockClient {
     openConversation: (agentId) => conversations.create({ kind: 'direct', memberAgentIds: [agentId] }),
   });
 
+  const delivery = createDeliveryMock({ delay, newId: () => idFactory(), now: () => new Date(now()) });
+
   const spaces: ApiClient['spaces'] = {
     async list() {
       await delay();
@@ -2810,6 +2838,8 @@ export function createMockClient(opts: MockClientOptions = {}): MockClient {
     library,
     artifacts,
     documents,
+    files: delivery.files,
+    outbox: delivery.outbox,
     spaces,
     usage,
     settings,
@@ -2819,6 +2849,7 @@ export function createMockClient(opts: MockClientOptions = {}): MockClient {
 
   const client: MockClient = {
     ...api,
+    delivery,
     subscribe(handler: EventHandler): Unsubscribe {
       const unsubscribe = bus.subscribe(handler);
       ensureTimer();
@@ -2850,6 +2881,11 @@ export function createMockClient(opts: MockClientOptions = {}): MockClient {
       calendarItems = seedCalendar();
       mac = { paired: false, online: false };
       controlEpochs.clear();
+      delivery.rows.length = 0;
+      delivery.snapshots.length = 0;
+      delivery.failing.length = 0;
+      delivery.frozen.owner = false;
+      delivery.frozen.operator = false;
       rng = createRng(seed);
       idFactory = createIdFactory('gen', rng);
       resetSim();

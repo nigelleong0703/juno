@@ -22,13 +22,17 @@ final class World {
     @ObservationIgnored var storeKey: String?
     /// Items that arrive live while a chat's newest page is being fetched: merged into it when it lands.
     @ObservationIgnored var fetching: [String: [Item]] = [:]
+    /// Chats whose newest page was compared with the server since the stream last connected (see `reconcileChats`).
+    @ObservationIgnored var reconciledChats: Set<String> = []
+    /// `connect` just read every list: the stream's first "live" does not read them again.
+    @ObservationIgnored var listsFresh = false
     @ObservationIgnored var cursorTask: Task<Void, Never>?
     @ObservationIgnored var lastCursor: Int?
     @ObservationIgnored var conversationsSaveTask: Task<Void, Never>?
     var runs: [Run] = []
-    /// Helper runs spawned by a task (kind background, with a parent), by run id. They stay out of `runs` so no chat or
+    /// Subagent runs started by a task (kind background, with a parent), by run id. They stay out of `runs` so no chat or
     /// status screen counts them; only the task detail reads them.
-    var childRuns: [String: Run] = [:]
+    var subagentRuns: [String: Run] = [:]
     var plans: [Plan] = []
     var requests: [AgentRequest] = []
     var library: [LibraryItem] = []
@@ -114,13 +118,18 @@ final class World {
     var appActive = true
     var markReadTask: Task<Void, Never>?
     var sheet: SheetRoute?
-    /// The agent page (presented once at the root, zooming out of the avatar named by `sourceId`).
+    /// The agent page (pushed onto the selected tab's stack, zooming out of the avatar named by `sourceId`).
     var agentPage: AgentPageTarget?
     /// The Feed post page (a full-screen cover like the agent page, zooming out of the card `feed-<id>`).
     var postPage: String?
     /// A page asked for from outside any stack (a sidebar row, an unlock card): the tab bar pushes it onto the current tab.
     var pendingRoute: Route?
-    func openAgentPage(_ agentId: String, from sourceId: String, tab: String? = nil) { agentPage = AgentPageTarget(agentId: agentId, sourceId: sourceId, tab: tab) }
+    /// The card is a page on the selected tab's stack, so the drawer and any sheet (the workspace) close first.
+    func openAgentPage(_ agentId: String, from sourceId: String, tab: String? = nil) {
+        sidebarOpen = false
+        sheet = nil
+        agentPage = AgentPageTarget(agentId: agentId, sourceId: sourceId, tab: tab)
+    }
 
 
     /// Team's Memory and People (lists and detail pages share them).
@@ -254,7 +263,16 @@ final class World {
     static let activeStatuses: Set<String> = ["running", "queued", "waiting_for_input", "blocked"]
     func activeRuns(of agentId: String) -> [Run] { runs.filter { $0.agentId == agentId && Self.activeStatuses.contains($0.status ?? "") } }
     func activeRuns(in conversationId: String) -> [Run] { runs.filter { $0.conversationId == conversationId && Self.activeStatuses.contains($0.status ?? "") } }
-        func plan(in conversationId: String) -> Plan? {
+
+    /// What the status line says while a run has stopped on a question for the person and nothing else is running.
+    static let waitingLine = "Waiting for you"
+    /// A run is `waiting_for_input` and no other run of the agent is running or queued: that is waiting, not working.
+    func isWaitingForYou(_ agentId: String) -> Bool {
+        let active = activeRuns(of: agentId)
+        return active.contains { $0.status == "waiting_for_input" } && !active.contains { ["running", "queued"].contains($0.status ?? "") }
+    }
+
+    func plan(in conversationId: String) -> Plan? {
         plans.last { $0.conversationId == conversationId }
             ?? items[conversationId]?.last { $0.type == "plan" }.map { Plan(id: $0.id, conversationId: conversationId, runId: $0.runId, title: run($0.runId)?.title, todos: $0.todos) }
     }
@@ -277,6 +295,7 @@ final class World {
             return line.isEmpty || Self.isInternalNote(line) || said.contains(line) ? nil : line
         }
         func named(_ run: Run?) -> String? { run?.titleGenerated == true ? clean(run?.title) : nil }
+        if isWaitingForYou(agent.id) { return Self.waitingLine }
         if let live = clean(doing[agent.id]) { return live }
         if let active = activeRuns(of: agent.id).first { return named(active) ?? "Working on it" }
         let latest = mine.filter { $0.parentRunId == nil }.max { ($0.startedAt ?? .distantPast) < ($1.startedAt ?? .distantPast) }

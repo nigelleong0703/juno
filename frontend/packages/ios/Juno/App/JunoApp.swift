@@ -9,14 +9,60 @@ struct JunoApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ZStack {
-                RootView().environment(world).tint(Theme.primary) // the web is neutral: no blue anywhere
-                    .onAppear { PushRouter.shared.attach(world) }
-                SplashOverlay()
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--voice-call-preview") {
+                VoiceCallPreview()
+            } else {
+                appRoot
             }
+            #else
+            appRoot
+            #endif
+        }
+    }
+
+    private var appRoot: some View {
+        ZStack {
+            RootView().environment(world).tint(Theme.primary)
+                .onAppear { PushRouter.shared.attach(world) }
+            SplashOverlay()
         }
     }
 }
+
+#if DEBUG
+/// Explicitly launched only for simulator design verification; it never connects audio or a server.
+private struct VoiceCallPreview: View {
+    @State private var muted = false
+    @State private var state: VoiceCallState = {
+        let args = ProcessInfo.processInfo.arguments
+        let name = args.firstIndex(of: "--voice-call-preview").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
+        return switch name {
+        case "connecting": .connecting
+        case "thinking": .thinking
+        case "speaking": .speaking
+        case "ended": .ended
+        default: .listening
+        }
+    }()
+    private let turns = [
+        VoiceCallView.Turn(id: "1", isUser: true, text: "我今天有点累，想找个人聊聊天。", isFinal: true),
+        VoiceCallView.Turn(id: "2", isUser: false, text: "我在呢。我们随便聊聊，好吗？", isFinal: true),
+        VoiceCallView.Turn(id: "3", isUser: true, text: "嗯，今天开了好多会", isFinal: false),
+    ]
+    var body: some View {
+        // The level is synthetic here (a slow wave); a real call feeds the controller's measured audio level.
+        TimelineView(.animation(minimumInterval: 1 / 20)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            VoiceCallView(agent: Agent(id: "preview", name: "Juno", avatar: Avatar(character: "bean")),
+                          state: state, level: Float(0.5 + 0.4 * sin(t * 5) * sin(t * 1.3)), turns: turns, muted: muted,
+                          toggleMute: { muted.toggle() },
+                          showText: { state = .thinking },
+                          end: { state = .ended })
+        }
+    }
+}
+#endif
 
 /// Portrait everywhere; a screen that wants landscape (the full-screen computer) unlocks it while it's open.
 /// Info.plist lists every orientation the app may use; this delegate narrows it at run time.

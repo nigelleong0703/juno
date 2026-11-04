@@ -73,7 +73,7 @@ extension World {
             TodaySummary.NeedsYouRow(requestId: $0.id, agentId: $0.agentId, conversationId: $0.conversationId,
                                      title: $0.payload?.brief?.sentence ?? $0.title ?? $0.payload?.ui?.title ?? Fmt.requestTitle($0.kind))
         }
-        let working = runs.filter { $0.parentRunId == nil && ["running", "queued"].contains($0.status ?? "") }
+        let working = runs.filter { $0.parentRunId == nil && ["running", "queued"].contains($0.status ?? "") && showsWork($0) }
             .compactMap { run in run.agentId.map { TodaySummary.Working(agentId: $0, runId: run.id, title: run.title ?? "") } }
         return TodaySummary(userState: agents.isEmpty ? .new : .regular, needsYouCount: pending.count, needsYouTop: Array(top),
                             working: working, completed: [], inspiration: [], brief: briefToday)

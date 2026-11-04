@@ -154,6 +154,8 @@ export function previewOfItem(item: Item, runs: readonly Run[] = []): string {
       return 'Suggested a role: ' + item.title;
     case 'feed_ref':
       return 'Posted to Feed: ' + item.title;
+    case 'screen_ref':
+      return 'Opened a page on its screen';
   }
 }
 

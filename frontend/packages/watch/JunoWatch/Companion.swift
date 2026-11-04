@@ -1,5 +1,4 @@
 import AVFoundation
-import NaturalLanguage
 import SwiftUI
 import WatchKit
 
@@ -9,8 +8,7 @@ enum Mood {
 
     var clip: String {
         switch self {
-        case .idle: "idle"
-        case .listening: "needs_you"
+        case .idle, .listening: "idle"
         case .thinking: "thinking"
         case .speaking: "happy"
         case .failed: "failed"
@@ -18,164 +16,188 @@ enum Mood {
     }
 }
 
-/// Counts the queued utterances and calls back when the speech queue runs dry.
-@MainActor private final class SpeechDelegate: NSObject, AVSpeechSynthesizerDelegate {
-    var pending = 0
-    var onFinished: () -> Void = {}
-
-    private func utteranceEnded() {
-        pending = max(0, pending - 1)
-        if pending == 0 { onFinished() }
-    }
-    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        Task { @MainActor in utteranceEnded() }
-    }
-    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in utteranceEnded() }
-    }
+/// One swipeable page: an agent, its character and its direct chat (created on the first message if it has none).
+struct AgentPage: Identifiable {
+    var id: String
+    var name: String
+    var character: String
+    var conversationId: String?
 }
 
-/// The whole interaction: tap the mic, talk, tap again; the recording is transcribed by the backend and sent to the
-/// chat, the agent's reply is spoken. A message the agent writes on its own is spoken too.
+/// The whole interaction: swipe to the agent, tap the character and talk (Silero + Smart Turn decide when you are done);
+/// the speech is transcribed on the server, sent to that agent's chat, and its reply is spoken. A message the agent writes
+/// on its own is spoken too.
 @MainActor @Observable
 final class CompanionModel {
     private(set) var mood: Mood = .idle
-    private(set) var character = "bean"
-    /// No chat to follow yet: the character sleeps.
-    private(set) var asleep = false
+    private(set) var pages: [AgentPage] = []
+    private(set) var loaded = false
+    /// The first tap came before the voice models finished loading.
+    private(set) var preparing = false
+    private(set) var selected = UserDefaults.standard.string(forKey: "lastAgent") ?? ""
     private let client: WatchClient
     private let onSignedOut: () -> Void
-    private var conversationId: String?
     private var spoken = Set<String>()
-    private var primed = false
+    private var primed = Set<String>()
     private var thinkingSince = Date.distantPast
-    private let synthesizer = AVSpeechSynthesizer()
-    private let speech = SpeechDelegate()
-    private var recorder: AVAudioRecorder?
-    private var autoStop: Task<Void, Never>?
+    private let speaker: ReplySpeaker
+    private var listener: VoiceListener?
 
     init(session: WatchSession, onSignedOut: @escaping () -> Void) {
         client = WatchClient(server: session.server, token: session.token)
+        speaker = ReplySpeaker(client: client)
         self.onSignedOut = onSignedOut
-        synthesizer.delegate = speech
-        speech.onFinished = { [weak self] in if self?.mood == .speaking { self?.mood = .idle } }
+        speaker.onFinished = { [weak self] in self?.speakNext() }
     }
 
-    var clip: String { asleep ? "sleeping" : mood.clip }
+    /// Bubbles that arrived and are waiting to be read out, oldest first (a reply comes as several bubbles).
+    private var queue: [String] = []
 
-    /// Follow the chat while the view is on screen: new agent messages are spoken, faster while a reply is awaited.
+    /// Read the next waiting bubble, or go idle when there is none.
+    private func speakNext() {
+        guard mood == .speaking else { return }
+        if queue.isEmpty { mood = .idle } else { speaker.speak(queue.removeFirst()) }
+    }
+
+    private func stopSpeaking() {
+        queue.removeAll()
+        speaker.stop()
+    }
+
+    var current: AgentPage? { pages.first { $0.id == selected } }
+
+    func select(_ id: String) {
+        guard id != selected else { return }
+        stopSpeaking()
+        listener?.stop(send: false)
+        preparing = false
+        if mood != .thinking { mood = .idle }
+        selected = id
+        UserDefaults.standard.set(id, forKey: "lastAgent")
+    }
+
+    /// Follow the selected agent's chat while the view is on screen: new agent messages are spoken, faster while a reply is awaited.
     func run() async {
         while !Task.isCancelled {
+            if pages.isEmpty { await loadPages() }
             await refresh()
-            try? await Task.sleep(for: .seconds(mood == .thinking ? 1.2 : 3))
-        }
-    }
-
-    func micTapped() {
-        switch mood {
-        case .listening: Task { await finishRecording() }
-        case .thinking: break
-        default: Task { await startRecording() }
+            try? await Task.sleep(for: .seconds(mood == .thinking || mood == .speaking ? 1.2 : 3))
         }
     }
 
     // MARK: Talking
 
-    private func startRecording() async {
-        synthesizer.stopSpeaking(at: .immediate)
-        guard await AVAudioApplication.requestRecordPermission() else { fail(nil); return }
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .default)
-            try session.setActive(true)
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent("say.m4a")
-            let recorder = try AVAudioRecorder(url: url, settings: [
-                AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 32_000,
-            ])
-            guard recorder.record() else { fail(nil); return }
-            self.recorder = recorder
-            mood = .listening
-            WKInterfaceDevice.current().play(.start)
-            autoStop = Task { try? await Task.sleep(for: .seconds(30)); if !Task.isCancelled { await finishRecording() } }
-        } catch { fail(error) }
+    /// Tap on the character: stops speech, ends listening early, or starts listening.
+    func talk() {
+        switch mood {
+        case .speaking:
+            stopSpeaking()
+            mood = .idle
+        case .listening: listener?.stop(send: true)
+        case .thinking: break
+        default:
+            if preparing { preparing = false } else { Task { await startListening() } }
+        }
     }
 
-    private func finishRecording() async {
-        autoStop?.cancel()
-        guard let recorder, mood == .listening else { return }
-        let seconds = recorder.currentTime
-        recorder.stop()
-        self.recorder = nil
-        WKInterfaceDevice.current().play(.stop)
-        guard seconds > 0.4, let data = try? Data(contentsOf: recorder.url) else { mood = .idle; return }
+    private func startListening() async {
+        preparing = true
+        let models: VoiceModels
+        do { models = try await VoiceModels.loading.value } catch {
+            preparing = false
+            voiceLog.error("voice models failed to load: \(error.localizedDescription, privacy: .public)")
+            fail(nil)
+            return
+        }
+        // Tapping again while it was getting ready cancels.
+        guard preparing else { return }
+        preparing = false
+        guard await AVAudioApplication.requestRecordPermission() else { fail(nil); return }
+        let listener = VoiceListener(models: models) { [weak self] end in
+            Task { @MainActor in self?.listened(end) }
+        }
+        do { try listener.start() } catch {
+            voiceLog.error("listening failed to start: \(error.localizedDescription, privacy: .public)")
+            fail(error)
+            return
+        }
+        self.listener = listener
+        mood = .listening
+    }
+
+    private func listened(_ end: VoiceListener.End) {
+        listener = nil
+        guard mood == .listening else { return }
+        guard case .speech(let samples) = end else { mood = .idle; return }
+        WKInterfaceDevice.current().play(.click)
         mood = .thinking
         thinkingSince = Date()
-        do {
-            let text = try await client.transcribe(data).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { mood = .idle; return }
-            if conversationId == nil { await refresh() }
-            guard let conversationId else { mood = .idle; return }
-            try await client.send(text, to: conversationId)
-        } catch { fail(error) }
+        let page = current
+        Task {
+            do {
+                let text = try await client.transcribe(try encodeM4A(samples)).trimmingCharacters(in: .whitespacesAndNewlines)
+                voiceLog.notice("transcribed \(text.count, privacy: .public) characters")
+                guard !text.isEmpty, let page else { mood = .idle; return }
+                try await send(text, to: page)
+            } catch { fail(error) }
+        }
+    }
+
+    /// Send the text to the agent's direct chat (created if it has none); the reply comes through `refresh`.
+    private func send(_ text: String, to page: AgentPage) async throws {
+        let conversationId: String
+        if let existing = page.conversationId { conversationId = existing } else {
+            conversationId = try await client.createDirect(with: page.id)
+            if let i = pages.firstIndex(where: { $0.id == page.id }) { pages[i].conversationId = conversationId }
+        }
+        try await client.send(text, to: conversationId)
     }
 
     // MARK: Listening to the chat
 
-    private func refresh() async {
+    private func loadPages() async {
         do {
-            if conversationId == nil { try await pickConversation() }
-            guard let conversationId else { asleep = true; return }
-            asleep = false
+            let agents = try await client.agents()
+            let direct = try await client.conversations().filter { $0.kind == "direct" }
+            pages = agents.map { agent in
+                let chat = direct.filter { $0.agentIds?.contains(agent.id) == true }
+                    .max { ($0.lastMessage?.at ?? .distantPast) < ($1.lastMessage?.at ?? .distantPast) }
+                return AgentPage(id: agent.id, name: agent.name ?? "", character: agent.avatar?.character ?? CharacterSprite.defaultCharacter(agent.id),
+                                 conversationId: chat?.id)
+            }
+            loaded = true
+            if current == nil, let first = pages.first { select(first.id) }
+        } catch { pollFailed(error) }
+    }
+
+    private func refresh() async {
+        guard let conversationId = current?.conversationId else { return }
+        do {
             let fresh = try await client.items(conversationId).filter { $0.type == "agent_message" && !spoken.contains($0.id) }.reversed()
             spoken.formUnion(fresh.map(\.id))
-            // The first look only learns what was already said; it is not read out.
-            guard primed else { primed = true; return }
-            let lines = fresh.map(\.body).filter { !$0.isEmpty }
-            if !lines.isEmpty, mood == .idle || mood == .thinking {
+            // The first look at a chat only learns what was already said; it is not read out.
+            guard primed.contains(conversationId) else { primed.insert(conversationId); return }
+            // The page may have changed while the request was out.
+            guard conversationId == current?.conversationId else { return }
+            queue += fresh.map(\.body).filter { !$0.isEmpty }
+            if !queue.isEmpty, mood == .idle || mood == .thinking {
                 if mood == .idle { WKInterfaceDevice.current().play(.notification) }
-                speak(lines)
+                mood = .speaking
+                speakNext()
             } else if mood == .thinking, Date().timeIntervalSince(thinkingSince) > 90 {
                 mood = .idle
             }
-        } catch { fail(error) }
+        } catch { pollFailed(error) }
     }
 
-    /// The direct chat that was active most recently, and the character of its agent.
-    private func pickConversation() async throws {
-        let direct = try await client.conversations().filter { $0.kind == "direct" }
-        guard let chat = direct.max(by: { ($0.lastMessage?.at ?? .distantPast) < ($1.lastMessage?.at ?? .distantPast) }) else { return }
-        conversationId = chat.id
-        if let agentId = chat.agentIds?.first {
-            let agent = try? await client.agent(agentId)
-            character = agent?.avatar?.character ?? CharacterSprite.defaultCharacter(agentId)
-        }
-    }
-
-    // MARK: Speaking
-
-    private func speak(_ lines: [String]) {
-        mood = .speaking
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
-        for line in lines {
-            let utterance = AVSpeechUtterance(string: Self.spoken(line))
-            if let tag = NLLanguageRecognizer.dominantLanguage(for: line)?.rawValue {
-                utterance.voice = AVSpeechSynthesisVoice(language: tag == "zh-Hans" ? "zh-CN" : tag)
-            }
-            speech.pending += 1
-            synthesizer.speak(utterance)
-        }
-    }
-
-    /// Markdown marks and links read badly aloud.
-    private static func spoken(_ text: String) -> String {
-        text.replacingOccurrences(of: #"https?://\S+"#, with: "", options: .regularExpression)
-            .filter { !"*_#`>".contains($0) }
+    /// The background polling retries every few seconds, so a failure there is logged only: no haptic, no failed glow.
+    private func pollFailed(_ error: Error) {
+        if let api = error as? WatchAPIError, api.status == 401 { onSignedOut(); return }
+        voiceLog.notice("polling failed: \(error.localizedDescription, privacy: .public)")
     }
 
     private func fail(_ error: Error?) {
         if let api = error as? WatchAPIError, api.status == 401 { onSignedOut(); return }
-        recorder?.stop()
-        recorder = nil
         mood = .failed
         WKInterfaceDevice.current().play(.failure)
         Task { try? await Task.sleep(for: .seconds(2.5)); if mood == .failed { mood = .idle } }
@@ -193,24 +215,18 @@ struct CompanionView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                Circle().fill(glow.opacity(0.28)).blur(radius: 28).frame(width: 114, height: 114)
-                SpriteView(character: model.character, clip: model.clip, size: 112)
+        Group {
+            if model.pages.isEmpty {
+                // No agent yet (or still loading): the default character sleeps.
+                page(AgentPage(id: "", name: model.loaded ? "No agents" : "", character: "bean"), asleep: true)
+            } else {
+                TabView(selection: Binding(get: { model.selected }, set: { model.select($0) })) {
+                    ForEach(model.pages) { agent in
+                        page(agent, asleep: false).tag(agent.id)
+                    }
+                }
+                .tabViewStyle(.page)
             }
-            .frame(maxHeight: .infinity)
-            // Hidden on purpose: pressing and holding the character is how you sign this watch out.
-            .onLongPressGesture(minimumDuration: 1.2) { confirmSignOut = true }
-            Button(action: model.micTapped) {
-                Image(systemName: model.mood == .listening ? "stop.fill" : "mic.fill")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 52, height: 52)
-                    .background(model.mood == .listening ? Color.red : Color.white.opacity(0.18), in: .circle)
-            }
-            .buttonStyle(.plain)
-            .disabled(model.mood == .thinking)
-            .opacity(model.mood == .thinking ? 0.4 : 1)
         }
         .task { await model.run() }
         .confirmationDialog("Sign out of this watch?", isPresented: $confirmSignOut) {
@@ -218,10 +234,46 @@ struct CompanionView: View {
         }
     }
 
-    private var glow: Color {
-        switch model.mood {
+    private func page(_ agent: AgentPage, asleep: Bool) -> some View {
+        let active = agent.id == model.selected && !asleep
+        let mood = active ? model.mood : .idle
+        let preparing = active && model.preparing
+        return VStack(spacing: 2) {
+            ZStack {
+                Circle().fill(glow(mood).opacity(0.28)).blur(radius: 28).frame(width: 114, height: 114)
+                SpriteView(character: agent.character, clip: asleep ? "sleeping" : mood.clip, size: 112)
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            // The character is the talk button, like Siri: tap to talk, tap again to finish early or to stop it speaking.
+            .onTapGesture { if !asleep { model.talk() } }
+            // Hidden on purpose: pressing and holding the character is how you sign this watch out.
+            .onLongPressGesture(minimumDuration: 1.2) { confirmSignOut = true }
+            Text(preparing ? "Getting ready…" : agent.name).font(.footnote.weight(.medium)).lineLimit(1)
+            Image(systemName: mood == .speaking || mood == .listening ? "stop.fill" : "mic.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(tint(agent.character))
+                .frame(width: 24, height: 24)
+                .background(tint(agent.character).opacity(0.18), in: .circle)
+                .opacity(asleep || mood == .thinking ? 0.3 : 1)
+        }
+    }
+
+    private func tint(_ character: String) -> Color {
+        switch character {
+        case "mint": .mint
+        case "blue": .blue
+        case "purple": .purple
+        case "pink": .pink
+        case "star": .yellow
+        default: .orange
+        }
+    }
+
+    private func glow(_ mood: Mood) -> Color {
+        switch mood {
         case .idle: .white
-        case .listening: .blue
+        case .listening: .green
         case .thinking: .purple
         case .speaking: .yellow
         case .failed: .red

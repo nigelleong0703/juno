@@ -13,8 +13,8 @@ final class AppsTests: XCTestCase {
         return try isoDecoder.decode(Contract.App.self, from: Data(json.utf8))
     }
 
-    private func account(_ id: String, status: String = "connected") -> String {
-        #"{"id":"\#(id)","appId":"x","label":"\#(id)@x.com","status":"\#(status)","agents":[]}"#
+    private func account(_ id: String, status: String = "connected", needsScope: Bool = false) -> String {
+        #"{"id":"\#(id)","appId":"x","label":"\#(id)@x.com","status":"\#(status)",\#(needsScope ? #""needsScope":true,"# : "")"agents":[]}"#
     }
 
     // MARK: Pills and the "Sign in" state
@@ -51,6 +51,21 @@ final class AppsTests: XCTestCase {
         XCTAssertEqual(expired.expiredAccount?.id, "b")
         XCTAssertEqual(expired.stateName, "Sign in needed")
         XCTAssertEqual(fine.stateName, "Connected")
+    }
+
+    func testAConnectedAccountThatLacksAPermissionSaysSoAndReconnectsThatAccount() throws {
+        let lacking = try app("gmail", installations: "[\(account("a")),\(account("b", needsScope: true))]", enabled: #"[{"agentId":"nova"}]"#)
+        XCTAssertTrue(lacking.needsSignIn)
+        XCTAssertTrue(lacking.needsScopeOnly)
+        XCTAssertEqual(lacking.expiredAccount?.id, "b")
+        XCTAssertEqual(lacking.stateName, "Needs another permission")
+        // The list itself now shows it, so the card does not need the request to say so.
+        XCTAssertEqual(ConnectCard.problem(app: lacking, agentId: "nova", payload: nil), .scopeMissing)
+        XCTAssertEqual(ConnectCard.action(problem: .scopeMissing, app: lacking), .reconnect(connectionId: "b"))
+        // A rejected sign-in next to it reads as a plain sign-in problem.
+        let both = try app("gmail", installations: "[\(account("a", status: "expired")),\(account("b", needsScope: true))]")
+        XCTAssertFalse(both.needsScopeOnly)
+        XCTAssertEqual(both.stateName, "Sign in needed")
     }
 
     func testWebAppsAreComingSoonOnlyWhenTheServerCannotAddThem() throws {

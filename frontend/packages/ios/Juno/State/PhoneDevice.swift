@@ -2,20 +2,24 @@ import Foundation
 import Observation
 import UIKit
 
-/// The iPhone as a device for the agent (backend BACKEND 7.13). Nothing wakes this app: while it is open in the foreground and
-/// its event stream is connected, it tells the server what the owner allowed in EventKit (`PUT /v1/phone/declaration`); when it
-/// goes to the background or the stream drops, it takes that back (`DELETE`). A call arrives as a `device.call` event on the
-/// stream, runs through EventKit and is answered with `POST /v1/phone/calls/:id/result`. Calls are never retried here: a
-/// repeated delivery of a write gets the answer the first run gave.
+/// The iPhone as a device for the agent (backend BACKEND 7.13, 7.13b). Nothing wakes this app: while it is open in the foreground
+/// and its event stream is connected, it tells the server what the owner switched on and the system allowed
+/// (`PUT /v1/phone/declaration`); when it goes to the background or the stream drops, it takes that back (`DELETE`). A call
+/// arrives as a `device.call` event on the stream, runs through the capability's system (`PhoneSystem`) and is answered with
+/// `POST /v1/phone/calls/:id/result`. Calls are never retried here: a repeated delivery of a change gets the answer the first run
+/// gave. A capability is on only when the owner switched it on in Settings > iPhone access AND the system still allows it; the
+/// system is asked nothing before the switch.
 @MainActor
 @Observable
 final class PhoneDevice {
     static let shared = PhoneDevice()
 
-    private(set) var calendarAccess = EventKitService.calendarAccess()
-    private(set) var remindersAccess = EventKitService.remindersAccess()
+    /// The system's answer for each capability, as of the last look (app active, a switch, a permission prompt answered).
+    private(set) var access: [PhoneCapability: PhoneAccess] = [:]
+    /// Bumped when a switch changes, so the settings rows redraw.
+    private(set) var switches = 0
 
-    private let service = EventKitService()
+    @ObservationIgnored private let systems: [PhoneCapability: any PhoneSystem]
     private var api: API?
     private var streamLive = false
     private var inForeground = false
@@ -23,6 +27,22 @@ final class PhoneDevice {
     private var declared: [String]?
     private var inFlight = Set<String>()
     private var executed = ExecutedCalls.load()
+
+    @ObservationIgnored private let uploader = PhoneUploader()
+
+    @ObservationIgnored private let home = HomeSystem()
+
+    private init() {
+        let eventKit = EventKitService()
+        systems = [
+            .calendar: CalendarSystem(service: eventKit), .reminders: RemindersSystem(service: eventKit), .contacts: ContactsSystem(),
+            .location: LocationSystem(), .health: HealthSystem(), .photos: PhotosSystem(uploader: uploader),
+            .music: MusicSystem(), .home: home,
+        ]
+        // HomeKit reports the permission answer a moment after its manager starts.
+        home.onChange = { [weak self] in self?.accessChanged() }
+        refreshAccess()
+    }
 
     private var deviceId: String {
         let key = "phone.deviceId"
@@ -36,6 +56,7 @@ final class PhoneDevice {
 
     func signedIn(_ api: API) {
         self.api = api
+        uploader.api = api
         sync()
     }
 
@@ -43,6 +64,7 @@ final class PhoneDevice {
     func signingOut() {
         withdraw()
         api = nil
+        uploader.api = nil
         declared = nil
         streamLive = false
     }
@@ -60,29 +82,38 @@ final class PhoneDevice {
         sync()
     }
 
-    // MARK: Permission (Settings)
+    // MARK: Switches and permission (Settings > iPhone access)
+
+    private func switchKey(_ capability: PhoneCapability) -> String { "phone.on.\(capability.rawValue)" }
+
+    /// What the owner chose. Never chosen: a capability the system already lets Juno into stays on (the calendar and reminders
+    /// that were allowed before there were switches), everything else is off.
+    private func switchedOn(_ capability: PhoneCapability) -> Bool {
+        if let chosen = UserDefaults.standard.object(forKey: switchKey(capability)) as? Bool { return chosen }
+        return access[capability]?.usable ?? false
+    }
+
+    /// Whether the agent can use it now: switched on and still allowed by the system.
+    func isOn(_ capability: PhoneCapability) -> Bool { switchedOn(capability) && (access[capability]?.usable ?? false) }
 
     func refreshAccess() {
-        calendarAccess = EventKitService.calendarAccess()
-        remindersAccess = EventKitService.remindersAccess()
+        for (capability, system) in systems { access[capability] = system.access }
     }
 
-    func requestCalendar() {
+    /// The owner flips a switch. Turning one on is the only moment the system is asked.
+    func setOn(_ capability: PhoneCapability, _ on: Bool) {
+        UserDefaults.standard.set(on, forKey: switchKey(capability))
+        switches += 1
+        guard on, let system = systems[capability] else { accessChanged(); return }
         Task {
-            await service.requestCalendar()
-            accessChanged()
-        }
-    }
-
-    func requestReminders() {
-        Task {
-            await service.requestReminders()
+            await system.request()
             accessChanged()
         }
     }
 
     private func accessChanged() {
         refreshAccess()
+        switches += 1
         sync()
     }
 
@@ -101,7 +132,7 @@ final class PhoneDevice {
             withdraw()
             return
         }
-        let actions = EventKitService.declaredActions()
+        let actions = PhoneCapability.allCases.filter(isOn).flatMap { capability in systems[capability]?.actions(for: access[capability] ?? .denied) ?? [] }
         guard actions != declared else { return }
         declare(actions)
     }
@@ -151,18 +182,19 @@ final class PhoneDevice {
         guard inFlight.insert(call.callId).inserted else { return }
         Task { @MainActor in
             let result: PhoneResult
-            do { result = .ok(try await self.service.run(call.action, call.args ?? [:])) }
-            catch let error as PhoneCallError { result = .failed(error.message) }
-            catch { result = .failed("The iPhone could not do that: \(error.localizedDescription)") }
-            // Only a change is remembered: a repeated read simply runs again.
-            if Self.changes(call.action) { self.executed.store(call.callId, result) }
+            // The capability must still be switched on and allowed: the declaration the server holds can be a moment behind.
+            if let capability = PhoneCapability(rawValue: String(call.action.prefix { $0 != "." })), let system = self.systems[capability], self.isOn(capability) {
+                do { result = .ok(try await system.run(call.action, call.args ?? [:])) }
+                catch let error as PhoneCallError { result = .failed(error.message) }
+                catch { result = .failed("The iPhone could not do that: \(error.localizedDescription)") }
+                // Only a change is remembered: a repeated read simply runs again.
+                if system.changes(call.action) { self.executed.store(call.callId, result) }
+            } else {
+                result = .failed("Juno isn't allowed to do that on this iPhone right now. The owner can switch it on in Juno > Settings > iPhone access; nothing was done.")
+            }
             self.inFlight.remove(call.callId)
             await Self.post(result, call.callId, api)
         }
-    }
-
-    private static func changes(_ action: String) -> Bool {
-        action.hasSuffix("create_event") || action.hasSuffix("update_event") || action.hasSuffix("delete_event") || ["reminders.create", "reminders.update", "reminders.delete"].contains(action)
     }
 
     private static func parseDeadline(_ text: String) -> Date? {

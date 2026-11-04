@@ -43,6 +43,13 @@ extension World {
     /// Actually on a task now: a top-level run that is running or queued. Blocked / waiting-for-input runs
     /// are not "working" (one left blocked since yesterday showed as working).
     func isWorking(_ agentId: String) -> Bool {
-        runs.contains { $0.agentId == agentId && $0.parentRunId == nil && ["running", "queued"].contains($0.status ?? "") }
+        runs.contains { $0.agentId == agentId && $0.parentRunId == nil && ["running", "queued"].contains($0.status ?? "") && showsWork($0) }
+    }
+
+    /// Whether a run is doing something a person can look at. A chat reply that has not run a tool yet is only
+    /// being written: the chat shows the typing bubble, not "Working", and there is no Activity sheet to open.
+    /// Routine, scheduled and manual runs are tasks from the start.
+    func showsWork(_ run: Run) -> Bool {
+        run.kind != "chat" || !visibleSteps(run.steps ?? []).isEmpty
     }
 }

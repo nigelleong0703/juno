@@ -4,7 +4,7 @@ import { useState } from "react";
 import { t } from "../../lib/i18n";
 import { UiDoc } from "../uidoc/UiDoc";
 import type { CardBodyProps } from "./cards";
-import { allowKindLabel, badgeCategories, categoryLabel, factsOf, type Fact } from "./decision";
+import { allowKindLabel, askedByLine, badgeCategories, categoryLabel, factsOf, type Fact } from "./decision";
 import { AllowKindDialog, ChangeItDialog } from "./DecisionDialogs";
 import { DraftPreview, type useDraftEditor } from "./DraftPreview";
 import { PlatformIcon } from "./PlatformIcon";
@@ -49,6 +49,7 @@ export function DecisionBody({ request, agentName, readOnly, disabled, onResolve
   const targets = brief.facts.targets ?? [];
   const approve = (extra: object = {}) => onResolve({ action: "approve", ...(editor.edited === undefined ? {} : { editedDraft: editor.edited }), ...extra });
   const why = brief.why ?? payload.why;
+  const askedBy = askedByLine(request);
   const macApp = payload.macApp;
 
   return (
@@ -108,6 +109,7 @@ export function DecisionBody({ request, agentName, readOnly, disabled, onResolve
         </ul>
       ) : null}
 
+      {askedBy ? <p className="mx-1 mt-3 text-[13px] leading-[18px] text-foreground/60">{askedBy}</p> : null}
       {why ? <ActionCardGuidance>{why}</ActionCardGuidance> : null}
       {brief.ifDenied ? <p className="mx-1 mt-1.5 text-[13px] leading-[18px] text-foreground/45">{t("decision.ifDenied", { text: brief.ifDenied })}</p> : null}
       {readOnly && request.decision?.note ? <p className="mx-1 mt-1.5 text-[13px] leading-[18px] text-foreground/60">{request.decision.note}</p> : null}

@@ -6,6 +6,7 @@ import { AgentAvatarGroup } from "../../../components/agent/AgentAvatarGroup";
 import { GroupMemberRunStatus } from "../../../components/conversation/GroupMemberRunStatus";
 import { useAuthIdentity } from "../../../auth/AuthContext";
 import { t } from "../../../lib/i18n";
+import { GroupChannelSettings } from "./GroupChannelSettings";
 
 /**
  * The dropdown for a group chat, in the agent panel's style: the stacked avatars, the group's name and a
@@ -59,6 +60,7 @@ export function GroupMembers({
             />
           ) : null}
         </Section>
+        <GroupChannelSettings conversation={conversation} agentName={members[0]?.name ?? t("group.theAgent")} />
       </div>
     </div>
   );

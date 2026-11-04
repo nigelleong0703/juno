@@ -898,7 +898,7 @@ struct ConversationRow: View {
         let unread = conversation.unreadCount ?? 0
         let muted = conversation.muted ?? false
         let workingRun = world.activeRuns(in: conversation.id).first {
-            $0.parentRunId == nil && ["running", "queued"].contains($0.status ?? "")
+            $0.parentRunId == nil && ["running", "queued"].contains($0.status ?? "") && world.showsWork($0)
         }
         HStack(spacing: 12) {
             avatar(agents, working: workingRun != nil)

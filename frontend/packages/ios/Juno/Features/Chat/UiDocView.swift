@@ -69,6 +69,13 @@ struct UiBlockView: View {
         case .fields(let fields):
             if let answering {
                 if let open = answering.openForm, answering.recorded == nil {
+                    // What is asked, as short lines: the form itself opens in a sheet.
+                    ForEach(fields.fields.prefix(3)) { field in
+                        Text(field.label).text(.sm).foregroundStyle(Theme.fgMuted).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    if fields.fields.count > 3 {
+                        Text("+\(fields.fields.count - 3) more").text(.sm).foregroundStyle(Theme.fgSubtle).frame(maxWidth: .infinity, alignment: .leading)
+                    }
                     CardPrimaryButton(title: "Answer", enabled: !answering.busy, id: "question-answer", action: open)
                 } else {
                     UiFieldsForm(block: fields, answering: answering)

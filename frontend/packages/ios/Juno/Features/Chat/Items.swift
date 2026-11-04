@@ -32,6 +32,7 @@ struct ItemView: View {
         case "handoff": HandoffMarker(item: item)
         case "system": SystemRow(item: item)
         case "feed_ref": FeedRefCard(item: item)
+        case "screen_ref": ScreenRefCard(item: item)
         case "role_suggestion": RoleSuggestionCard(item: item).modifier(MessageWidth(trailing: false))
         default: EmptyView()
         }
@@ -91,8 +92,12 @@ struct UserBubble: View {
                     let (quote, body) = Quote.split(text)
                     VStack(alignment: .leading, spacing: 6) {
                         if let quote { QuoteCard(text: quote, ink: ink) }
-                        if !body.isEmpty { Text(body).text(.md) }
+                        if !body.isEmpty {
+                            Text(Mentions.attributed(body, mentions: item.mentions ?? [], name: { world.agent($0)?.name })).text(.md)
+                                .tint(ink)
+                        }
                     }
+                    .environment(\.openURL, Mentions.opener(world: world, from: "bubble-\(item.id)"))
                         .foregroundStyle(ink)
                         .padding(.horizontal, 12).padding(.vertical, 7)
                         .background(stranger ? Theme.bubbleAgent : (accent ?? Theme.bubbleUser), in: .rect(cornerRadius: Radius.xxl))
@@ -199,6 +204,35 @@ struct ChannelMarker: View {
     }
 }
 
+/// "Not delivered · Retry" under an agent reply the messaging platform never got. It goes when the server queues the reply again.
+struct NotDeliveredLine: View {
+    @Environment(World.self) private var world
+    var item: Item
+    @State private var retrying = false
+    @State private var failed = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "exclamationmark.circle.fill").font(.system(size: 12))
+            Text(failed ? "Couldn't retry" : "Not delivered")
+            Button("Retry") {
+                retrying = true
+                Task {
+                    failed = !(await world.retryDelivery(item))
+                    retrying = false
+                }
+            }
+            .buttonStyle(WebButton(variant: .ghost, size: .xs))
+            .disabled(retrying)
+            .accessibilityIdentifier("delivery-retry")
+            Spacer(minLength: 0)
+        }
+        .text(.xs).foregroundStyle(Theme.danger)
+        .padding(.leading, 4)
+        .accessibilityIdentifier("not-delivered")
+    }
+}
+
 struct AgentBubble: View {
     @Environment(World.self) private var world
     var item: Item
@@ -227,7 +261,8 @@ struct AgentBubble: View {
                 VStack(alignment: .leading, spacing: 8) {
                     let (quote, body) = Quote.split(item.markdown ?? "")
                     if let quote { QuoteCard(text: quote, ink: Theme.bubbleAgentFg) }
-                    AgentMarkdown(text: body)
+                    AgentMarkdown(text: Mentions.linking(body, mentions: item.mentions ?? [], name: { world.agent($0)?.name }))
+                        .environment(\.openURL, Mentions.opener(world: world, from: "bubble-\(item.id)"))
                     // Only citations that link somewhere are sources (a memory citation has no page to open).
                     let sources = (item.citations ?? []).filter { $0.url.flatMap(URL.init(string:)) != nil }
                     if !sources.isEmpty, !ChatFeed.hidesSources(item, world: world) {
@@ -241,11 +276,13 @@ struct AgentBubble: View {
                 .background(Theme.bubbleAgent, in: .rect(cornerRadius: Radius.xxl))
                 .bubbleFrame()
                 .reactionChip(item.id, trailing: false)
-                if let platform = ChannelPlatform(kind: item.replyTo?.kind) {
+                if let platform = ChannelPlatform(kind: item.replyTo?.kind), item.delivery?.status != Contract.OutboxStatus.dropped.rawValue {
                     ChannelMarker(text: "Sent to \(platform.name)", platform: platform).padding(.leading, 2)
                 }
             }
             if let ui = item.ui, ui.blocks.contains(where: { if case .replies = $0 { false } else { true } }) { UiMessageCard(doc: ui) }
+            // Only a platform chat ever carries a delivery state; waiting and delivered say nothing.
+            if item.delivery?.status == Contract.OutboxStatus.dropped.rawValue { NotDeliveredLine(item: item) }
             if world.repliesOpen(item), let ui = item.ui, case .replies(let options)? = ui.blocks.first(where: { if case .replies = $0 { true } else { false } }) {
                 ReplyOptions(options: options) { text in if let c = item.conversationId { world.send(text, in: c) } }
             }
@@ -319,6 +356,49 @@ struct FeedRefCard: View {
     }
 }
 
+/// "<agent>'s screen": the card the harness adds on the agent's first browser navigation, with the latest picture of that screen
+/// (the server re-sends it as the run browses). "Live" + the current page while the run works, "Ended" + the last page after.
+/// A tap opens the workspace sheet on the live screen while live, and the last frame once it ended.
+struct ScreenRefCard: View {
+    @Environment(World.self) private var world
+    var item: Item
+    @State private var frame: UIImage?
+    @State private var viewing = false
+    var body: some View {
+        let agent = world.agent(item.agentId)
+        let live = world.runs.first { $0.id == item.runId }.map { ["running", "queued"].contains($0.status ?? "") } ?? false
+        let page = [item.title, item.url.flatMap { URL(string: $0)?.host }].compactMap { $0 }.first { !$0.isEmpty }
+        let subtitle = page.map { live ? "Live · \($0)" : "Ended · last page \($0)" } ?? (live ? "Live" : "Ended")
+        Button {
+            if !live { viewing = true }
+            else if let c = item.conversationId, let a = item.agentId { world.sheet = .workspace(conversationId: c, agentId: a) }
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    AvatarView(agent: agent, size: 36).frame(width: 44, height: 44)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(agent?.name ?? "Agent")’s screen").text(.base, .medium).foregroundStyle(Theme.fg).lineLimit(1)
+                        Text(subtitle).text(.sm).foregroundStyle(Theme.fgMuted).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right").text(.sm, .semibold).foregroundStyle(Theme.fgSubtle)
+                }
+                CardPreview(image: frame) { CardChip(text: live ? "Live" : "Ended", live: live ? Theme.success : nil) }
+            }
+            .task(id: item.previewLibraryId) { if let id = item.previewLibraryId { frame = await world.previewImage(id) } }
+            .sheet(isPresented: $viewing) { ImageViewer(image: frame) }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.requestCard, in: .rect(cornerRadius: Radius.tile))
+            .overlay(RoundedRectangle(cornerRadius: Radius.tile).strokeBorder(Theme.border, lineWidth: 0.5))
+            .contentShape(.rect(cornerRadius: Radius.tile))
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: 560)
+        .accessibilityIdentifier("screen-ref")
+    }
+}
+
 /// The blocks an agent message carries, below the lead-in bubble: no surface of its own, so the grey tiles read as a stack of bubbles.
 struct UiMessageCard: View {
     var doc: UiDoc
@@ -350,7 +430,7 @@ struct RunStatusRow: View {
         .text(.xs).foregroundStyle(failed ? Theme.danger : Theme.fgMuted)
         .padding(.leading, 4).padding(.vertical, 2)
         .contentShape(.rect)
-        .onTapGesture { if !failed { world.sheet = .runSteps(run.id) } }
+        .onTapGesture { if !failed, world.showsWork(run) { world.sheet = .runSteps(run.id) } }
         .accessibilityIdentifier(failed ? "run-failed" : "run-stopped")
     }
 }
@@ -454,6 +534,7 @@ struct StepDetail: View {
                 Link(destination: link) { Text(url).text(.xs).lineLimit(2).multilineTextAlignment(.leading) }
             }
             if let excerpt { Text(excerpt).text(.sm).foregroundStyle(Theme.fgMuted) }
+            FileVersionsEntry(step: step)
             if let image {
                 Button { viewing = true } label: {
                     Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: .infinity)

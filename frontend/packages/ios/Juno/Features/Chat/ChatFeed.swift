@@ -131,6 +131,7 @@ enum ChatFeed {
         case "request": h.combine(world.request(item.requestId))
         case "artifact": h.combine(world.file(item.artifactId))
         case "routine": h.combine(world.routine(item.routineId))
+        case "screen_ref": h.combine(world.agent(item.agentId)?.name)
         case "handoff", "role_suggestion":
             let agent = world.agent(item.agentId ?? world.conversation(item.conversationId)?.agentIds?.first)
             h.combine(agent?.name); h.combine(agent?.roleSuggestion); h.combine(agent?.roleSuggestionDismissedAt)
@@ -142,13 +143,15 @@ enum ChatFeed {
 }
 
 /// The reply slot while the agent has not produced text yet: an iMessage-style three-dot bubble in the agent's
-/// colours. It is the only working indicator; tapping it opens the run's Activity sheet.
+/// colours. It is the only working indicator; once the run has a step to show, tapping it opens the run's Activity
+/// sheet. Before that (a plain reply being written) there is nothing to open, so it is not a button.
 struct ChatTypingRow: View {
     @Environment(World.self) private var world
     var conversationId: String
     var runId: String
 
     var body: some View {
+        let hasActivity = world.run(runId).map(world.showsWork) ?? false
         Button { world.sheet = .runSteps(runId) } label: {
             TimelineView(.animation(minimumInterval: 0.2)) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
@@ -165,8 +168,9 @@ struct ChatTypingRow: View {
             }
         }
         .buttonStyle(.plain)
+        .allowsHitTesting(hasActivity)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityLabel("Show what the agent is doing")
+        .accessibilityLabel(hasActivity ? "Show what the agent is doing" : "The agent is typing")
         .accessibilityIdentifier("typing-bubble")
     }
 }

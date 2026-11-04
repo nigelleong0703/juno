@@ -24,6 +24,28 @@ private struct TeamMemoryPatch: Encodable {
     var text: String?
     var audience: String?
     var sensitive: Bool?
+    var keeper: MemoryKeeper?
+
+    private enum CodingKeys: String, CodingKey { case text, audience, sensitive, agentId }
+
+    /// Nil fields are left out; `.all` is sent as an explicit `agentId: null` (share with every agent).
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(text, forKey: .text)
+        try container.encodeIfPresent(audience, forKey: .audience)
+        try container.encodeIfPresent(sensitive, forKey: .sensitive)
+        switch keeper {
+        case .all: try container.encodeNil(forKey: .agentId)
+        case .agent(let id): try container.encode(id, forKey: .agentId)
+        case nil: break
+        }
+    }
+}
+
+/// Who keeps a memory item (BACKEND 5.4a): every one of the owner's agents, or one agent alone.
+enum MemoryKeeper: Equatable {
+    case all
+    case agent(String)
 }
 
 private struct TeamItems<Item: Decodable>: Decodable {
@@ -84,9 +106,9 @@ extension World {
     }
 
     /// PATCH /v1/memory/items/:id. An omitted field keeps its value; an omitted audience keeps a group audience.
-    func updateMemoryItem(_ id: String, text: String? = nil, audience: String? = nil, sensitive: Bool? = nil) async throws {
+    func updateMemoryItem(_ id: String, text: String? = nil, audience: String? = nil, sensitive: Bool? = nil, keeper: MemoryKeeper? = nil) async throws {
         guard let api else { throw TeamWriteError.notConnected }
-        try await api.patch("/v1/memory/items/\(id)", TeamMemoryPatch(text: text, audience: audience, sensitive: sensitive))
+        try await api.patch("/v1/memory/items/\(id)", TeamMemoryPatch(text: text, audience: audience, sensitive: sensitive, keeper: keeper))
     }
 
     /// DELETE /v1/memory/items/:id: forgotten for good.

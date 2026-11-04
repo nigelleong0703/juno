@@ -49,6 +49,80 @@ enum Mentions {
         }
     }
 
+    // MARK: Showing mentions in a sent or received message
+
+    static let linkScheme = "juno-agent"
+
+    static func link(_ id: String) -> URL? {
+        var c = URLComponents(); c.scheme = linkScheme; c.host = "open"; c.queryItems = [URLQueryItem(name: "id", value: id)]
+        return c.url
+    }
+
+    /// Tapping a mention opens that agent's card; any other link goes to the system.
+    static func opener(world: World, from sourceId: String) -> OpenURLAction {
+        OpenURLAction { url in
+            guard url.scheme == linkScheme, let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "id" })?.value else { return .systemAction }
+            world.openAgentPage(id, from: sourceId)
+            return .handled
+        }
+    }
+
+    /// Where each mentioned agent's current "@Name" stands in the text (code spans never count). A trailing line that is
+    /// only "@Name" of an agent already named earlier is dropped (old messages repeated the mention there).
+    /// `name` gives an agent id's current name.
+    static func presenting(_ text: String, mentions: [Mention], name: (String) -> String?) -> (text: String, ranges: [(Range<String.Index>, String)]) {
+        var names: [(id: String, handle: String)] = []
+        for m in mentions where m.kind == "agent" {
+            if let n = name(m.id), !n.isEmpty, !names.contains(where: { $0.id == m.id }) { names.append((m.id, "@" + n)) }
+        }
+        guard !names.isEmpty else { return (text, []) }
+        var body = text
+        let lines = body.components(separatedBy: "\n")
+        if let end = lines.lastIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }),
+           let hit = names.first(where: { $0.handle.caseInsensitiveCompare(lines[end].trimmingCharacters(in: .whitespaces)) == .orderedSame }) {
+            let before = lines[..<end].joined(separator: "\n")
+            if before.range(of: hit.handle, options: .caseInsensitive) != nil {
+                body = before.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        let alternatives = names.sorted { $0.handle.count > $1.handle.count }.map { NSRegularExpression.escapedPattern(for: $0.handle) }
+        guard let re = try? NSRegularExpression(pattern: "(?<![\\p{L}\\p{N}_.@/])(" + alternatives.joined(separator: "|") + ")(?![\\p{L}\\p{N}_@-])", options: .caseInsensitive) else { return (body, []) }
+        let whole = NSRange(location: 0, length: (body as NSString).length)
+        var code: [NSRange] = []
+        for pattern in ["```[\\s\\S]*?(```|$)", "`[^`\\n]*`?"] {
+            if let c = try? NSRegularExpression(pattern: pattern) { code += c.matches(in: body, range: whole).map(\.range) }
+        }
+        var out: [(Range<String.Index>, String)] = []
+        for m in re.matches(in: body, range: whole) {
+            guard !code.contains(where: { NSIntersectionRange($0, m.range).length > 0 }), let r = Range(m.range, in: body) else { continue }
+            let hit = String(body[r])
+            if let id = names.first(where: { $0.handle.caseInsensitiveCompare(hit) == .orderedSame })?.id { out.append((r, id)) }
+        }
+        return (body, out)
+    }
+
+    /// Agent Markdown with each mention as a bold link to the agent (opened by `opener`).
+    static func linking(_ text: String, mentions: [Mention], name: (String) -> String?) -> String {
+        let (body, ranges) = presenting(text, mentions: mentions, name: name)
+        var out = body
+        for (range, id) in ranges.reversed() {
+            out.replaceSubrange(range, with: "[**\(body[range])**](\(link(id)?.absoluteString ?? ""))")
+        }
+        return out
+    }
+
+    /// A user message's text with each mention bold and tappable.
+    static func attributed(_ text: String, mentions: [Mention], name: (String) -> String?) -> AttributedString {
+        let (body, ranges) = presenting(text, mentions: mentions, name: name)
+        var out = AttributedString(body)
+        for (range, id) in ranges {
+            guard let lower = AttributedString.Index(range.lowerBound, within: out), let upper = AttributedString.Index(range.upperBound, within: out) else { continue }
+            out[lower..<upper].inlinePresentationIntent = .stronglyEmphasized
+            out[lower..<upper].link = link(id)
+        }
+        return out
+    }
+
     private static func stripCode(_ text: String) -> String {
         var s = text
         for pattern in ["```[\\s\\S]*?(```|$)", "`[^`\\n]*`?"] {

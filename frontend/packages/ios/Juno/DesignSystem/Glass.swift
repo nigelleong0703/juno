@@ -37,3 +37,31 @@ struct RoundGlassButton: View {
         .accessibilityLabel(label)
     }
 }
+
+/// A 76pt call control with a 30pt symbol and its label underneath. End call is a red fill with a white symbol.
+struct CallControl: View {
+    let symbol: String
+    let label: String
+    var destructive = false
+    let action: () -> Void
+
+    private let diameter: CGFloat = 76
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: symbol).font(.system(size: 30, weight: .medium))
+                    .foregroundStyle(destructive ? Color.white : Theme.fg)
+                    .frame(width: diameter, height: diameter)
+                    .background { if destructive { Circle().fill(Theme.danger) } }
+                    .glassEffect(destructive ? .identity : .regular.interactive(), in: .circle)
+                Text(label).font(.footnote.weight(.medium)).foregroundStyle(Theme.fgMuted)
+                    .lineLimit(2).multilineTextAlignment(.center)
+            }
+            .frame(minWidth: diameter, maxWidth: 104)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}

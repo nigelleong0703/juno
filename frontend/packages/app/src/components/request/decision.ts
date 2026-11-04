@@ -12,6 +12,16 @@ export const outcomeLabel = (outcome: RequestOutcome): string => t(`decision.out
 /** The brief of an approval request, when it carries one (older requests do not). */
 export const briefOf = (request: Request): DecisionBrief | undefined => (request.payload.kind === "approval" ? request.payload.brief : undefined);
 
+/** Who asked, when someone other than the owner did in a platform chat: "Mia asked in Design team", "Someone outside the team asked". */
+export function askedByLine(request: Request): string | undefined {
+  const asked = request.payload.kind === "approval" ? request.payload.askedBy : undefined;
+  if (!asked) return undefined;
+  const name = asked.name?.trim();
+  const who = asked.kind === "teammate" ? (name ? t("decision.askedBy.teammate", { name }) : t("decision.askedBy.teammateAnon")) : name ? t("decision.askedBy.stranger", { name }) : t("decision.askedBy.strangerAnon");
+  const where = asked.where?.trim();
+  return where ? t("decision.askedBy.where", { who, where }) : who;
+}
+
 /** What a request says it is about: the brief's sentence, else the old title. */
 export const requestSentence = (request: Request): string => briefOf(request)?.sentence ?? request.title;
 

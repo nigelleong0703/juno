@@ -255,6 +255,50 @@ final class WorldTests: XCTestCase {
         XCTAssertTrue(w.conversations.isEmpty)
     }
 
+    func testDeletionEventsRemoveFromMemoryAndTheDatabase() throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "store-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let w = world()
+        w.store = try LocalStore(url: url)
+        let items = (1...3).map { deletionItem($0) }
+        w.store?.replaceNewest("c1", items: items, olderCursor: nil)
+        w.items["c1"] = items
+        w.goals = [try deletionRow(#"{"id":"g1","agentId":"a1"}"#), try deletionRow(#"{"id":"g2","agentId":"a2"}"#)]
+        w.ideas = [try deletionRow(#"{"id":"i1","agentId":"a1"}"#), try deletionRow(#"{"id":"i2","agentId":"a2"}"#)]
+        w.feed = [try deletionRow(#"{"id":"p1","agentId":"a1"}"#), try deletionRow(#"{"id":"p2","agentId":"a2"}"#)]
+
+        w.apply(frame(#"{"type":"item.deleted","conversationId":"c1","itemId":"i2"}"#))
+        XCTAssertEqual(w.items["c1"]?.map(\.id), ["i1", "i3"])
+        XCTAssertEqual(w.store?.newest("c1", limit: 10).map(\.id), ["i1", "i3"])
+        w.apply(frame(#"{"type":"goal.deleted","goalId":"g1"}"#))
+        w.apply(frame(#"{"type":"idea.deleted","ideaId":"i1"}"#))
+        w.apply(frame(#"{"type":"feed.deleted","postId":"p1"}"#))
+        XCTAssertEqual(w.goals.map(\.id), ["g2"])
+        XCTAssertEqual(w.ideas.map(\.id), ["i2"])
+        XCTAssertEqual(w.feed.map(\.id), ["p2"])
+    }
+
+    func testDeletingAnAgentDropsItsGoalsIdeasFeedTasksAndChatsEverywhere() throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "store-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let w = world()
+        w.store = try LocalStore(url: url)
+        w.store?.replaceNewest("c1", items: [deletionItem(1)], olderCursor: nil)
+        w.goals = [try deletionRow(#"{"id":"g1","agentId":"a1"}"#), try deletionRow(#"{"id":"g2","agentId":"a2"}"#)]
+        w.ideas = [try deletionRow(#"{"id":"i1","agentId":"a1"}"#), try deletionRow(#"{"id":"i2","agentId":"a2"}"#)]
+        w.feed = [try deletionRow(#"{"id":"p1","agentId":"a1"}"#), try deletionRow(#"{"id":"p2","agentId":"a2"}"#)]
+
+        w.apply(frame(#"{"type":"agent.deleted","agentId":"a1"}"#))
+
+        XCTAssertEqual(w.agents.map(\.id), ["a2"])
+        XCTAssertEqual(w.goals.map(\.id), ["g2"])
+        XCTAssertEqual(w.ideas.map(\.id), ["i2"])
+        XCTAssertEqual(w.feed.map(\.id), ["p2"])
+        XCTAssertTrue(w.conversations.isEmpty)
+        XCTAssertNil(w.items["c1"])
+        XCTAssertEqual(w.store?.itemCount("c1"), 0)
+    }
+
     func testUnknownAndMalformedFramesAreIgnored() {
         let w = world()
         w.apply(frame(#"{"type":"nope"}"#))
@@ -328,6 +372,14 @@ final class WorldTests: XCTestCase {
         XCTAssertEqual(w.doingLine(w.agent("a1")!), "Waiting on you")
     }
 
+    func testRunWaitingForInputIsWaitingNotWorking() {
+        let w = world()
+        w.runs = [Run(id: "r1", agentId: "a1", title: "Comparing tools", status: "waiting_for_input", titleGenerated: true)]
+        XCTAssertEqual(w.doingLine(w.agent("a1")!), "Waiting for you")
+        w.runs.append(Run(id: "r2", agentId: "a1", title: "Booking", status: "running", titleGenerated: true))
+        XCTAssertEqual(w.doingLine(w.agent("a1")!), "Comparing tools", "another run that is running means the agent is working")
+    }
+
     func testDoingLineSkipsInternalWakeNotes() {
         let w = world()
         let note = "[system note, from the user's tap on a card] The user approved \"Agent directory\", which you stopped waiting for."
@@ -352,6 +404,25 @@ final class WorldTests: XCTestCase {
         w.runs = [Run(id: "r1", agentId: "a1", status: "running")]
         XCTAssertTrue(w.isWorking("a1"))
         XCTAssertFalse(w.isWorking("a2"))
+    }
+
+    func testPlainReplyIsTypingNotWorking() {
+        let w = world()
+        w.runs = [Run(id: "r1", agentId: "a1", status: "running", kind: "chat")]
+        XCTAssertFalse(w.isWorking("a1"), "a chat reply with no step yet is typing")
+        XCTAssertFalse(w.showsWork(w.runs[0]))
+        var step = Step(id: "s1")
+        step.verb = "Searched"
+        step.target = "ai news"
+        w.runs[0].steps = [step]
+        XCTAssertTrue(w.showsWork(w.runs[0]), "the first visible step makes it work")
+        XCTAssertTrue(w.isWorking("a1"))
+        var plumbing = Step(id: "s2")
+        plumbing.internal = true
+        w.runs[0].steps = [plumbing]
+        XCTAssertFalse(w.isWorking("a1"), "plumbing steps are not work a person can see")
+        w.runs = [Run(id: "r2", agentId: "a1", status: "running", kind: "routine")]
+        XCTAssertTrue(w.isWorking("a1"), "a routine run is a task from the start")
     }
 
     func testOpenChatSelectsChatAndClosesChrome() {
@@ -543,7 +614,7 @@ final class AgentIdentityPersistenceTests: XCTestCase {
         }
         let world = World()
         world.agents = [Agent(id: "a1", name: "Original", title: "Research", status: "working", avatar: Avatar(shape: "blob", color: 4, eyes: "wink", accessory: "cap", thumbs: ["seed": "keep-me"], character: "bean"))]
-        world.api = API(session: Session(server: URL(string: "https://profile.fixture.invalid")!, token: "fixture-session", userId: "u1", name: "Fixture", email: "fixture@example.invalid"), transport: URLSession(configuration: config))
+        world.api = API(session: Session(token: "fixture-session", userId: "u1", name: "Fixture", email: "fixture@example.invalid"), transport: URLSession(configuration: config))
         return world
     }
 
@@ -877,11 +948,128 @@ final class LocalStoreTests: XCTestCase {
         XCTAssertTrue(reopened.newest("c", limit: 10).isEmpty)
     }
 
-    func testEachAccountAndServerGetsItsOwnFile() {
-        let a = URL(string: "https://one.example")!, b = URL(string: "https://two.example")!
-        XCTAssertNotEqual(LocalStore.fileName(server: a, userId: "u1"), LocalStore.fileName(server: a, userId: "u2"))
-        XCTAssertNotEqual(LocalStore.fileName(server: a, userId: "u1"), LocalStore.fileName(server: b, userId: "u1"))
-        XCTAssertEqual(LocalStore.fileName(server: a, userId: "u1"), LocalStore.fileName(server: a, userId: "u1"))
+    func testEachAccountGetsItsOwnFile() {
+        XCTAssertNotEqual(LocalStore.fileName(userId: "u1"), LocalStore.fileName(userId: "u2"))
+        XCTAssertEqual(LocalStore.fileName(userId: "u1"), LocalStore.fileName(userId: "u1"))
+    }
+
+    func testASessionSavedWithAServerKeyStillDecodes() throws {
+        let saved = Data(#"{"server":"https://old.example","token":"t","userId":"u1","name":"N","email":"e@example.invalid"}"#.utf8)
+        XCTAssertEqual(try JSONDecoder().decode(Session.self, from: saved).token, "t")
+    }
+
+    func testReconcileDropsDeletedRowsInThePageRangeAndKeepsOlderPages() throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "store-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try LocalStore(url: url)
+        store.replaceNewest("c1", items: (0...3).map { deletionItem($0) }, olderCursor: "below-0")
+
+        // The server's newest page is i1 and i3: i2 was deleted, i0 is older than the page.
+        XCTAssertTrue(store.reconcileNewest("c1", items: [deletionItem(1), deletionItem(3)], olderCursor: "below-1"))
+        XCTAssertEqual(store.newest("c1", limit: 10).map(\.id), ["i0", "i1", "i3"])
+        XCTAssertEqual(store.chatState("c1"), .init(olderCursor: "below-0", reachedStart: false), "the cursor under the stored pages stays")
+
+        // A page that is the whole chat: whatever it lacks is gone, however old.
+        XCTAssertFalse(store.reconcileNewest("c1", items: [deletionItem(1), deletionItem(3)], olderCursor: nil))
+        XCTAssertEqual(store.newest("c1", limit: 10).map(\.id), ["i1", "i3"])
+        XCTAssertEqual(store.chatState("c1"), .init(olderCursor: nil, reachedStart: true))
+    }
+
+    func testReconcileStartsOverWhenThePageDoesNotTouchWhatIsStored() throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "store-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try LocalStore(url: url)
+        store.replaceNewest("c1", items: [deletionItem(1), deletionItem(2)], olderCursor: "below-1")
+
+        // More new items arrived than one page holds: the stored rows would not be contiguous with the page.
+        XCTAssertFalse(store.reconcileNewest("c1", items: [deletionItem(6), deletionItem(7)], olderCursor: "below-6"))
+        XCTAssertEqual(store.newest("c1", limit: 10).map(\.id), ["i6", "i7"])
+        XCTAssertEqual(store.chatState("c1"), .init(olderCursor: "below-6", reachedStart: false))
+    }
+}
+
+/// An item of chat c1 `n` seconds into a fixed minute, as the server sends it.
+private func deletionItem(_ n: Int) -> Item {
+    let minute = ISO8601DateFormatter().date(from: "2026-11-02T10:00:00Z") ?? Date(timeIntervalSince1970: 0)
+    return Item(id: "i\(n)", conversationId: "c1", at: minute.addingTimeInterval(Double(n)), type: "user_message", text: "m\(n)")
+}
+
+private func deletionRow<T: Decodable>(_ json: String) throws -> T {
+    try isoDecoder.decode(T.self, from: Data(json.utf8))
+}
+
+// MARK: - Reconnect: the app is compared with the server
+
+@MainActor
+final class ReconcileWithServerTests: XCTestCase {
+    private func connectedWorld(_ routes: @escaping @Sendable (String) -> String?) throws -> (World, URL) {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ProfileURLProtocol.self]
+        ProfileURLProtocol.handler = { request in
+            guard let body = routes(request.url?.path ?? "") else { return (404, Data("{}".utf8)) }
+            return (200, Data(body.utf8))
+        }
+        let url = FileManager.default.temporaryDirectory.appending(path: "store-\(UUID().uuidString).sqlite")
+        let world = World()
+        world.store = try LocalStore(url: url)
+        world.api = API(session: Session(token: "fixture", userId: "u1", name: "Fixture", email: "fixture@example.invalid"), transport: URLSession(configuration: config))
+        return (world, url)
+    }
+
+    func testReconnectingDropsAGoalAndAChatTheServerNoLongerHas() async throws {
+        let (w, url) = try connectedWorld { path in
+            switch path {
+            case "/v1/goals": #"{"items":[{"id":"g2","agentId":"a2","status":"active"}]}"#
+            case "/v1/ideas", "/v1/feed": #"{"items":[]}"#
+            case "/v1/conversations": #"{"items":[{"id":"c1","kind":"direct","agentIds":["a2"]}]}"#
+            default: nil
+            }
+        }
+        defer { ProfileURLProtocol.handler = nil; try? FileManager.default.removeItem(at: url) }
+        w.goals = [try deletionRow(#"{"id":"g1","agentId":"a1","status":"active"}"#), try deletionRow(#"{"id":"g2","agentId":"a2","status":"active"}"#)]
+        w.ideas = [try deletionRow(#"{"id":"i1","agentId":"a1","status":"open"}"#)]
+        w.feed = [try deletionRow(#"{"id":"p1","agentId":"a1"}"#)]
+        w.conversations = [Conversation(id: "c1", kind: "direct", agentIds: ["a2"]), Conversation(id: "c9", kind: "direct", agentIds: ["a1"])]
+        w.items["c9"] = [deletionItem(1)]
+        w.store?.replaceNewest("c9", items: [deletionItem(1)], olderCursor: nil)
+
+        await w.refreshLists()
+
+        XCTAssertEqual(w.goals.map(\.id), ["g2"], "the stale goal goes")
+        XCTAssertTrue(w.ideas.isEmpty)
+        XCTAssertTrue(w.feed.isEmpty)
+        XCTAssertEqual(w.conversations.map(\.id), ["c1"])
+        XCTAssertNil(w.items["c9"])
+        XCTAssertEqual(w.store?.itemCount("c9"), 0, "the deleted chat leaves the database too")
+    }
+
+    func testAListThatCannotBeReadIsLeftAlone() async throws {
+        let (w, url) = try connectedWorld { _ in nil }
+        defer { ProfileURLProtocol.handler = nil; try? FileManager.default.removeItem(at: url) }
+        w.goals = [try deletionRow(#"{"id":"g1","agentId":"a1","status":"active"}"#)]
+        await w.refreshLists()
+        XCTAssertEqual(w.goals.map(\.id), ["g1"], "an offline or failing server must not empty the screens")
+    }
+
+    func testOpeningAStoredChatDropsAMessageDeletedOnTheServer() async throws {
+        let (w, url) = try connectedWorld { path in
+            // The newest page, newest first: i2 was deleted on the server, i0 is older than the page.
+            path == "/v1/conversations/c1/items"
+                ? #"{"items":[{"id":"i3","conversationId":"c1","at":"2026-11-02T10:00:03.000Z","type":"user_message","text":"m3"},{"id":"i1","conversationId":"c1","at":"2026-11-02T10:00:01.000Z","type":"user_message","text":"m1"}],"nextCursor":"below-1"}"#
+                : nil
+        }
+        defer { ProfileURLProtocol.handler = nil; try? FileManager.default.removeItem(at: url) }
+        w.conversations = [Conversation(id: "c1", kind: "direct", agentIds: ["a1"])]
+        let stored = (0...3).map { deletionItem($0) }
+        w.store?.replaceNewest("c1", items: stored, olderCursor: "below-0")
+        XCTAssertTrue(w.hydrateChat("c1"))
+        XCTAssertEqual(w.items["c1"]?.map(\.id), ["i0", "i1", "i2", "i3"])
+
+        await w.fetchNewest("c1")
+
+        XCTAssertEqual(w.items["c1"]?.map(\.id), ["i0", "i1", "i3"], "the stale message leaves the screen, older pages stay")
+        XCTAssertEqual(w.store?.newest("c1", limit: 10).map(\.id), ["i0", "i1", "i3"], "and the database")
+        XCTAssertEqual(w.history["c1"]?.olderCursor, "below-0")
     }
 }
 
@@ -1110,7 +1298,7 @@ final class AgentCreationChatTests: XCTestCase {
         }
         let world = World()
         world.selfId = "owner"
-        world.api = API(session: Session(server: URL(string: "https://create.fixture.invalid")!, token: "fixture", userId: "owner", name: "Fixture", email: "fixture@example.invalid"), transport: URLSession(configuration: configuration))
+        world.api = API(session: Session(token: "fixture", userId: "owner", name: "Fixture", email: "fixture@example.invalid"), transport: URLSession(configuration: configuration))
         return world
     }
 
@@ -1211,7 +1399,7 @@ final class AguiNativeTests: XCTestCase {
         AguiURLProtocol.handler = { request in reply(request, recorder.record(request)) }
         let world = World()
         world.selfId = "owner"
-        world.api = API(session: Session(server: URL(string: "https://agui.fixture.invalid")!, token: "fixture",
+        world.api = API(session: Session(token: "fixture",
                                         userId: "owner", name: "Fixture", email: "fixture@example.invalid"),
                         transport: URLSession(configuration: config))
         return world

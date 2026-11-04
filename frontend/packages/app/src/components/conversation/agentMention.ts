@@ -1,4 +1,4 @@
-import type { Agent } from "@agent-desktop/client";
+import type { Agent, Mention } from "@agent-desktop/client";
 import { type MessageResponseProps, defaultRemarkPlugins } from "@agent-desktop/ui";
 import type { ComponentType, ReactElement } from "react";
 import { ResolvedMention } from "./MentionText";
@@ -62,7 +62,25 @@ const OPAQUE_NODES = new Set([
   "toml",
 ]);
 
-export function buildAgentMentionRoster(agents: Agent[] | undefined): AgentMentionRoster {
+/**
+ * A last line that is only the "@Name" of a mentioned agent already named earlier in the message
+ * (old messages repeated the mention there) shows nothing extra; otherwise it stays and becomes a chip.
+ */
+export function dropRepeatedTrailingMention(text: string, mentions: Mention[], agentById: Map<string, Agent>): string {
+  const lines = text.split("\n");
+  let last = lines.length - 1;
+  while (last >= 0 && lines[last]?.trim() === "") last--;
+  const line = lines[last]?.trim().toLowerCase();
+  if (!line) return text;
+  const before = lines.slice(0, last).join("\n").toLowerCase();
+  for (const mention of mentions) {
+    const name = mention.kind === "agent" ? agentById.get(mention.id)?.name.toLowerCase() : undefined;
+    if (name && line === `@${name}` && before.includes(`@${name}`)) return lines.slice(0, last).join("\n").trimEnd();
+  }
+  return text;
+}
+
+export function buildAgentMentionRoster(agents: Agent[] | undefined, mentions: Mention[] = []): AgentMentionRoster {
   if (!agents || agents.length === 0) return EMPTY_ROSTER;
   const groups = new Map<string, Agent[]>();
   for (const agent of agents) {
@@ -77,9 +95,19 @@ export function buildAgentMentionRoster(agents: Agent[] | undefined): AgentMenti
     if (group.length === 1 && only) byHandle.set(key, only);
   }
   const byId = new Map(agents.map((agent) => [agent.id, agent] as const));
+  // The message's own `mentions` carry the agent's id; the text shows its current "@Name".
+  const named: string[] = [];
+  for (const mention of mentions) {
+    const agent = mention.kind === "agent" ? byId.get(mention.id) : undefined;
+    if (!agent || agent.name === "") continue;
+    const key = agent.name.toLowerCase();
+    if (!byHandle.has(key)) byHandle.set(key, agent);
+    named.push(key);
+  }
   const revision = agents
     .map((agent) => [agent.id, agent.handle, agent.name, JSON.stringify(agent.avatar)].join("\u0000"))
     .sort()
+    .concat(named)
     .join("\u0001");
   return { byHandle, byId, revision };
 }

@@ -158,9 +158,9 @@ extension World {
         return image
     }
 
-    /// A server-relative URL (a signed icon) made absolute against the signed-in server.
+    /// A server-relative URL (a signed icon) made absolute against the backend.
     func absoluteURL(_ path: String?) -> URL? {
-        path.flatMap { URL(string: $0, relativeTo: api?.session.server)?.absoluteURL }
+        path.flatMap { URL(string: $0, relativeTo: Backend.url)?.absoluteURL }
     }
 
     /// The server's brand picture (PNG) for a connector catalog id or channel kind.

@@ -41,6 +41,12 @@ struct TakeoverView: View {
         return ["textbox", "searchbox", "combobox", "textfield", "text field", "input", "textarea", "password", "spinbutton"].contains(role)
     }
 
+    /// The agent's own words for what to do on the screen (the request's reason), while the request is still open.
+    private var instruction: String? {
+        guard let request, request.status == "pending", let reason = request.payload?.reason, !reason.isEmpty else { return nil }
+        return reason
+    }
+
     /// The focus rectangle in framebuffer pixels.
     private var focusRect: CGRect? {
         guard let r = request?.payload?.focus?.rect, let w = r.width, let h = r.height, w > 0, h > 0 else { return nil }
@@ -74,8 +80,8 @@ struct TakeoverView: View {
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 1) {
                         Text(user ? "You're in control" : "Taking control…").text(.md, .semibold).foregroundStyle(.white)
-                        // No browser tab title in the computer state yet: the agent's name stands in.
-                        Text(name).text(.xs).foregroundStyle(.white.opacity(0.55))
+                        // What the agent asked for stays in view while the person works; with no request the agent's name stands in.
+                        Text(instruction ?? name).text(.xs).foregroundStyle(.white.opacity(0.55)).lineLimit(2).multilineTextAlignment(.center)
                     }
                 }
                 ToolbarItem(placement: .topBarLeading) {
@@ -84,7 +90,9 @@ struct TakeoverView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Hand back", systemImage: "checkmark") { handBack() }
+                    // A word, not a bare checkmark: this ends the request and wakes the agent.
+                    Button("Hand back") { handBack() }.fontWeight(.semibold)
+                        .accessibilityIdentifier("takeover-hand-back")
                         .accessibilityLabel("Hand control back to \(name)")
                 }
             }

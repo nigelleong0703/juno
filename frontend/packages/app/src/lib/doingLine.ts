@@ -1,8 +1,11 @@
 import type { Agent, Run } from "@agent-desktop/client";
+import { t } from "./i18n";
 
-/** Statuses of a run the agent is still working on (or waiting on the user for). */
-/** Runs the agent is actually on now (iPhone World+Runs `isWorking`): a blocked run waits on something else and is not "working". `waiting_for_input` stays: its pending request turns the pill into "Needs you". */
+/** Runs the agent has not finished (iPhone World+Runs `isWorking`): a blocked run waits on something else and is not "working". `waiting_for_input` stays in the list (the chat is still live, so a lost connection still shows), but it is not work in progress: see `WORKING_RUN`. */
 export const ACTIVE_RUN: Run["status"][] = ["running", "waiting_for_input", "queued"];
+
+/** Runs the agent is doing work on right now; a run waiting for the person is not one of them (the line says "Waiting for you"). */
+const WORKING_RUN: Run["status"][] = ["running", "queued"];
 
 /** The newest top-level run (no parent) of an agent that matches `keep`, by `startedAt`. */
 function newestTopLevelRun(
@@ -37,7 +40,9 @@ export function resolveDoingLine(input: {
   runs?: readonly Run[];
 }): string | undefined {
   const { agentId, status, planned, agentDoing, runs } = input;
-  const activeRun = newestTopLevelRun(runs, agentId, (run) => ACTIVE_RUN.includes(run.status));
+  const activeRun = newestTopLevelRun(runs, agentId, (run) => WORKING_RUN.includes(run.status));
+  // Only a run waiting for the person is open: the agent is not working, so never "Working…" or its doing line.
+  if (!activeRun && newestTopLevelRun(runs, agentId, (run) => run.status === "waiting_for_input")) return t("tasks.waitingForYou");
   if (!activeRun && status !== "working" && status !== "needs_you") return undefined;
   const said = new Set((runs ?? []).filter((run) => run.agentId === agentId && !run.titleGenerated).map((run) => run.title.trim()));
   const agentWords = (text: string | undefined) => (text !== undefined && text.trim() !== "" && !said.has(text.trim()) ? text : undefined);

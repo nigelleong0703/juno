@@ -19,8 +19,8 @@ export interface ListRowProps {
   className?: string;
   /** Disable the two-line chat layout and keep everything on one line. */
   dense?: boolean;
-  /** `radio` for a row that is one choice of a single-select list (it then reports `selected` as checked); default `button`. */
-  role?: "button" | "radio";
+  /** `radio` for a row that is one choice of a single-select list, `checkbox` for one of a multi-select list (both report `selected` as checked); default `button`. */
+  role?: "button" | "radio" | "checkbox";
 }
 
 /**
@@ -46,7 +46,7 @@ export function ListRow({
       data-slot="list-row"
       data-selected={selected || undefined}
       role={interactive ? role : undefined}
-      aria-checked={interactive && role === "radio" ? selected : undefined}
+      aria-checked={interactive && role !== "button" ? selected : undefined}
       tabIndex={interactive ? 0 : undefined}
       onClick={onClick}
       onKeyDown={

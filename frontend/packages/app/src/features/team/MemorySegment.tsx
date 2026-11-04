@@ -21,6 +21,11 @@ import {
   LoadingState,
   SearchField,
   SegmentedControl,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Switch,
   Textarea,
   toast,
@@ -51,6 +56,9 @@ export const SEARCH_ID = "search";
 
 /** Who may hear an item: `keep` is the group it was said in (only offered when it has one), `owner` or `public`. */
 type Audience = "keep" | "owner" | "public";
+
+/** The keeper Select's value for an item every agent can read (`agentId` null on the wire). */
+const SHARED = "all";
 
 /** What the server calls the place of an item no conversation is known for. */
 const EARLIER_MEMORY = "Earlier memory";
@@ -245,12 +253,11 @@ function MemorySearch({
                 <button type="button" onClick={() => setOpenId(item.id)} className="flex w-full items-start gap-3 rounded-xl px-1 py-3 text-left hover:bg-interactive-hover focus-ring">
                   <span className="min-w-0 flex-1">
                     <span className="line-clamp-2 block text-sm text-fg">{item.text}</span>
-                    {item.sensitive || group ? (
-                      <span className="mt-1 flex items-center gap-1.5 text-[13px] text-fg-muted">
-                        {item.sensitive ? <Lock className="size-3 shrink-0" aria-label={t("team.sensitive")} /> : null}
-                        {group ? <span className="truncate">{group}</span> : null}
-                      </span>
-                    ) : null}
+                    <span className="mt-1 flex items-center gap-1.5 text-[13px] text-fg-muted">
+                      {item.sensitive ? <Lock className="size-3 shrink-0" aria-label={t("team.sensitive")} /> : null}
+                      {group ? <span className="truncate">{group}</span> : null}
+                      {item.agentId ? null : <span className="truncate">{t("team.memoryAllAgents")}</span>}
+                    </span>
                   </span>
                   {agent ? <AgentAvatar agentId={agent.id} avatar={agent.avatar} size={20} className="mt-0.5 shrink-0" /> : null}
                 </button>
@@ -348,6 +355,28 @@ function FactDialog({ item, onClose }: { item: MemoryItemView; onClose: () => vo
               }}
               items={pills}
             />
+          </FormField>
+
+          <FormField label={t("team.memoryKeeper")} raw>
+            <Select
+              value={item.agentId ?? SHARED}
+              onValueChange={(next) => {
+                if (next === (item.agentId ?? SHARED)) return;
+                update.mutate({ id: item.id, patch: { agentId: next === SHARED ? null : next } }, { onError });
+              }}
+            >
+              <SelectTrigger aria-label={t("team.memoryKeeper")} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={SHARED}>{t("team.memoryAllAgents")}</SelectItem>
+                {(agents ?? []).map((candidate) => (
+                  <SelectItem key={candidate.id} value={candidate.id}>
+                    {t("team.memoryOnlyAgent", { name: candidate.name })}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </FormField>
 
           <div className="flex items-center justify-between gap-3">

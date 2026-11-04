@@ -6,20 +6,16 @@ struct AgentCardView: View {
     var agentId: String
     var tab: String?
 
+    /// Hosted by `AgentCardController` on a tab's stack (no NavigationStack here): the toolbar items become its bar items,
+    /// the left is the system back button.
     var body: some View {
-        NavigationStack {
-            AgentProfileView(agentId: agentId, titled: false, startTab: tab)
-                .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
-                .toolbar {
-                    // `world.agentPage` is the one switch for this page (JunoTabBarController watches it and dismisses with the
-                    // zoom back); SwiftUI's `dismiss` does not reach a UIKit-presented cover from inside a NavigationStack.
-                    ToolbarItem(placement: .topBarLeading) { Button("Close", systemImage: "xmark") { world.agentPage = nil }.accessibilityIdentifier("agent-profile-close") }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        ShareLink(item: "\(world.agent(agentId)?.name ?? "Agent") on Juno").accessibilityLabel("Share")
-                    }
+        AgentProfileView(agentId: agentId, titled: false, startTab: tab)
+            .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ShareLink(item: "\(world.agent(agentId)?.name ?? "Agent") on Juno").accessibilityLabel("Share")
                 }
-                .junoDestinations()
-        }
+            }
     }
 }
 
@@ -137,6 +133,7 @@ struct ProfileHeader: View {
         let agent = world.agent(agentId)
         VStack(spacing: 6) {
             AvatarView(agent: agent, size: AvatarSize.profile)
+                .agentZoomSource(AgentZoomSources.profileId(agentId))
                 .overlay(alignment: .bottomTrailing) {
                     Button(action: onEdit) { Image(systemName: "pencil").font(.system(size: 12, weight: .semibold)) }
                         .buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.small).tint(Theme.fg)
@@ -150,7 +147,7 @@ struct ProfileHeader: View {
             let working = agent.map(isWorking) ?? false
             let paused = agent?.pausedAt != nil
             HStack(spacing: 8) {
-                statusMark(live: working && !paused)
+                statusMark(live: working && !paused && !world.isWaitingForYou(agentId))
                 Text(paused ? "Paused" : (agent.map { doing($0) } ?? statusLabel)).text(.md, .medium).foregroundStyle(Theme.fg).lineLimit(1)
                     .accessibilityIdentifier("agent-profile-doing")
                 if working {
@@ -513,7 +510,7 @@ struct TaskCard: View {
     var body: some View {
         let run = world.run(runId)
         let task = world.tasks.values.joined().first { ($0.childRunId ?? $0.runId) == runId }
-        let children = world.children(of: runId)
+        let subagents = world.subagents(of: runId)
         // The task's own verdict wins: a run can end "completed" with the task failed.
         let phase = task.map(TaskWords.phase)
         let status = run?.status
@@ -544,8 +541,8 @@ struct TaskCard: View {
                     .sheet(isPresented: $viewing) { ImageViewer(image: shot) }
                 }
                 StepSection(label: "Main", steps: run?.steps ?? [])
-                ForEach(children) { child in
-                    StepSection(label: child.title ?? "Helper", status: child.status, steps: child.steps ?? [])
+                ForEach(subagents) { subagent in
+                    StepSection(label: subagent.title ?? "Subagent", status: subagent.status, steps: subagent.steps ?? [])
                 }
             }
             .padding(.top, 20)
@@ -558,7 +555,7 @@ struct TaskCard: View {
         .task(id: screenshotId) { if let id = screenshotId { shot = await world.previewImage(id) } }
         }
         .presentationCornerRadius(32)
-        .task(id: children.map(\.id)) { world.loadSteps(runId); await world.loadChildren(of: runId) }
+        .task(id: subagents.map(\.id)) { world.loadSteps(runId); await world.loadSubagents(of: runId) }
     }
 }
 

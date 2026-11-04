@@ -59,13 +59,13 @@ final class LocalStore: Sendable {
         URL.applicationSupportDirectory.appending(path: "Juno/Store", directoryHint: .isDirectory)
     }
 
-    static func fileName(server: URL, userId: String) -> String {
-        let digest = SHA256.hash(data: Data("\(server.absoluteString.lowercased())|\(userId)".utf8))
+    static func fileName(userId: String) -> String {
+        let digest = SHA256.hash(data: Data("\(Backend.url.absoluteString)|\(userId)".utf8))
         return "store-" + digest.prefix(10).map { String(format: "%02x", $0) }.joined() + ".sqlite"
     }
 
     static func open(_ session: Session) -> LocalStore? {
-        try? LocalStore(url: directory().appending(path: fileName(server: session.server, userId: session.userId)))
+        try? LocalStore(url: directory().appending(path: fileName(userId: session.userId)))
     }
 
     /// Sign-out: every account's file goes (a store is also never reused after its owner signs out).
@@ -142,6 +142,42 @@ final class LocalStore: Sendable {
                 ON CONFLICT(conversationId) DO UPDATE SET olderCursor = excluded.olderCursor, reachedStart = excluded.reachedStart
                 """, arguments: [conversationId, olderCursor, olderCursor == nil, Date().timeIntervalSince1970])
         }
+    }
+
+    /// The newest page of a chat fetched again while the chat is already stored (launch, reconnect, opening it): the stored
+    /// items inside the page's time range that the server no longer returns are deleted (they were removed while the app
+    /// was offline, or straight in the server's database), the page is written, and the older pages already stored stay
+    /// with the cursor below them, so history is not downloaded again. `items` ascending.
+    ///
+    /// When the page and the stored items do not touch (more new items arrived than one page holds) the stored rows would no
+    /// longer be contiguous with the page, and the chat starts over like `replaceNewest`. Returns whether older stored rows
+    /// were kept (false: the page is all there is, or the chat started over).
+    @discardableResult
+    func reconcileNewest(_ conversationId: String, items: [Item], olderCursor: String?) -> Bool {
+        let kept: Bool? = try? pool.write { db -> Bool? in
+            guard let first = items.first,
+                  try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM chat WHERE conversationId = ?)", arguments: [conversationId]) == true else { return nil }
+            let from = Self.at(first)
+            let inRange = try String.fetchAll(db, sql: "SELECT id FROM item WHERE conversationId = ? AND (at > ? OR (at = ? AND id >= ?))",
+                                              arguments: [conversationId, from, from, first.id])
+            // A page that is not the whole chat and meets no stored row leaves a hole between them.
+            if olderCursor != nil, inRange.isEmpty { return nil }
+            // The page is the whole chat: every stored row not in it is gone from the server, however old.
+            let candidates = olderCursor == nil ? try String.fetchAll(db, sql: "SELECT id FROM item WHERE conversationId = ?", arguments: [conversationId]) : inRange
+            let wanted = Set(items.map(\.id))
+            for id in candidates where !wanted.contains(id) { try db.execute(sql: "DELETE FROM item WHERE id = ?", arguments: [id]) }
+            try Self.upsert(db, conversationId, items)
+            let below = try Bool.fetchOne(db, sql: "SELECT EXISTS (SELECT 1 FROM item WHERE conversationId = ? AND (at < ? OR (at = ? AND id < ?)))",
+                                          arguments: [conversationId, from, from, first.id]) == true
+            // Nothing stored below the page: the page's own cursor is the way further back.
+            if !below {
+                try db.execute(sql: "UPDATE chat SET olderCursor = ?, reachedStart = ? WHERE conversationId = ?", arguments: [olderCursor, olderCursor == nil, conversationId])
+            }
+            return below
+        }
+        if let kept { return kept }
+        replaceNewest(conversationId, items: items, olderCursor: olderCursor)
+        return false
     }
 
     /// Items that arrived live. Only chats whose newest page is stored keep them (otherwise the rows would not be contiguous).

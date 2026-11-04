@@ -19,6 +19,7 @@ import { ChannelBadge, channelPlatformName } from "../channel/platforms";
 import { AgentStatusPill } from "./AgentStatusPill";
 import { agentAccentStyle } from "../../lib/avatars";
 import { resolveDoingLine } from "../../lib/doingLine";
+import { runShowsWork } from "../../lib/stepLine";
 import { AgentAvatar } from "../agent/AgentAvatar";
 import { AgentAvatarGroup } from "../agent/AgentAvatarGroup";
 import { Composer } from "./Composer";
@@ -27,7 +28,7 @@ import { quotePrefix } from "../../lib/quote";
 import { agentStatusMeta } from "../../lib/status";
 import { Transcript, conversationColumn } from "./Transcript";
 import { useTypingActivity } from "../../data/typing";
-import { canStopRun } from "../../data/child-runs";
+import { canStopRun } from "../../data/subagent-runs";
 import { broadcastCandidate } from "../../lib/mentions";
 
 export interface ConversationViewProps {
@@ -194,7 +195,7 @@ export function ConversationView({
   // 2026-10-05: a blank agent must never show another agent's run in its header).
   // H-94: Stop is offered for every live run of this chat, including one waiting for the user's
   // approval or answer (waiting_for_input) and one still queued; finished runs never match.
-  // Child runs share the chat's conversation id, so the chat's own top-level run wins over them.
+  // Subagent runs share the chat's conversation id, so the chat's own top-level run wins over them.
   const liveRuns = (runningRuns ?? []).filter(
     (run) => run.conversationId === conversation?.id && canStopRun(run.status),
   );
@@ -221,7 +222,9 @@ export function ConversationView({
     connected: streamConnected,
   });
   // Persistent presence under the agent's name (iPhone parity): reconnecting, what it is doing, or its status.
-  const presenceOverride = status?.kind === "reconnecting" ? t("agentStatus.reconnecting") : undefined;
+  // A reply still being written (no tool step yet) is "Typing…", not "Working"; "Working" starts with the first step.
+  const typingOnly = replyingRun !== undefined && !runShowsWork(replyingRun);
+  const presenceOverride = status?.kind === "reconnecting" ? t("agentStatus.reconnecting") : typingOnly ? t("agentStatus.typing") : undefined;
   // The typing bubble is the only working indicator: from send until the run ends, under the newest message
   // (interim replies included). A run waiting for the owner is not "replying": its request card shows instead,
   // and the bubble returns when the run is running again.
@@ -360,7 +363,7 @@ export function ConversationView({
           <Transcript
             items={shownItems}
             showAwaiting={awaitingReply || greeting}
-            awaitingRunId={replyingRun?.id}
+            awaitingRunId={replyingRun !== undefined && runShowsWork(replyingRun) ? replyingRun.id : undefined}
             agentById={agentById}
             agents={agents}
             showAuthors={isGroup}

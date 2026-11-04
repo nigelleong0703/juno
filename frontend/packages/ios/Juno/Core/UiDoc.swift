@@ -23,10 +23,13 @@ struct UiDoc: Codable, Hashable, Sendable {
         return !all.isEmpty && all.allSatisfy { $0.isKnown }
     }
     var interactive: UiBlock? { blocks.first { $0.isInteractive } }
-    /// The headline: the title, else the doc's first line of text.
+    /// The headline: the title, else the first text block. The server's plain-text fallback (`text`) is only the
+    /// headline of a doc this app cannot draw: for a drawable doc it is a dump of the blocks ("Fields: ...").
     var headline: String? {
         if let title, !title.isEmpty { return title }
-        return text?.split(separator: "\n").first.map(String.init)
+        guard isRenderable else { return text?.split(separator: "\n").first.map(String.init) }
+        for block in blocks { if case .text(let first) = block { return first.split(separator: "\n").first.map(String.init) } }
+        return nil
     }
 }
 

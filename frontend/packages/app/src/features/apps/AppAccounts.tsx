@@ -1,6 +1,7 @@
 import type { AppDetail } from "@agent-desktop/client";
 import { Button, ListRow } from "@agent-desktop/ui";
 import { usePlatform } from "../../data/ClientProvider";
+import { installationNeedsScope, installationNeedsSignIn } from "../../lib/apps";
 import { t } from "../../lib/i18n";
 import { ShowMore, useCapped } from "../agents/card/parts";
 
@@ -28,18 +29,18 @@ export function AppAccounts({ app, busy, onAddAnother, onSignInAgain, onRemove, 
       <h2 className="text-sm font-semibold text-fg">{chat ? t("apps.workspaces") : t("apps.accounts")}</h2>
       <ul className="flex flex-col">
         {capped.shown.map((installation) => {
-          const signedOut = installation.status !== "connected";
+          const signedOut = installationNeedsSignIn(installation);
           return (
             <li key={installation.id}>
               <ListRow
                 dense
                 title={installation.label}
-                meta={signedOut ? <span className="text-warning">{t("apps.state.expired")}</span> : undefined}
+                meta={signedOut ? <span className="text-warning">{installationNeedsScope(installation) ? t("apps.state.needsScope") : t("apps.state.expired")}</span> : undefined}
                 trailing={
                   <span className="flex items-center gap-1">
                     {signedOut && !chat ? (
                       <Button variant="ghost" size="xs" disabled={busy} onClick={() => onSignInAgain(installation.id)}>
-                        {t("apps.signInAgain")}
+                        {installationNeedsScope(installation) ? t("apps.reconnect") : t("apps.signInAgain")}
                       </Button>
                     ) : null}
                     <Button variant="ghost" size="xs" aria-label={t("apps.removeNamed", { name: installation.label })} onClick={() => onRemove(installation)}>

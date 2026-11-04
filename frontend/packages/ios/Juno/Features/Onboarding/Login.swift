@@ -93,10 +93,9 @@ struct JunoMark: View {
 }
 
 /// The credential form (web AccountForm) as the second state of the same screen: system text fields on glass,
-/// a prominent submit, the server tucked under "Server", errors inline.
+/// a prominent submit, errors inline.
 struct CredentialsForm: View {
     @Environment(World.self) private var world
-    @AppStorage("server") private var server = "https://juno.example.com"
     @AppStorage("email") private var email = ""
     @Binding var mode: AuthMode
     var ns: Namespace.ID
@@ -106,9 +105,8 @@ struct CredentialsForm: View {
     @State private var busy = false
     @State private var error: String?
     @State private var shown = false
-    @State private var serverOpen = false
     @FocusState private var focus: Field?
-    private enum Field { case name, email, password, server }
+    private enum Field { case name, email, password }
 
     private var register: Bool { mode == .register }
 
@@ -167,33 +165,6 @@ struct CredentialsForm: View {
                 withAnimation(.snappy(duration: 0.25)) { mode = register ? .signIn : .register; password = ""; error = nil }
             }
             .text(.sm).foregroundStyle(Theme.fgMuted)
-            // A plain button row, not a DisclosureGroup: one tap toggles once, and the whole row is the target.
-            VStack(alignment: .leading, spacing: 0) {
-                Button { serverOpen.toggle() } label: {
-                    HStack {
-                        Text("Server")
-                        Spacer()
-                        Image(systemName: "chevron.right").text(.xs, .semibold)
-                            .rotationEffect(.degrees(serverOpen ? 90 : 0))
-                    }
-                    .frame(minHeight: 44).contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Server").accessibilityValue(serverOpen ? "expanded" : "collapsed")
-                if serverOpen {
-                    VStack(alignment: .leading, spacing: 8) {
-                        TextField("https://…", text: $server).keyboardType(.URL).textContentType(.URL)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled().focused($focus, equals: .server)
-                            .submitLabel(.done).onSubmit { focus = nil }.accessibilityLabel("Server address")
-                            .inputField()
-                        Text("The default is the public Juno API. Point this at your own server to use it instead.")
-                            .text(.xs).foregroundStyle(Theme.fgSubtle)
-                    }
-                    .padding(.top, 4)
-                }
-            }
-            .text(.sm).foregroundStyle(Theme.fgMuted)
-            .animation(.snappy(duration: 0.25), value: serverOpen)
         }
         .padding(.horizontal, 24).padding(.bottom, 16)
         .animation(.snappy(duration: 0.25), value: error)
@@ -210,13 +181,10 @@ struct CredentialsForm: View {
         guard ready, !busy else { return }
         busy = true; error = nil
         defer { busy = false }
-        guard let url = URL(string: server.trimmingCharacters(in: .whitespaces)), url.scheme?.hasPrefix("http") == true else {
-            error = APIError.badServer.localizedDescription; serverOpen = true; return
-        }
         do {
             let session = register
-                ? try await API.signUp(server: url, name: name, email: email, password: password)
-                : try await API.signIn(server: url, email: email, password: password)
+                ? try await API.signUp(name: name, email: email, password: password)
+                : try await API.signIn(email: email, password: password)
             try await world.connect(session)
             SessionStore.save(session)
             password = ""
@@ -231,7 +199,7 @@ struct CredentialsForm: View {
 
     /// Network failures say what to do; server answers (wrong password, email taken) pass through as written.
     private func friendly(_ error: Error) -> String {
-        if error is URLError { return "Can't reach the server. Check your connection, or the address under Server." }
+        if error is URLError { return "Can't reach Juno. Check your connection." }
         return error.localizedDescription
     }
 }
@@ -255,7 +223,6 @@ struct AccountSection: View {
         Section("Account") {
             if let s = world.session {
                 LabeledContent(s.name, value: s.email)
-                LabeledContent("Server", value: s.server.absoluteString)
                 Button("Sign out", role: .destructive) { world.signOut() }
             }
         }

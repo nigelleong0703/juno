@@ -15,6 +15,7 @@ export type RoutineItem = Extract<Item, { type: "routine" }>;
 export type HandoffItem = Extract<Item, { type: "handoff" }>;
 export type SystemItem = Extract<Item, { type: "system" }>;
 export type FeedRefItem = Extract<Item, { type: "feed_ref" }>;
+export type ScreenRefItem = Extract<Item, { type: "screen_ref" }>;
 export type RoleSuggestionItem = Extract<Item, { type: "role_suggestion" }>;
 
 /**

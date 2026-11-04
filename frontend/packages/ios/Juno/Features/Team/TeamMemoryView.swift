@@ -184,6 +184,10 @@ enum MemoryMeta {
     /// What the server calls the place of an item no conversation is known for; it says nothing about where.
     static let earlierMemory = "Earlier memory"
 
+    /// Whose an item is: shared with every agent, or kept by one.
+    static let allAgents = "All agents"
+    static func onlyAgent(_ agent: Agent) -> String { "Only \(agent.name)" }
+
     /// The person's own words (`quote`), or nil when the item has none.
     static func quote(_ item: Contract.MemoryItemView) -> String? {
         item.quote?.text.flatMap { $0.isEmpty ? nil : $0 }
@@ -289,6 +293,14 @@ private struct MemoryFactSheet: View {
             .pickerStyle(.segmented)
             .accessibilityIdentifier("memory-fact-audience")
         }
+        let keeperOptions = [MemoryMeta.allAgents] + world.agents.map { MemoryMeta.onlyAgent($0) }
+        JunoFormField(label: "Who remembers it") {
+            JunoPickerRow(value: agent.map(MemoryMeta.onlyAgent) ?? MemoryMeta.allAgents, options: keeperOptions, id: "memory-fact-keeper") { pick in
+                let next: MemoryKeeper? = pick == MemoryMeta.allAgents ? .all : world.agents.first { MemoryMeta.onlyAgent($0) == pick }.map { .agent($0.id) }
+                guard let next, next != (item.agentId.map { .agent($0) } ?? .all) else { return }
+                store.setKeeper(world, item, next)
+            }
+        }
         VStack(alignment: .leading, spacing: 6) {
             Toggle("Keep private", isOn: Binding(get: { item.sensitive == true }, set: { store.setSensitive(world, item, $0) }))
                 .accessibilityIdentifier("memory-fact-private")
@@ -358,13 +370,16 @@ private struct MemoryRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.text ?? "").text(.md).foregroundStyle(Theme.fg).lineLimit(2).multilineTextAlignment(.leading)
                 let group = MemoryMeta.group(item)
-                if item.sensitive == true || group != nil {
+                if item.sensitive == true || group != nil || item.agentId == nil {
                     HStack(spacing: 6) {
                         if item.sensitive == true {
                             Image(systemName: "lock.fill").text(.xxs).foregroundStyle(Theme.fgSubtle).accessibilityLabel("Sensitive")
                         }
                         if let group {
                             Text(group).text(.xs).foregroundStyle(Theme.fgMuted).lineLimit(1)
+                        }
+                        if item.agentId == nil {
+                            Text(MemoryMeta.allAgents).text(.xs).foregroundStyle(Theme.fgMuted).lineLimit(1)
                         }
                     }
                 }

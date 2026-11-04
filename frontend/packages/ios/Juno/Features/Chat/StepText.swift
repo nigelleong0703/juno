@@ -52,9 +52,9 @@ func stepLine(_ step: Step, in run: [Step] = []) -> (text: String, domain: Strin
         return ("Checked the open tabs", nil)
     case "browser.dialog":
         return ("Answered a page dialog", nil)
-    case "child_spawn":
-        let what = (step.verb == "Asked a helper" ? step.target : nil) ?? (args["title"] as? String) ?? (args["prompt"] as? String) ?? ""
-        return (what.isEmpty ? "Asked a helper for a hand" : "Asked a helper to \(StepText.clip(what, 60))", nil)
+    case "subagent_start":
+        let what = (step.verb == "Started a subagent" ? step.target : nil) ?? (args["title"] as? String) ?? (args["prompt"] as? String) ?? ""
+        return (what.isEmpty ? "Started a subagent" : "Started a subagent to \(StepText.clip(what, 60))", nil)
     case "request_secure_input":
         let labels = ((args["fields"] as? [[String: Any]]) ?? []).compactMap { $0["label"] as? String }
         return (labels.isEmpty ? "Asked you for details" : "Asked you for \(labels.joined(separator: ", "))", nil)
@@ -67,6 +67,8 @@ func stepLine(_ step: Step, in run: [Step] = []) -> (text: String, domain: Strin
         let name = ((args["path"] as? String) ?? "").split(separator: "/").last.map(String.init)
         let verb = tool == "files.read" ? "Read" : tool == "files.write" ? "Wrote" : "Edited"
         return ((name.map { "\(verb) \($0)" } ?? "\(verb) a file") + onMac, nil)
+    case let reminders where StepText.isRemindersBatch(reminders):
+        return (StepText.remindersLine(reminders, args: args, out: out), nil)
     case "computer_copy":
         let name = ((args["path"] as? String) ?? (args["toPath"] as? String) ?? "").split(separator: "/").last.map(String.init) ?? "a file"
         func side(_ key: String) -> String { (args[key] as? String) == "mac" ? "your Mac" : "the sandbox" }
@@ -109,6 +111,11 @@ func visibleSteps(_ steps: [Step]) -> [Step] {
 /// A short readable excerpt of what the tool returned: page snapshots, refs and fetch boilerplate stripped.
 func stepExcerpt(_ step: Step) -> String? {
     guard !StepText.isRefusedPurchase(step), let raw = step.output?.summary ?? step.output?.text else { return nil }
+    // A reminders batch: the row's sentence is the first line; what is under it is the list, one reminder per line.
+    if StepText.isRemindersBatch(StepText.tool(step)) {
+        let list = raw.split(separator: "\n").dropFirst().joined(separator: "\n")
+        return list.isEmpty ? nil : String(list.prefix(1500))
+    }
     let noise = ["Snapshot of tab", "(Fetched as text", "(Untrusted", "Page content below", "[image]", "Captured screen", "Title:", "URL:"]
     let lines = raw.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { line in
         !line.isEmpty && line.range(of: #"^[-#\s]*e\d+ \["#, options: .regularExpression) == nil
@@ -135,9 +142,24 @@ func progressText(_ progress: String) -> String {
 
 private let progressiveVerbs = ["Clicked": "Clicking", "Opened": "Opening", "Searched": "Searching", "Typed": "Typing", "Filled": "Filling",
                                 "Scrolled": "Scrolling", "Pressed": "Pressing", "Ran": "Running", "Read": "Reading", "Wrote": "Writing",
-                                "Edited": "Editing", "Copied": "Copying", "Checked": "Checking", "Answered": "Answering", "Asked": "Asking", "Looked": "Looking"]
+                                "Edited": "Editing", "Copied": "Copying", "Added": "Adding", "Changed": "Changing", "Deleted": "Deleting", "Checked": "Checking", "Answered": "Answering", "Asked": "Asking", "Looked": "Looking"]
 
 enum StepText {
+    /// The iPhone's reminder writes take a list, so a request is one step ("Added 3 reminders"), not one per reminder.
+    static func isRemindersBatch(_ tool: String) -> Bool {
+        ["phone_reminders_create", "phone_reminders_update", "phone_reminders_delete"].contains(tool)
+    }
+
+    /// The step's sentence. The tool's answer starts with it ("Added 2 of 3 reminders; 1 failed."); before the answer, or when the
+    /// call was refused, it is the count in the call.
+    static func remindersLine(_ tool: String, args: [String: Any], out: String) -> String {
+        let verb = tool.hasSuffix("create") ? "Added" : tool.hasSuffix("update") ? "Changed" : "Deleted"
+        let first = out.split(separator: "\n").first.map(String.init) ?? ""
+        if first.hasPrefix(verb + " ") { return first.hasSuffix(".") ? String(first.dropLast()) : first }
+        let count = (args["reminders"] as? [Any])?.count ?? 0
+        return count == 1 ? "\(verb) a reminder" : "\(verb) \(count) reminders"
+    }
+
     /// The backend names what was clicked: `Clicked "512 GB" (e681) on tab t1 (…)` / `Clicked "Buy now" at (x, y)`.
     static func clickedLabel(_ output: String) -> String? {
         guard output.hasPrefix("Clicked \""), let end = output.dropFirst(9).firstIndex(of: "\"") else { return nil }
@@ -150,7 +172,7 @@ enum StepText {
         switch step.verb {
         case "Read": "web_fetch"
         case "Looked up": "web_search"
-        case "Asked a helper": "child_spawn"
+        case "Started a subagent": "subagent_start"
         default: step.target ?? ""
         }
     }

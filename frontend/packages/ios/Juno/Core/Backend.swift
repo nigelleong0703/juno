@@ -5,8 +5,13 @@ import Security
 // (packages/client/src/http/*). Account mode signs in with email + password and sends the
 // session token as a Bearer header (Better Auth `bearer()` plugin, backend/api/src/account-auth.ts).
 
+/// The one backend every build talks to (debug included). Nothing in the app lets the person change it; set it to your own server before building.
+enum Backend {
+    static let url = URL(string: "https://juno.example.com")!
+}
+
+/// A `server` key in a session saved by an older build is ignored when it is decoded.
 struct Session: Codable, Equatable {
-    var server: URL
     var token: String
     var userId: String
     var name: String
@@ -26,8 +31,8 @@ enum APIError: LocalizedError {
         case .http(let code, let message): message.isEmpty ? "Server responded \(code)" : message
         case .api(let status, _, let message): message.isEmpty ? "Server responded \(status)" : message
         case .fields(let message, _): message.isEmpty ? "Some answers need fixing." : message
-        case .badServer: "Enter a server address like http://100.x.y.z:8787"
-        case .notSignedIn: "Sign in to a server first."
+        case .badServer: "Can't reach Juno."
+        case .notSignedIn: "Sign in first."
         }
     }
 }
@@ -64,7 +69,7 @@ struct API {
     var transport: URLSession = http
 
     private func request(_ path: String, method: String = "GET", body: Encodable? = nil, headers: [String: String] = [:]) async throws -> Data {
-        guard let url = URL(string: path, relativeTo: session.server) else { throw APIError.badServer }
+        guard let url = URL(string: path, relativeTo: Backend.url) else { throw APIError.badServer }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("Bearer \(session.token)", forHTTPHeaderField: "Authorization")
@@ -133,7 +138,7 @@ struct API {
 
     /// A POST whose body is the raw bytes, under their own content type (the dictation recording).
     func postRaw(_ path: String, _ body: Data, contentType: String) async throws -> Data {
-        guard let url = URL(string: path, relativeTo: session.server) else { throw APIError.badServer }
+        guard let url = URL(string: path, relativeTo: Backend.url) else { throw APIError.badServer }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("Bearer \(session.token)", forHTTPHeaderField: "Authorization")
@@ -232,17 +237,17 @@ struct API {
     }
 
     /// POST /auth/sign-in/email → { token, user } (account mode).
-    static func signIn(server: URL, email: String, password: String) async throws -> Session {
-        try await auth(server: server, path: "auth/sign-in/email", body: ["email": email, "password": password])
+    static func signIn(email: String, password: String) async throws -> Session {
+        try await auth(path: "auth/sign-in/email", body: ["email": email, "password": password])
     }
 
     /// POST /auth/sign-up/email → { token, user }; a new account starts empty.
-    static func signUp(server: URL, name: String, email: String, password: String) async throws -> Session {
-        try await auth(server: server, path: "auth/sign-up/email", body: ["name": name, "email": email, "password": password])
+    static func signUp(name: String, email: String, password: String) async throws -> Session {
+        try await auth(path: "auth/sign-up/email", body: ["name": name, "email": email, "password": password])
     }
 
-    private static func auth(server: URL, path: String, body: [String: String]) async throws -> Session {
-        var req = URLRequest(url: server.appending(path: path))
+    private static func auth(path: String, body: [String: String]) async throws -> Session {
+        var req = URLRequest(url: Backend.url.appending(path: path))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONEncoder().encode(body)
@@ -252,7 +257,7 @@ struct API {
         struct User: Decodable { var id: String; var name: String; var email: String }
         struct Result: Decodable { var token: String; var user: User }
         let r = try JSONDecoder().decode(Result.self, from: data)
-        return Session(server: server, token: r.token, userId: r.user.id, name: r.user.name, email: r.user.email)
+        return Session(token: r.token, userId: r.user.id, name: r.user.name, email: r.user.email)
     }
 }
 
@@ -280,7 +285,7 @@ struct EventStream {
                 var backoff: UInt64 = 1
                 while !Task.isCancelled {
                     do {
-                        var req = URLRequest(url: session.server.appending(path: "v1/events"))
+                        var req = URLRequest(url: Backend.url.appending(path: "v1/events"))
                         req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                         req.setValue("Bearer \(session.token)", forHTTPHeaderField: "Authorization")
                         // Presence: while this stream is open the agent knows the user has the iPhone app open.

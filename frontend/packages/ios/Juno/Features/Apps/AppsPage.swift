@@ -97,7 +97,7 @@ struct AppRow: View {
             }
             Spacer(minLength: 8)
             if app.isComingSoon { Text("Coming soon").text(.sm).foregroundStyle(Theme.fgSubtle) }
-            else if app.needsSignIn { Text("Sign in").text(.sm).foregroundStyle(Theme.warning) }
+            else if app.needsSignIn { Text(app.needsScopeOnly ? "Needs another permission" : "Sign in").text(.sm).foregroundStyle(Theme.warning) }
             Image(systemName: "chevron.right").text(.xs, .semibold).foregroundStyle(Theme.fgSubtle)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

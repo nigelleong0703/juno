@@ -21,6 +21,8 @@ import { createMemoryItemsApi, createPeopleApi } from './people.js';
 import { createModelProvidersApi } from './model-providers.js';
 import { createArtifactsApi } from './artifacts.js';
 import { createDocumentsApi } from './documents.js';
+import { createFilesApi } from './files.js';
+import { createOutboxApi } from './outbox.js';
 import { createSpacesApi } from './spaces.js';
 import { createAuditApi, createLibraryApi } from './library.js';
 import { createFeedApi, createInspirationApi } from './feed.js';
@@ -102,6 +104,8 @@ export function createHttpClient(opts: HttpClientOptions): ApiClient & EventSour
     library: createLibraryApi(http),
     artifacts: createArtifactsApi(http),
     documents: createDocumentsApi(http),
+    files: createFilesApi(http),
+    outbox: createOutboxApi(http),
     spaces: createSpacesApi(http),
     usage: createUsageApi(http),
     settings: createSettingsApi(http),

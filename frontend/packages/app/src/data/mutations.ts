@@ -407,7 +407,7 @@ export function useSetAgentPaused() {
   });
 }
 
-/** Stop every active run of an agent, child runs included (F-09); the live run events update the lists. */
+/** Stop every active run of an agent, subagent runs included (F-09); the live run events update the lists. */
 export function useStopAgent() {
   const client = useClient();
   const qc = useQueryClient();

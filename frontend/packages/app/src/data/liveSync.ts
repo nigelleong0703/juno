@@ -96,6 +96,16 @@ function prependFeedPost(qc: QueryClient, post: FeedPost): void {
   }
 }
 
+/** A deleted agent takes its goals, ideas and feed posts with it: the server removes them in the same cascade, so the cached lists drop them now. */
+function dropAgentRows(qc: QueryClient, agentId: string): void {
+  patchLists<Goal>(qc, prefix.goals, (list) => list.filter((goal) => goal.agentId !== agentId));
+  patchLists<Idea>(qc, ["ideas"], (list) => list.filter((idea) => idea.agentId !== agentId));
+  for (const [key, data] of qc.getQueriesData<FeedPages>({ queryKey: prefix.feed })) {
+    if (!data) continue;
+    qc.setQueryData<FeedPages>(key, { ...data, pages: data.pages.map((page) => ({ ...page, items: page.items.filter((post) => post.agentId !== agentId) })) });
+  }
+}
+
 function ideaMatches(params: IdeasListParams | undefined, idea: Idea): boolean {
   if (!params) return true;
   if (params.status && params.status !== idea.status) return false;
@@ -205,6 +215,7 @@ export function applyEvent(qc: QueryClient, event: AgentEvent): void {
       const { agentId } = event;
       qc.removeQueries({ queryKey: qk.agent(agentId) });
       patchLists<Agent>(qc, ["agents"], (list) => list.filter((a) => a.id !== agentId));
+      dropAgentRows(qc, agentId);
       break;
     }
 
@@ -402,6 +413,28 @@ export function applyEvent(qc: QueryClient, event: AgentEvent): void {
       const { goalId } = event;
       qc.removeQueries({ queryKey: qk.goal(goalId) });
       patchLists<Goal>(qc, prefix.goals, (list) => list.filter((entry) => entry.id !== goalId));
+      break;
+    }
+
+    case "idea.deleted": {
+      const { ideaId } = event;
+      patchLists<Idea>(qc, ["ideas"], (list) => list.filter((entry) => entry.id !== ideaId));
+      break;
+    }
+
+    case "feed.deleted": {
+      const { postId } = event;
+      for (const [key, data] of qc.getQueriesData<FeedPages>({ queryKey: prefix.feed })) {
+        if (!data) continue;
+        qc.setQueryData<FeedPages>(key, { ...data, pages: data.pages.map((page) => ({ ...page, items: page.items.filter((post) => post.id !== postId) })) });
+      }
+      void qc.invalidateQueries({ queryKey: qk.today() });
+      break;
+    }
+
+    case "item.deleted": {
+      const { conversationId, itemId } = event;
+      qc.setQueryData<Item[]>(qk.items(conversationId), (old) => old?.filter((item) => item.id !== itemId));
       break;
     }
 

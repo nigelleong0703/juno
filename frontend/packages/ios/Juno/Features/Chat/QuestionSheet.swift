@@ -31,7 +31,7 @@ struct QuestionSheet: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .scrollBounceBehavior(.basedOnSize)
-            .pageHeader(doc?.headline ?? request?.title ?? "\(name) has a question")
+            .pageHeader(doc?.headline ?? "\(name) has a question")
             .toolbar { CloseButton(identifier: "question-cancel") }
         }
         .tint(Theme.fg)

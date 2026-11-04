@@ -15,6 +15,7 @@ import { useServerConnection } from "../../components/ServerConnection";
 import { SettingsPage } from "../../templates/SettingsPage";
 import { ModelsSection } from "./models/ModelsSection";
 import { MyMacSection } from "./MyMacSection";
+import { PauseOutgoing } from "./PauseOutgoing";
 import { ProactiveRulesSection } from "./ProactiveRules";
 import { Group, Row } from "./SettingsGroup";
 import { TimeZoneSection } from "./TimeZoneSection";
@@ -69,7 +70,12 @@ export function AppSettingsPage() {
         {active === "budget" && <BudgetSection />}
         {active === "workspace" && <WorkspaceSection />}
         {active === "mac" && <MyMacSection />}
-        {active === "proactive" && <ProactiveRulesSection />}
+        {active === "proactive" && (
+          <>
+            <PauseOutgoing />
+            <ProactiveRulesSection />
+          </>
+        )}
         {active === "appearance" && <AppearanceSection />}
         {active === "connection" && <ConnectionSection />}
         {active === "about" && <AboutSection />}

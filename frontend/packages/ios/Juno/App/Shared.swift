@@ -8,6 +8,7 @@ enum Route: Hashable {
     case request(String)
     case goal(String)
     case chat(String)
+    case voiceCall(String)
     /// The Apps page, and one app's page (contracts 0.65.0; replaces Plugins › Connectors).
     case apps
     case app(String)
@@ -65,6 +66,34 @@ enum AgentZoomSources {
     static func view(for id: String) -> UIView? {
         views[id]?.reversed().compactMap(\.view).first { $0.window != nil }
     }
+    /// The big avatar on the agent page: where the tapped avatar lands.
+    static func profileId(_ agentId: String) -> String { "profile-\(agentId)" }
+
+    /// The big avatar's frame in the card's own coordinates (the card's view as laid out, whatever transform the zoom
+    /// puts on it). Nil while the avatar is not laid out in this card.
+    static func profileRect(of agentId: String, in page: UIViewController) -> CGRect? {
+        let view = page.view!
+        view.layoutIfNeeded()
+        guard let avatar = views[profileId(agentId)]?.reversed().compactMap(\.view)
+            .first(where: { $0.isDescendant(of: view) && !$0.bounds.isEmpty }) else { return nil }
+        let rect = avatar.convert(avatar.bounds, to: view)
+        return rect.intersects(view.bounds) ? rect : nil
+    }
+
+    /// Avatars drawn invisible while a flying copy of them is in the air (see `AgentCardController`).
+    @Observable
+    final class Hidden {
+        var ids: Set<String> = []
+    }
+    static let hidden = Hidden()
+    /// With no animation of its own, so a UIKit animation block around the call does not fade the avatar.
+    static func setHidden(_ ids: Set<String>, _ on: Bool) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            if on { hidden.ids.formUnion(ids) } else { hidden.ids.subtract(ids) }
+        }
+    }
 }
 
 /// A transparent UIView laid over the avatar so UIKit can use its frame as the zoom's source.
@@ -82,7 +111,9 @@ private struct ZoomAnchor: UIViewRepresentable {
 
 extension View {
     /// Marks this avatar as the origin of the agent page's zoom (ids are unique per agent and place: "home-<id>").
-    func agentZoomSource(_ id: String) -> some View { background { ZoomAnchor(id: id) } }
+    func agentZoomSource(_ id: String) -> some View {
+        opacity(AgentZoomSources.hidden.ids.contains(id) ? 0 : 1).background { ZoomAnchor(id: id) }
+    }
 }
 
 /// Sheets that can be opened from anywhere (workspace, the Needs-you queue, Settings → Models). They are presented
@@ -101,6 +132,7 @@ enum SheetRoute: Identifiable, Hashable {
     case question(String)
     case runSteps(String)
     case settings(SettingsLink)
+    case groupSettings(String)
     var id: String {
         switch self {
         case .workspace(let c, let a): "ws-\(c)-\(a)"
@@ -111,6 +143,7 @@ enum SheetRoute: Identifiable, Hashable {
         case .question(let id): "question-\(id)"
         case .runSteps(let id): "steps-\(id)"
         case .settings: "settings"
+        case .groupSettings(let id): "group-\(id)"
         }
     }
 }
@@ -128,6 +161,7 @@ struct SheetHost: View {
         case .question(let id): QuestionSheet(requestId: id)
         case .runSteps(let id): TaskCard(runId: id).junoSheetPresentation(long: true)
         case .settings(let link): MorePage(link: link).junoSheetPresentation(long: true)
+        case .groupSettings(let id): GroupSettingsSheet(conversationId: id)
         }
     }
 }
@@ -168,6 +202,7 @@ struct RouteDestination: View {
         case .app(let id): AppDetailPage(appId: id)
         case .request(let id): RequestDetail(requestId: id)
         case .chat(let id): ConversationView(conversationId: id).id(id).toolbar(.hidden, for: .tabBar)
+        case .voiceCall(let id): VoiceCallScreen(conversationId: id).toolbar(.hidden, for: .tabBar)
         }
     }
 }

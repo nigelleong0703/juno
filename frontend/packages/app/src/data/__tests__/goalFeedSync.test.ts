@@ -64,4 +64,14 @@ describe("feed and goal events in the cache", () => {
     applyEvent(qc, { type: "goal.deleted", goalId: "g1" } as AgentEvent);
     expect(qc.getQueryData<Goal[]>(qk.goals({ agentId: "agent-1" }))).toEqual([]);
   });
+
+  it("drops a deleted agent's goals and feed posts from every cached list, and keeps the others", () => {
+    qc.setQueryData<Goal[]>(qk.goals(), [goal("g1"), goal("g2", "agent-2")]);
+    qc.setQueryData<FeedPages>(qk.feed(), { pages: [{ items: [post("p1"), post("p2", "agent-2")], nextCursor: null }], pageParams: [undefined] });
+
+    applyEvent(qc, { type: "agent.deleted", agentId: "agent-1" } as AgentEvent);
+
+    expect(qc.getQueryData<Goal[]>(qk.goals())?.map((entry) => entry.id)).toEqual(["g2"]);
+    expect(qc.getQueryData<FeedPages>(qk.feed())?.pages[0]?.items.map((entry) => entry.id)).toEqual(["p2"]);
+  });
 });

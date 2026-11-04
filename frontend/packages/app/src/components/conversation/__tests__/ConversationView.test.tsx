@@ -219,7 +219,11 @@ describe("ConversationView", () => {
   it("shows only the typing bubble after send (no status box), opens Activity from it, and keeps it under interim text until the run ends", async () => {
     const onSend = vi.fn();
     const onOpenRun = vi.fn();
-    const run = makeRun({ id: "run-1", conversationId: "conv-1", title: "Working" });
+    // Activity can be opened once the run has a step to show.
+    const run: Run = {
+      ...makeRun({ id: "run-1", conversationId: "conv-1", title: "Working" }),
+      steps: [{ id: "s1", runId: "run-1", index: 0, kind: "browser", verb: "Executed", target: "browser.click", status: "running", startedAt: ISO, output: { summary: 'Clicked "Buy" (e1) on tab t1' } } as unknown as Run["steps"][number]],
+    };
     const old: Item = {
       id: "item-old",
       conversationId: "conv-1",
@@ -271,6 +275,19 @@ describe("ConversationView", () => {
     // The run ends: gone.
     rerender(viewElement({ onSend, runningRuns: [{ ...run, status: "completed" }], items: [old, reply] }));
     expect(screen.queryByTestId("transcript-awaiting")).toBeNull();
+  });
+  it("a plain reply (no step yet) reads Typing… under the name and its bubble opens nothing; the first step makes it Working with Activity", () => {
+    const onOpenRun = vi.fn();
+    const reply = makeRun({ id: "run-1", conversationId: "conv-1", title: "Working" });
+    const { rerender } = renderView({ onOpenRun, runningRuns: [reply], items: [] });
+    expect(screen.getByTestId("transcript-awaiting")).toBeDefined();
+    expect(document.querySelector('[data-agent-presence], [data-slot="agent-presence"]')?.textContent).toBe(t("agentStatus.typing"));
+    expect(screen.queryByRole("button", { name: t("transcript.openActivity") })).toBeNull();
+
+    const step = { id: "s1", runId: "run-1", index: 0, kind: "browser", verb: "Executed", target: "browser.click", status: "running", startedAt: ISO, output: { summary: 'Clicked "Buy" (e1) on tab t1' } } as unknown as Run["steps"][number];
+    rerender(viewElement({ onOpenRun, runningRuns: [{ ...reply, steps: [step] }], items: [] }));
+    expect(document.querySelector('[data-slot="agent-presence"]')?.textContent).not.toBe(t("agentStatus.typing"));
+    expect(screen.getByRole("button", { name: t("transcript.openActivity") })).toBeDefined();
   });
   it("shows the typing bubble for a run already going when the chat opens, but not while it waits for approval", () => {
     const old: Item = {

@@ -165,7 +165,11 @@ private struct PendingRequestCard: View {
 
     private var question: some View {
         let doc = p?.ui
-        return RequestCardShell(icon: "questionmark.circle", title: (world.isQuiet(request) ? "" : "Question · ") + (doc?.headline ?? request.title ?? name), guidance: nil) {
+        // "Question" alone when the doc has no real headline; a quiet request (a direct chat) shows the headline or the name.
+        // Not request.title: send_message stores the fixed placeholder "Agent Question" there, never a real title.
+        let headline = doc?.headline
+        let title = world.isQuiet(request) ? (headline ?? name) : "Question" + (headline.map { " · " + $0 } ?? "")
+        return RequestCardShell(icon: "questionmark.circle", title: title, guidance: nil) {
             if let doc {
                 UiDocView(doc: doc, answering: UiDocAnswering(recorded: nil, errors: answerErrors, busy: answering,
                                                               openForm: { world.sheet = .question(request.id) }) { answers in

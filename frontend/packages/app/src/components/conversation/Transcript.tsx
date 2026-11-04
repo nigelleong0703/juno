@@ -18,11 +18,12 @@ import { HandoffMarker } from "./HandoffMarker";
 import { PlanItem } from "./PlanItem";
 import { RequestItem } from "./RequestItem";
 import { FeedRefItem } from "./FeedRefItem";
+import { ScreenRefItem } from "./ScreenRefItem";
 import { RoleSuggestionItem } from "./RoleSuggestionItem";
 import { RoutineItem } from "./RoutineItem";
 import { RunItem } from "./RunItem";
 import { SystemRow } from "./SystemRow";
-import { ChildRuns } from "../run/ChildRuns";
+import { SubagentRuns } from "../run/SubagentRuns";
 import { UserMessage } from "./UserMessage";
 
 export interface TranscriptProps {
@@ -126,7 +127,8 @@ export function Transcript({
     item.agentId === previous.agentId;
 
   // Reply buttons live on the latest agent turn only: once the user has written after a bubble they go.
-  const lastUserAt = items.map((entry) => entry.type).lastIndexOf("user_message");
+  // A message the agent only observed (nobody addressed it) is not a turn to answer, so it does not take them away.
+  const lastUserAt = items.findLastIndex((entry) => entry.type === "user_message" && !entry.observed);
   const renderItem = (item: Item, grouped: boolean) => {
     switch (item.type) {
       case "user_message":
@@ -160,7 +162,7 @@ export function Transcript({
         return (
           <Fragment key={item.id}>
             <RunItem item={item} onOpenThread={onOpenRun} />
-            <ChildRuns parentRunId={item.runId} conversationId={item.conversationId} agentById={agentById} onOpenRun={onOpenRun} onStopRun={onStopRun} />
+            <SubagentRuns parentRunId={item.runId} conversationId={item.conversationId} agentById={agentById} onOpenRun={onOpenRun} onStopRun={onStopRun} />
           </Fragment>
         );
 
@@ -174,6 +176,8 @@ export function Transcript({
         return <RoutineItem key={item.id} item={item} onOpen={onOpenRoutine} />;
       case "feed_ref":
         return <FeedRefItem key={item.id} item={item} />;
+      case "screen_ref":
+        return <ScreenRefItem key={item.id} item={item} />;
       case "role_suggestion":
         return <RoleSuggestionItem key={item.id} item={item} />;
       case "handoff":

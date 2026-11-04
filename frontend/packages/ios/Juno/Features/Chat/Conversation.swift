@@ -79,9 +79,11 @@ struct ConversationView: View {
         let agents = (conversation?.agentIds ?? []).compactMap(world.agent)
         let isGroup = conversation?.kind == "room"
         let items = world.transcript(conversationId)
-        let activeRunId = world.activeRuns(in: conversationId).first {
+        let activeRun = world.activeRuns(in: conversationId).first {
             $0.parentRunId == nil && ["running", "queued"].contains($0.status ?? "")
-        }?.id
+        }
+        let activeRunId = activeRun?.id
+        let doingWork = activeRun.map(world.showsWork) ?? false
         let context = ChatContext(world: world, conversationId: conversationId, isGroup: isGroup,
                                   accent: world.accent(for: conversationId), openRoute: { if let pushRoute { pushRoute($0) } else { route = $0 } })
 
@@ -119,7 +121,7 @@ struct ConversationView: View {
                             }
                             .foregroundStyle(Theme.fg)
                             // Persistent presence only (the dot on the avatar and this line); the run's activity is the typing bubble.
-                            if !isGroup, let line = presence(agents.first, busy: activeRunId != nil) {
+                            if !isGroup, let line = presence(agents.first, busy: activeRunId != nil, working: doingWork) {
                                 Text(line).text(.xs).foregroundStyle(Theme.fgSubtle)
                             }
                         }
@@ -150,9 +152,10 @@ struct ConversationView: View {
                                 AvatarView(agent: agents.first, size: AvatarSize.chatHeader - 8)
                             }
                         }
+                        // The anchor is the drawn avatar (80), not the 88 hit area around it, so the zoom lands on what is seen.
+                        .agentZoomSource(isGroup ? "chat-group-\(conversationId)" : "chat-\(agents.first?.id ?? "")")
                         .frame(width: AvatarSize.chatHeader, height: AvatarSize.chatHeader)
                         .contentShape(.circle)
-                        .agentZoomSource(isGroup ? "chat-group-\(conversationId)" : "chat-\(agents.first?.id ?? "")")
                     }
                 }
                 .frame(width: AvatarSize.chatHeader, height: AvatarSize.chatHeader)
@@ -166,7 +169,12 @@ struct ConversationView: View {
                 .frame(height: 44, alignment: .top)
             }
             .sharedBackgroundVisibility(.hidden)
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if conversation?.kind == "direct", conversation?.isChannelChat != true, agents.count == 1 {
+                    Button {
+                        if let pushRoute { pushRoute(.voiceCall(conversationId)) } else { route = .voiceCall(conversationId) }
+                    } label: { Label("Voice call", systemImage: "phone") }
+                }
                 Button {
                     if let a = agents.first { world.sheet = .workspace(conversationId: conversationId, agentId: a.id) }
                 } label: { Label("Computer", systemImage: "desktopcomputer") }
@@ -185,16 +193,20 @@ struct ConversationView: View {
         .environment(\.agentAccent, world.accent(for: conversationId))
         .noDrawerSwipe()
         .onAppear { world.loadItems(conversationId) }
+        // The run list carries no steps: fetch the live run's, so "Working" vs "Typing" is right when the chat opens mid-run.
+        .task(id: activeRunId) { if let id = activeRunId { world.loadSteps(id) } }
         .task(id: world.conversation(conversationId) != nil) { openLaunchSheet() }
     }
 
     /// Persistent presence under the agent's name: reconnecting, what it is doing, or its status.
-    private func presence(_ agent: Agent?, busy: Bool) -> String? {
+    private func presence(_ agent: Agent?, busy: Bool, working: Bool) -> String? {
         guard let agent else { return nil }
         if world.api != nil, World.showsReconnecting(live: world.streamLive, now: Date(), graceUntil: world.streamGraceUntil, busy: busy) {
             return "Reconnecting…"
         }
-        if busy { return "Working…" }
+        // A reply being written (no tool step yet) is typing, like a person's; "Working" starts with the first step.
+        if busy { return working ? "Working…" : "Typing…" }
+        if world.activeRuns(in: conversationId).contains(where: { $0.parentRunId == nil && $0.status == "waiting_for_input" }) { return World.waitingLine }
         if let doing = world.doing[agent.id], !doing.isEmpty { return doing }
         return agent.status.map(Fmt.status)
     }
@@ -207,7 +219,13 @@ struct ConversationView: View {
                 ForEach(agents) { a in
                     Button("\(a.name ?? "") · \(Fmt.status(a.status))") { world.openAgentPage(a.id, from: source) }
                 }
+                if world.conversation(conversationId)?.channel != nil {
+                    Divider()
+                    Button("Channel settings", systemImage: "slider.horizontal.3") { world.sheet = .groupSettings(conversationId) }
+                }
             } label: { label() }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
             .buttonStyle(.plain)
         } else {
             Button { if let a = agents.first { world.openAgentPage(a.id, from: source) } } label: { label() }

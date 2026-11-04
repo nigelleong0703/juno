@@ -44,6 +44,7 @@ struct DecisionCard: View {
             header(brief)
             consequences(brief)
             preview(brief, draft: draft)
+            if let asked = GroupWords.askedBy(p?.askedBy) { Text(asked).text(.sm).foregroundStyle(Theme.fgMuted).fixedSize(horizontal: false, vertical: true) }
             if let why = brief?.why ?? p?.why, !why.isEmpty { ExpandableText(text: why, lines: 3) }
             if let denied = brief?.ifDenied, !denied.isEmpty {
                 Text("If you say no: \(denied)").text(.sm).foregroundStyle(Theme.fgSubtle).fixedSize(horizontal: false, vertical: true)

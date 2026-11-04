@@ -172,8 +172,8 @@ export function createAppsMock(opts: AppsMockOptions): AppsApi {
     return found;
   };
   const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
-  const addWork = (app: AppDetail, label: string, status: 'connected' | 'expired' = 'connected'): void => {
-    app.installations.push({ id: opts.newId(), appId: app.id, label, status, connectedAt: iso(), agents: [] });
+  const addWork = (app: AppDetail, label: string, status: 'connected' | 'expired' = 'connected', needsScope = false): void => {
+    app.installations.push({ id: opts.newId(), appId: app.id, label, status, ...(needsScope ? { needsScope } : {}), connectedAt: iso(), agents: [] });
     if (app.enabledAgents.length === 0) app.enabledAgents = opts.agentIds().map((agentId) => ({ agentId, actionsPolicy: 'ask' as ActionsPolicy }));
   };
 
@@ -184,6 +184,8 @@ export function createAppsMock(opts: AppsMockOptions): AppsApi {
   addWork(find('gmail'), 'robin@example.com');
   addWork(find('google-calendar'), 'robin@example.com', 'expired');
   addWork(find('weather'), 'Weather');
+  // Signed in, but a tool asked for a permission the sign-in lacks.
+  addWork(find('spotify'), 'robin@example.com', 'connected', true);
 
   const summary = (app: AppDetail): App => {
     const { capabilities: _capabilities, pending: _pending, skills: _skills, ...plain } = copy(app);
@@ -268,7 +270,10 @@ export function createAppsMock(opts: AppsMockOptions): AppsApi {
       }
       if (body.connectionId) {
         const again = app.installations.find((entry) => entry.id === body.connectionId);
-        if (again) again.status = 'connected';
+        if (again) {
+          again.status = 'connected';
+          delete again.needsScope;
+        }
         return { appId: id, installation: again ? copy(again) : null, pending: null, openUrl: app.auth === 'oauth' ? `https://accounts.example.test/auth?app=${id}` : null };
       }
       addWork(app, app.installations.length === 0 ? 'robin@example.com' : `account ${app.installations.length + 1}`);

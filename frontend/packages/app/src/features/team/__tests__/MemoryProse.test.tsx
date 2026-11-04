@@ -1,3 +1,4 @@
+import type { MemoryItemView } from "@agent-desktop/client";
 import { createMockClient } from "@agent-desktop/test-fixtures";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -125,6 +126,30 @@ describe("Memory", () => {
     await waitFor(() => expect(calls).toEqual([`update:m-h1:${JSON.stringify({ audience: "public" })}`]));
     fireEvent.click(within(sheet).getByRole("switch"));
     await waitFor(() => expect(calls).toContain(`update:m-h1:${JSON.stringify({ sensitive: false })}`));
+  });
+
+  it("choosing who remembers a fact sends agentId (null for all agents) and shows it at once", async () => {
+    const base = createMockClient({ seed: 7 });
+    const [agent] = (await base.agents.list()).items;
+    if (!agent) throw new Error("the mock world has no agent");
+    const calls: string[] = [];
+    Element.prototype.scrollIntoView = () => {};
+    const stored: MemoryItemView[] = [{ ...oat, agentId: agent.id }];
+    const client = withMemory(base, stored, [topics[4]!]);
+    const update = async (id: string, patch: { agentId?: string | null | undefined }) => {
+      calls.push(`update:${id}:${JSON.stringify(patch)}`);
+      // The server keeps the change, so the refetch after it agrees with the optimistic view.
+      if (patch.agentId === null) delete stored[0]!.agentId;
+    };
+    renderTeam({ ...client, memoryItems: { ...client.memoryItems, update } }, "/team/memory");
+    fireEvent.click(await screen.findByRole("button", { name: "oat milk" }));
+    const sheet = await screen.findByRole("dialog");
+    const keeper = within(sheet).getByRole("combobox", { name: "Who remembers it" });
+    await waitFor(() => expect(keeper.textContent).toBe(`Only ${agent.name}`));
+    fireEvent.click(keeper);
+    fireEvent.click(await screen.findByRole("option", { name: "All agents" }));
+    await waitFor(() => expect(calls).toEqual([`update:m-p1:${JSON.stringify({ agentId: null })}`]));
+    await waitFor(() => expect(keeper.textContent).toBe("All agents"));
   });
 
   it("the text is an editable field, and Save is enabled only after a change and sends only the text", async () => {

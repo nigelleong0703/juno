@@ -1,7 +1,8 @@
 import type { Agent } from "@agent-desktop/client";
-import { Message, MessageContent, MessageResponse, Popover, PopoverContent, PopoverTrigger } from "@agent-desktop/ui";
+import { Button, Message, MessageContent, MessageResponse, Popover, PopoverContent, PopoverTrigger } from "@agent-desktop/ui";
 import { ExternalLink, Link2 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
+import { useRetryDelivery } from "../../data/delivery";
 import type { AgentMessageItem } from "../../lib/items";
 import { t } from "../../lib/i18n";
 import { AgentAvatar } from "../agent/AgentAvatar";
@@ -14,6 +15,7 @@ import {
   agentMentionComponents,
   agentMentionRemarkPlugins,
   buildAgentMentionRoster,
+  dropRepeatedTrailingMention,
 } from "./agentMention";
 
 export interface AgentMessageProps {
@@ -100,6 +102,19 @@ function SourcesPill({ citations, onOpen }: { citations: SourceCitation[]; onOpe
   );
 }
 
+/** Under a reply that never reached its platform chat: one quiet line and Retry. It goes when the reply is on its way again. */
+function NotDelivered({ conversationId, itemId }: { conversationId: string; itemId: string }) {
+  const retry = useRetryDelivery(conversationId);
+  return (
+    <span data-slot="not-delivered" className="inline-flex items-center gap-1 pl-0.5 text-[11px] text-fg-subtle">
+      {t("delivery.notDelivered")}
+      <Button variant="link" size="xs" className="h-auto px-1 py-0 text-[11px]" disabled={retry.isPending} onClick={() => retry.mutate(itemId)}>
+        {t("message.retry")}
+      </Button>
+    </span>
+  );
+}
+
 /**
  * The agent's turn (VISUAL.md "Messages"): a grey bubble on the left, markdown body through
  * Streamdown, source citations and a copy affordance.
@@ -120,7 +135,7 @@ export function AgentMessage({
   // the roster by closure, so the streamed Markdown re-presents when the roster loads or an
   // agent is renamed: `MessageResponse`'s memo only compares children/isAnimating, so the
   // roster revision is the stable remount key that lets a changed presentation through.
-  const roster = useMemo(() => buildAgentMentionRoster(agents), [agents]);
+  const roster = useMemo(() => buildAgentMentionRoster(agents, item.mentions), [agents, item.mentions]);
   const openAgentRef = useRef(onOpenAgent);
   openAgentRef.current = onOpenAgent;
   const mentionComponents = useMemo(
@@ -130,7 +145,8 @@ export function AgentMessage({
   const mentionPlugins = useMemo(() => agentMentionRemarkPlugins(roster), [roster]);
 
   // `markdown` is the lead-in, or the card's own text fallback when the agent gave no lead-in: then only the card shows.
-  const { quote, body } = splitQuote(item.markdown);
+  const { quote, body: quoted } = splitQuote(item.markdown);
+  const body = item.mentions ? dropRepeatedTrailingMention(quoted, item.mentions, roster.byId) : quoted;
   const sources = linkedSources(item.citations);
   const replies = onPickReply ? item.ui?.blocks.find((block) => block.type === "replies") : undefined;
   const showCard = item.ui?.blocks.some((block) => block.type !== "replies");
@@ -177,6 +193,7 @@ export function AgentMessage({
         </MessageMenu>
       ) : null}
       {item.replyTo ? <ChannelMarker kind={item.replyTo.kind} direction="to" className="pl-0.5" /> : null}
+      {item.replyTo && item.delivery?.status === "dropped" ? <NotDelivered conversationId={item.conversationId} itemId={item.id} /> : null}
       {item.ui && showCard ? (
         <div className="max-w-[560px]">
           <UiDoc doc={item.ui} showTitle />

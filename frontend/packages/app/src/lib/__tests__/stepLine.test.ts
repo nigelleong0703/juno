@@ -1,6 +1,6 @@
 import type { Request, Run, Step } from "@agent-desktop/client";
 import { describe, expect, it } from "vitest";
-import { activityTitle, stepLine, isFailedRunRow, progressText, runErrorText, runStatusText, stepExcerpt, visibleSteps } from "../stepLine";
+import { activityTitle, stepLine, isFailedRunRow, progressText, runErrorText, runShowsWork, runStatusText, stepExcerpt, visibleSteps } from "../stepLine";
 
 const step = (over: Partial<Step>): Step =>
   ({
@@ -32,6 +32,18 @@ describe("runStatusText", () => {
 
 const full = (over: Partial<Run>): Run =>
   ({ status: "completed", startedAt: "2026-10-16T10:00:00Z", steps: [], usage: { steps: 0 }, ...over }) as unknown as Run;
+
+describe("Reminders batch", () => {
+  const added = (output?: string) =>
+    step({ target: "phone_reminders_create", kind: "mcp", input: { summary: JSON.stringify({ reminders: [{ title: "Milk" }, { title: "Eggs" }, { title: "Bread" }] }) }, ...(output ? { output: { summary: output } } : {}) });
+
+  it("is one row for the whole list: the count in the call, then the answer's own first line with the list under it", () => {
+    expect(stepLine(added())).toBe("Added 3 reminders");
+    const answer = 'Added 2 of 3 reminders; 1 failed.\n- "Milk" (id a)\n- Failed "Eggs": No Reminders list named "Work".';
+    expect(stepLine(added(answer))).toBe("Added 2 of 3 reminders; 1 failed");
+    expect(stepExcerpt(added(answer))).toBe('- "Milk" (id a)\n- Failed "Eggs": No Reminders list named "Work".');
+  });
+});
 
 describe("Activity wording", () => {
   it("hides the steps the backend flags internal and words the rest, never the raw tool id", () => {
@@ -103,5 +115,19 @@ describe("progressText", () => {
     expect(progressText("Executed browser.click")).toBe("Clicking on the page");
     expect(progressText("Executed shell.run")).toBe("Running a command");
     expect(progressText("Searched for “fares”")).toBe("Searched for “fares”");
+  });
+});
+
+describe("runShowsWork", () => {
+  const chat = (steps: Step[], kind: Run["kind"] = "chat"): Run => ({ kind, steps }) as unknown as Run;
+
+  it("is false for a chat reply that has run no visible step (typing, nothing to open)", () => {
+    expect(runShowsWork(chat([]))).toBe(false);
+    expect(runShowsWork(chat([step({ target: "browser.snapshot", internal: true })]))).toBe(false);
+  });
+
+  it("is true from the first visible step, and for task runs from the start", () => {
+    expect(runShowsWork(chat([clicked("running")]))).toBe(true);
+    expect(runShowsWork(chat([], "routine"))).toBe(true);
   });
 });

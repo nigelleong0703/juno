@@ -17,23 +17,26 @@ extension World {
                 return all.sorted { ($0.index ?? 0) < ($1.index ?? 0) }
             }
             if let i = self.runs.firstIndex(where: { $0.id == runId }) { self.runs[i].steps = merged(self.runs[i]) }
-            else if let child = self.childRuns[runId] { self.childRuns[runId]?.steps = merged(child) }
+            else if let subagent = self.subagentRuns[runId] { self.subagentRuns[runId]?.steps = merged(subagent) }
         }
     }
 
-    /// The helper runs a task spawned, newest last. The run list leaves helpers out, so the ones the parent names are
+    /// The subagent runs a task started, oldest first. The run list leaves them out, so the ones the parent names are
     /// fetched by id when its detail opens; live events keep them current after that.
-    func children(of runId: String) -> [Run] {
-        childRuns.values.filter { $0.parentRunId == runId }.sorted { ($0.startedAt ?? .distantPast) < ($1.startedAt ?? .distantPast) }
+    func subagents(of runId: String) -> [Run] {
+        subagentRuns.values.filter { $0.parentRunId == runId }.sorted { ($0.startedAt ?? .distantPast) < ($1.startedAt ?? .distantPast) }
     }
 
-    func loadChildren(of runId: String) async {
+    func loadSubagents(of runId: String) async {
         guard let api else { return }
-        let ids = (run(runId)?.childRunIds ?? []).filter { childRuns[$0] == nil }
+        // `childRunIds` is the contract's name for the subagents' run ids.
+        let ids = (run(runId)?.childRunIds ?? []).filter { subagentRuns[$0] == nil }
         if !ids.isEmpty, let found = try? await api.list("/v1/runs?ids=\(ids.joined(separator: ","))", as: Run.self) {
-            for child in found where child.parentRunId != nil { childRuns[child.id] = childRuns[child.id].map { var c = child; c.steps = $0.steps; return c } ?? child }
+            for subagent in found where subagent.parentRunId != nil {
+                subagentRuns[subagent.id] = subagentRuns[subagent.id].map { var s = subagent; s.steps = $0.steps; return s } ?? subagent
+            }
         }
-        for child in children(of: runId) { loadSteps(child.id) }
+        for subagent in subagents(of: runId) { loadSteps(subagent.id) }
     }
 
     func loadPlans(_ agentId: String) {
@@ -64,8 +67,8 @@ extension World {
               !control || ticket.control == true,
               let issued = URLComponents(string: ticket.url),
               issued.path == "/v1/screens/\(screen)/vnc",
-              var out = URLComponents(url: session.server, resolvingAgainstBaseURL: false) else { return nil }
-        out.scheme = session.server.scheme == "https" ? "wss" : "ws"
+              var out = URLComponents(url: Backend.url, resolvingAgainstBaseURL: false) else { return nil }
+        out.scheme = "wss"
         out.path = issued.path
         out.percentEncodedQuery = issued.percentEncodedQuery
         return out.url

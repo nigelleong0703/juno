@@ -32,7 +32,7 @@ extension World {
     /// (a launch with a saved login); a fresh sign-in shows it after `connect` finishes.
     @MainActor
     func restore(_ session: Session, present: Bool) {
-        let key = LocalStore.fileName(server: session.server, userId: session.userId)
+        let key = LocalStore.fileName(userId: session.userId)
         if storeKey != key {
             resetAccountState()
             store = LocalStore.open(session)
@@ -82,29 +82,46 @@ extension World {
     func loadItems(_ conversationId: String) {
         guard api != nil else { return }
         store?.touch(conversationId)
-        guard items[conversationId] == nil, !itemsLoading.contains(conversationId) else { return }
-        if hydrateChat(conversationId) { return }
+        guard !itemsLoading.contains(conversationId) else { return }
+        if items[conversationId] != nil || hydrateChat(conversationId) {
+            // Shown from the device at once; the first time in this connection it is also compared with the server.
+            if !reconciledChats.contains(conversationId) { Task { await fetchNewest(conversationId) } }
+            return
+        }
         itemsLoading.insert(conversationId)
         Task { await fetchNewest(conversationId) }
     }
 
     /// GET the newest page (desc, one screen and a half), store it, and make it the chat's window. Items that arrived
     /// live meanwhile are merged in, so nothing between the response and now is lost.
+    ///
+    /// A chat that is already stored is reconciled, not replaced (`LocalStore.reconcileNewest`): stored items inside the
+    /// page's time range that the server no longer returns are deleted (removed while the app was offline, or straight in
+    /// the server's database), and the older pages already stored stay, so history is not downloaded again.
     @MainActor
     func fetchNewest(_ id: String) async {
         guard let api, fetching[id] == nil else { return }
         fetching[id] = []
+        reconciledChats.insert(id)
         defer { fetching[id] = nil; itemsLoading.remove(id) }
         do {
             let page = try await api.page("/v1/conversations/\(id)/items?order=desc&limit=\(Self.pageSize)", as: Item.self)
             var byId: [String: Item] = [:]
             for item in page.items + (fetching[id] ?? []) { byId[item.id] = item }
             let list = byId.values.sorted(by: Item.isBefore)
-            store?.replaceNewest(id, items: list, olderCursor: page.next)
+            let keptOlder = store?.reconcileNewest(id, items: list, olderCursor: page.next) ?? false
             // Messages of mine the server has not accepted yet are not in the page: they stay at the end.
             let unsent = (items[id] ?? []).filter { outbox[$0.id] != nil && byId[$0.id] == nil }
-            items[id] = list + unsent
-            history[id] = ChatHistory(olderCursor: page.next, reachedStart: page.next == nil)
+            // Older pages already loaded into memory stay, when the database kept them too.
+            var older: [Item] = []
+            if keptOlder, let first = list.first { older = (items[id] ?? []).filter { outbox[$0.id] == nil && Item.isBefore($0, first) } }
+            items[id] = older + list + unsent
+            if let extra = items[id]?.count, extra > Self.windowCap { items[id]?.removeFirst(extra - Self.windowCap) }
+            if keptOlder, let state = store?.chatState(id) {
+                history[id] = ChatHistory(olderCursor: state.olderCursor, reachedStart: state.reachedStart)
+            } else {
+                history[id] = ChatHistory(olderCursor: page.next, reachedStart: page.next == nil)
+            }
         } catch {
             if items[id] == nil, !error.isCancellation { syncError = error.localizedDescription }
         }
@@ -116,6 +133,60 @@ extension World {
         var ids = conversations.sorted { ($0.lastItemAt ?? .distantPast) > ($1.lastItemAt ?? .distantPast) }.prefix(Self.hydratedChats).map(\.id)
         if let open = currentConversationId { ids.removeAll { $0 == open }; ids.insert(open, at: 0) }
         for id in ids where conversation(id) != nil { await fetchNewest(id) }
+    }
+
+    // MARK: Reconcile with the server
+
+    /// The stream is live (first connect, or back after a drop). Deletions arrive as events, but one made while the stream was
+    /// down past the server's log, or straight in its database, never does: so the cached lists and the chats in memory are
+    /// compared with the server again. (`connect` has just read the lists, so the first time only the chats are compared.)
+    @MainActor
+    func reconnected() async {
+        reconciledChats = []
+        if listsFresh { listsFresh = false } else { await refreshLists() }
+        await refreshAgents()
+        await refreshRequests()
+        await reconcileChats()
+    }
+
+    func showGoals(_ list: [PlannedGoal]) { goals = list.filter { $0.status != "done" } }
+    func showIdeas(_ list: [PlannedIdea]) { ideas = list.filter { $0.status == nil || $0.status == "open" } }
+
+    /// Goals, ideas, the feed and the conversation list as the server has them now: whatever the server no longer returns is
+    /// dropped here and in the database. A list that cannot be read stays as it is. The conversation list is cut at 200,
+    /// so a chat is only judged gone when the server answered the whole list.
+    @MainActor
+    func refreshLists() async {
+        guard let api else { return }
+        async let goals = api.list("/v1/goals?limit=200", as: PlannedGoal.self)
+        async let ideas = api.list("/v1/ideas?limit=200", as: PlannedIdea.self)
+        async let feed = api.list("/v1/feed?limit=100", as: FeedPost.self)
+        async let conversations = api.page("/v1/conversations?limit=200", as: Conversation.self)
+        if let fresh = try? await goals { showGoals(fresh) }
+        if let fresh = try? await ideas { showIdeas(fresh) }
+        if let fresh = try? await feed { self.feed = Self.newestFirst(fresh); scheduleTodayRefresh() }
+        if let fresh = try? await conversations { applyConversations(fresh.items, complete: fresh.next == nil) }
+    }
+
+    /// The server's conversation list replaces the cached one. For a complete list, a chat it no longer has is deleted here and
+    /// from the database, with its runs and requests.
+    @MainActor
+    func applyConversations(_ fresh: [Conversation], complete: Bool) {
+        let live = Set(fresh.map(\.id))
+        conversations = fresh
+        persistConversationsSoon()
+        guard complete else { return }
+        let gone = Set(items.keys).union(history.keys).union(store?.recentChats(limit: Int.max) ?? []).subtracting(live)
+        for id in gone { items[id] = nil; history[id] = nil; reconciledChats.remove(id); store?.deleteChat(id) }
+        runs.removeAll { run in run.conversationId.map { !live.contains($0) } ?? false }
+        requests.removeAll { request in request.conversationId.map { !live.contains($0) } ?? false }
+    }
+
+    /// The newest page of every chat held in memory is compared with the server (the other stored chats are compared when
+    /// opened, in `loadItems`).
+    @MainActor
+    func reconcileChats() async {
+        for id in Array(items.keys) where conversation(id) != nil { await fetchNewest(id) }
     }
 
     // MARK: Paging
@@ -175,7 +246,15 @@ extension World {
         if let i = items[c]?.firstIndex(where: { $0.id == item.id }) {
             if items[c]?[i] != item { items[c]?[i] = item }
         } else {
-            items[c]?.append(item)
+            // An update of an older message (its delivery state, an edit) can arrive live: it goes to its place in time,
+            // never to the bottom. One older than the window's first message stays in the database until its page loads.
+            let sent = (items[c] ?? []).filter { outbox[$0.id] == nil }
+            if let first = sent.first, Item.isBefore(item, first), history[c]?.reachedStart != true { return }
+            if let at = items[c]?.firstIndex(where: { outbox[$0.id] == nil && Item.isBefore(item, $0) }) {
+                items[c]?.insert(item, at: at)
+            } else {
+                items[c]?.append(item)
+            }
             if let count = items[c]?.count, count > Self.windowCap { items[c]?.removeFirst(count - Self.windowCap) }
         }
         if c == currentConversationId, appActive { scheduleMarkRead(c) }
@@ -225,6 +304,8 @@ extension World {
         items = items.filter { $0.key == currentConversationId }
         history = history.filter { $0.key == currentConversationId }
         aguiStreaming = [:]
+        reconciledChats = []
+        await refreshLists()
         await refreshRequests()
         await seedRecentChats()
     }

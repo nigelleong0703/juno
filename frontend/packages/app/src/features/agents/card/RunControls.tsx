@@ -30,7 +30,7 @@ export function AgentMenu({ agent }: { agent: Agent }) {
   );
 }
 
-/** A small Stop beside the doing line while the agent works: stops every active run of it, child runs included (F-09). */
+/** A small Stop beside the doing line while the agent works: stops every active run of it, subagent runs included (F-09). */
 export function StopAgentButton({ agent }: { agent: Agent }) {
   const stop = useStopAgent();
   return (

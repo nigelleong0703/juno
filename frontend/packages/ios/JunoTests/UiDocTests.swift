@@ -44,6 +44,14 @@ final class UiDocTests: XCTestCase {
         XCTAssertFalse(try doc(#"{"version":2,"text":"t","blocks":[{"type":"text","text":"hi"}]}"#).isRenderable)
     }
 
+    func testHeadlineNeverShowsTheServersTextDumpOfADrawableDoc() throws {
+        let fields = try doc(#"{"version":1,"text":"Fields: 想哪天出去？, 几个人？ (optional)","blocks":[{"type":"fields","id":"f","fields":[{"id":"a","label":"想哪天出去？","kind":"text"}]}]}"#)
+        XCTAssertTrue(fields.isRenderable)
+        XCTAssertNil(fields.headline)
+        XCTAssertEqual(try doc(#"{"version":1,"text":"x","blocks":[{"type":"text","text":"Pick a day"}]}"#).headline, "Pick a day")
+        XCTAssertEqual(try doc(#"{"version":1,"text":"Chart: sales up 4%","blocks":[{"type":"hologram"}]}"#).headline, "Chart: sales up 4%")
+    }
+
     func testAnUndecodableDocNeverFailsTheItem() throws {
         let items = try isoDecoder.decode([Item].self, from: Data(#"""
         [{"id":"i1","type":"agent_message","markdown":"Here you go","ui":{"version":1,"text":"T","blocks":[{"type":"text","text":"hi"},{"type":"hologram","depth":3}]}},

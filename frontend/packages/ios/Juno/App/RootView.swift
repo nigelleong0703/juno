@@ -244,12 +244,13 @@ struct MorePage: View {
                     Section {
                         NavigationLink { AboutMeView() } label: { Label("About you", systemImage: "person.text.rectangle") }
                         NavigationLink { ProfileView() } label: { Label("Your details", systemImage: "person.crop.rectangle") }
-                        NavigationLink { PhoneAccessView() } label: { Label("Calendar and reminders", systemImage: "calendar") }
+                        NavigationLink { PhoneAccessView() } label: { Label("iPhone access", systemImage: "iphone.gen3") }
                         NavigationLink { ProactiveRulesView() } label: { Label("What's worth interrupting me for", systemImage: "bell.badge") }
                         Button { addingWatch = true } label: { Label("Add Apple Watch", systemImage: "applewatch") }
                             .foregroundStyle(Theme.fg)
                             .accessibilityIdentifier("settings-add-watch")
                     }
+                    OutgoingSection()
                     Section("Agents run on") {
                         NavigationLink { ModelSettingsView() } label: { Label("Models", systemImage: "cpu") }
                     }

@@ -1,8 +1,8 @@
-// Push is opt-in. A free Apple ID (Personal Team) cannot sign the aps-environment entitlement, so the
-// default build has no entitlements and no remote-push code. A paid team turns it on in Push.local.xcconfig
-// (gitignored, next to this file; see docs/design/IOS-PROTOTYPE-HANDOFF.md):
-//   JUNO_PUSH_ENTITLEMENTS = Config/Push.entitlements
+// The default build is signed with Config/Juno.entitlements (HealthKit, HomeKit: both can be signed by a free Apple ID's
+// Personal Team). Push is opt-in: a free Apple ID cannot sign the aps-environment entitlement, so the default build has no remote-push
+// code. A paid team turns it on in Push.local.xcconfig (gitignored, next to this file; see docs/design/IOS-PROTOTYPE-HANDOFF.md):
+//   JUNO_PUSH_ENTITLEMENTS = Config/Push.entitlements   (Juno.entitlements plus aps-environment: keep the two in step)
 //   JUNO_PUSH_SWIFT_FLAG = -DJUNO_PUSH
-JUNO_PUSH_ENTITLEMENTS =
+JUNO_PUSH_ENTITLEMENTS = Config/Juno.entitlements
 JUNO_PUSH_SWIFT_FLAG =
 #include? "Push.local.xcconfig"

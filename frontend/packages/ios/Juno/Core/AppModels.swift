@@ -4,6 +4,11 @@ import Foundation
 // logic around the generated `Contract.App`: what an app is called and says, which pill it sits under, whether it needs a
 // sign-in, the form its `userConfig` asks for, and what the chat connect card offers for each app it names.
 
+extension Contract.AppInstallation {
+    /// Rejected or never worked (`status` is not connected), or the provider said the sign-in lacks a permission.
+    var needsSignIn: Bool { status != "connected" || needsScope == true }
+}
+
 extension Contract.App {
     var categoryValue: Contract.AppCategory? { category.flatMap(Contract.AppCategory.init(rawValue:)) }
     var displayName: String { name ?? id }
@@ -11,7 +16,10 @@ extension Contract.App {
     /// Added: at least one account, workspace or bot.
     var isAdded: Bool { !accounts.isEmpty }
     /// Some account's sign-in was rejected after it had worked (`expired`) or never worked (`error`): the list says "Sign in".
-    var needsSignIn: Bool { accounts.contains { $0.status != "connected" } }
+    /// A sign-in that lacks a permission a tool needs (`needsScope`, even though the account works) counts too: it is signed in again to grant it.
+    var needsSignIn: Bool { accounts.contains { $0.needsSignIn } }
+    /// Every account that needs signing in only lacks a permission: the list says "Needs another permission" and the action is "Reconnect".
+    var needsScopeOnly: Bool { needsSignIn && accounts.filter(\.needsSignIn).allSatisfy { $0.needsScope == true } }
     /// A Web & video app the server cannot add yet (it still needs a sandbox sign-in); the no-sign-in ones are available.
     var isComingSoon: Bool { categoryValue == .web && available == false }
     var canAdd: Bool { !isComingSoon && available != false }
@@ -32,7 +40,7 @@ extension Contract.App {
     }
 
     /// The first account that needs signing in again (the one a "Sign in again" or "Reconnect" re-authorises).
-    var expiredAccount: Contract.AppInstallation? { accounts.first { $0.status != "connected" } }
+    var expiredAccount: Contract.AppInstallation? { accounts.first { $0.needsSignIn } }
 
     var categoryName: String {
         switch categoryValue {
@@ -48,7 +56,7 @@ extension Contract.App {
     var stateName: String {
         if isComingSoon { return "Coming soon" }
         if available == false && !isAdded { return "Not available" }
-        if needsSignIn { return "Sign in needed" }
+        if needsSignIn { return needsScopeOnly ? "Needs another permission" : "Sign in needed" }
         return isAdded ? "Connected" : "Not added"
     }
 
@@ -217,9 +225,10 @@ enum ConnectCard {
         let carried = payload.flatMap(Contract.AppProblem.init(rawValue:))
         guard let app else { return carried }
         if !app.isAdded { return .notAdded }
+        if app.needsScopeOnly { return .scopeMissing }
         if app.needsSignIn { return app.accounts.contains { $0.status == "expired" } ? .expired : .needsReconnect }
         if let agentId, app.isPerAgent, !app.isEnabled(for: agentId) { return .notEnabled }
-        // The list cannot show a missing permission (the account reads as connected): the card keeps saying so until the server resolves it.
+        // The list shows a missing permission only until the person starts signing in again (the server clears the flag then): the card keeps saying so until the server resolves it.
         return carried == .scopeMissing ? .scopeMissing : nil
     }
 

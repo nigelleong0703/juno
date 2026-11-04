@@ -14,7 +14,7 @@ const clip = (text: string, max: number): string => {
 function toolOf(step: Step): string {
   if (step.verb === "Read") return "web_fetch";
   if (step.verb === "Looked up") return "web_search";
-  if (step.verb === "Asked a helper") return "child_spawn";
+  if (step.verb === "Started a subagent") return "subagent_start";
   return step.target;
 }
 
@@ -98,6 +98,15 @@ export function stepUrl(step: Step): string | undefined {
   return step.output?.summary?.split("\n").find((line) => line.startsWith("URL: "))?.slice(5);
 }
 
+/** The file a finished `files.write` / `files.edit` step replaced: its path and which computer it is on; undefined for any other step. */
+export function stepFile(step: Step): { path: string; on: "sandbox" | "mac" } | undefined {
+  const tool = step.tool ?? toolOf(step);
+  if ((tool !== "files.write" && tool !== "files.edit") || step.status !== "completed") return undefined;
+  const args = argsOf(step);
+  const path = str(args.path);
+  return path ? { path, on: args.on === "mac" ? "mac" : "sandbox" } : undefined;
+}
+
 /** The muted host under a page step ("Opened <title>" over "example.com"). */
 export function stepDomain(step: Step): string | undefined {
   const tool = toolOf(step);
@@ -105,6 +114,20 @@ export function stepDomain(step: Step): string | undefined {
   const url = str(argsOf(step).url) ?? step.input?.url ?? "";
   if (searchQuery(url) !== undefined) return hostOf(url);
   return pageTitle(outputOf(step)) ? hostOf(url) : undefined;
+}
+
+const REMINDER_WRITES = ["phone_reminders_create", "phone_reminders_update", "phone_reminders_delete"];
+
+/**
+ * The iPhone's reminder writes take a list, so a request is one step. Its sentence is the first line of the tool's answer
+ * ("Added 2 of 3 reminders; 1 failed."); before the answer, or when the call was refused, it is the count in the call.
+ */
+function remindersLine(tool: string, args: Record<string, unknown>, out: string): string {
+  const verb = tool.endsWith("create") ? "Added" : tool.endsWith("update") ? "Changed" : "Deleted";
+  const first = out.split("\n")[0] ?? "";
+  if (first.startsWith(`${verb} `)) return first.replace(/\.$/, "");
+  const count = Array.isArray(args.reminders) ? args.reminders.length : 0;
+  return count === 1 ? `${verb} a reminder` : `${verb} ${count} reminders`;
 }
 
 export function stepLine(step: Step, run: readonly Step[] = []): string | null {
@@ -166,9 +189,9 @@ export function stepLine(step: Step, run: readonly Step[] = []): string | null {
       return "Checked the open tabs";
     case "browser.dialog":
       return "Answered a page dialog";
-    case "child_spawn": {
-      const what = (step.verb === "Asked a helper" ? step.target : undefined) || str(args.title) || str(args.prompt) || "";
-      return what ? `Asked a helper to ${clip(what, 60)}` : "Asked a helper for a hand";
+    case "subagent_start": {
+      const what = (step.verb === "Started a subagent" ? step.target : undefined) || str(args.title) || str(args.prompt) || "";
+      return what ? `Started a subagent to ${clip(what, 60)}` : "Started a subagent";
     }
     case "request_secure_input": {
       const labels = (Array.isArray(args.fields) ? args.fields : [])
@@ -190,6 +213,10 @@ export function stepLine(step: Step, run: readonly Step[] = []): string | null {
       const verb = tool === "files.read" ? "Read" : tool === "files.write" ? "Wrote" : "Edited";
       return `${name ? `${verb} ${name}` : `${verb} a file`}${where}`;
     }
+    case "phone_reminders_create":
+    case "phone_reminders_update":
+    case "phone_reminders_delete":
+      return remindersLine(tool, args, out);
     case "computer_copy": {
       const name = (str(args.path) ?? str(args.toPath) ?? "").split("/").pop();
       const side = (key: string) => (args[key] === "mac" ? "your Mac" : "the sandbox");
@@ -203,7 +230,7 @@ export function stepLine(step: Step, run: readonly Step[] = []): string | null {
 const PROGRESSIVE: Record<string, string> = {
   Clicked: "Clicking", Opened: "Opening", Searched: "Searching", Typed: "Typing", Filled: "Filling",
   Scrolled: "Scrolling", Pressed: "Pressing", Ran: "Running", Read: "Reading", Wrote: "Writing",
-  Edited: "Editing", Copied: "Copying", Checked: "Checking", Answered: "Answering", Asked: "Asking", Looked: "Looking",
+  Edited: "Editing", Copied: "Copying", Added: "Adding", Changed: "Changing", Deleted: "Deleting", Checked: "Checking", Answered: "Answering", Asked: "Asking", Looked: "Looking",
 };
 
 /** "Clicked X" becomes "Clicking X"; a line that starts with another word stays as it is. */
@@ -289,12 +316,23 @@ export function visibleSteps(steps: readonly Step[]): Step[] {
   return shown;
 }
 
+/**
+ * Whether a run is doing something a person can look at (iPhone `World.showsWork`). A chat reply that has not run a
+ * tool yet is only being written: the chat shows the typing bubble, not "Working", and there is no Activity to open.
+ * Routine, scheduled and manual runs are tasks from the start.
+ */
+export function runShowsWork(run: Run): boolean {
+  return run.kind !== "chat" || visibleSteps(run.steps).length > 0;
+}
+
 const NOISE = ["Snapshot of tab", "(Fetched as text", "(Untrusted", "Page content below", "[image]", "Captured screen", "Title:", "URL:", "Navigated tab", "Clicked "];
 
 /** A short readable excerpt of what the tool returned: page snapshots, refs and fetch boilerplate stripped. */
 export function stepExcerpt(step: Step): string | undefined {
   const raw = outputOf(step);
   if (!raw || isRefusedPurchase(step)) return undefined;
+  // A reminders batch: the row's sentence is the first line; what is under it is the list, one reminder per line.
+  if (REMINDER_WRITES.includes(toolOf(step))) return raw.split("\n").slice(1).join("\n").slice(0, 1500) || undefined;
   const text = raw
     .split("\n")
     .map((line) => line.trim())

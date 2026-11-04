@@ -8,11 +8,12 @@ import type {
   ItemsApi,
   ItemsListParams,
 } from '../contracts.js';
-import type { ComposerPayload, Id, ResolveRequestInput, RunAgentInput, UpdateConversationInput } from '../contracts.js';
+import type { ComposerPayload, Id, ResolveRequestInput, RunAgentInput, UpdateConversationInput, UpdateGroupSettingsInput } from '../contracts.js';
 import {
   AGUI_PROTOCOL_VERSION,
   RunAgentInputSchema,
   conversationSchema,
+  groupSettingsSchema,
   itemSchema,
   newAguiRunId,
   newAdmissionIdentity,
@@ -153,6 +154,16 @@ export function createConversationsApi(http: HttpTransport): ConversationsApi {
 
     async typing(id: Id, active: boolean): Promise<void> {
       await http.request(`/v1/conversations/${id}/typing`, 'POST', { active });
+    },
+
+    async groupSettings(id: Id) {
+      const data = await http.request(`/v1/conversations/${id}/group`, 'GET');
+      return http.parse(groupSettingsSchema, data);
+    },
+
+    async updateGroupSettings(id: Id, input: UpdateGroupSettingsInput) {
+      const data = await http.request(`/v1/conversations/${id}/group`, 'PUT', input);
+      return http.parse(groupSettingsSchema, data);
     },
   };
 }

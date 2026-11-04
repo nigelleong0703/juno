@@ -78,6 +78,9 @@ struct ChatListView: UIViewControllerRepresentable {
 final class ChatCell: UICollectionViewCell {
     /// The bubble's rect in cell coordinates, reported by SwiftUI; the context menu lifts only this.
     var bubbleRect: CGRect = .zero
+    /// The entry this cell shows. Reconfiguring the same entry keeps `bubbleRect`: the tree keeps its `.id`, so SwiftUI
+    /// reports the bubble again only when it moves, and a cleared rect would leave the row without a long-press.
+    private var entryId: String?
     /// The layout already has this row's exact height: no self-sizing pass.
     var isExact = false
     /// A row shown without a measured height sizes itself once; the list remembers the result.
@@ -129,7 +132,8 @@ final class ChatCell: UICollectionViewCell {
     func configure(_ entry: ChatEntry, context: ChatContext, width: CGFloat, exact: Bool,
                    resized: @escaping (CGFloat) -> Void, touched: @escaping () -> Void, selfSized: @escaping (CGFloat) -> Void) {
         contentView.transform = CGAffineTransform(scaleX: 1, y: -1)
-        bubbleRect = .zero
+        if entryId != entry.id { bubbleRect = .zero }
+        entryId = entry.id
         isExact = exact
         onSelfSized = selfSized
         contentConfiguration = nil

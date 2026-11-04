@@ -4,13 +4,14 @@ import { ModelSetupAction } from "../../../components/run/ModelSetupAction";
 import type { Run, Step } from "@agent-desktop/client";
 import { Check, Loader2 } from "lucide-react";
 import { StepTimeline } from "../../../components/run/StepRow";
-import { useChildRuns } from "../../../data/child-runs";
+import { useSubagentRuns } from "../../../data/subagent-runs";
 import { useAgent, useItems, useRoutines, useRun } from "../../../data/queries";
 import { useRequestPreview, useTaskForRun } from "../../../data/tasks";
 import { startedByLine } from "../../../lib/auditInitiator";
 import { t } from "../../../lib/i18n";
 import { taskDetailText, taskPhase } from "../../../lib/taskView";
 import { activityTitle, latestStepText, progressText, runDuration, runElapsedMs, runErrorText, visibleSteps } from "../../../lib/stepLine";
+import { FileVersions } from "./FileVersions";
 import { ShowMore, timeLabel } from "./parts";
 
 /** The one status vocabulary for a task or a run (the iPhone's StatusTone + Fmt.status). */
@@ -46,9 +47,9 @@ function TaskCardBody({ runId }: { runId: string }) {
   const task = useTaskForRun(run?.agentId, runId);
   const { data: routines } = useRoutines();
   const routine = task?.origin.type === "routine" ? routines?.find((entry) => entry.id === task.routineId) : undefined;
-  const { children } = useChildRuns(runId, run?.conversationId);
-  // Helpers are left out of the run lists, so the parent's own list of child ids leads; any the cache knows are added.
-  const childIds = [...new Set([...(run?.childRunIds ?? []), ...[...children].sort((a, b) => a.startedAt.localeCompare(b.startedAt)).map((child) => child.id)])];
+  const { subagents } = useSubagentRuns(runId, run?.conversationId);
+  // Subagents are left out of the run lists, so the parent's own list of subagent run ids (`childRunIds` on the wire) leads; any the cache knows are added.
+  const subagentIds = [...new Set([...(run?.childRunIds ?? []), ...[...subagents].sort((a, b) => a.startedAt.localeCompare(b.startedAt)).map((subagent) => subagent.id)])];
   const shotRef = run?.steps.findLast((step) => step.screenshotRef)?.screenshotRef;
   const { data: shot } = useRequestPreview(shotRef);
   // The task's own state wins; a run without a task reads in the run vocabulary.
@@ -56,7 +57,7 @@ function TaskCardBody({ runId }: { runId: string }) {
   const status = task ? taskPhase(task) : runStatus && { tone: runStatus.tone, label: t(runStatus.label) };
   const active = task?.status === "running" || task?.status === "waiting";
   // While it works, the headline is what the newest step (a running helper's, else the run's own) says, in the step list's words.
-  const doing = active ? (latestStepText([...children].filter((child) => child.status === "running").flatMap((child) => child.steps)) ?? latestStepText(run?.steps ?? []) ?? (task?.progress ? progressText(task.progress) : undefined)) : undefined;
+  const doing = active ? (latestStepText([...subagents].filter((subagent) => subagent.status === "running").flatMap((subagent) => subagent.steps)) ?? latestStepText(run?.steps ?? []) ?? (task?.progress ? progressText(task.progress) : undefined)) : undefined;
   const summary = run?.summary ?? (task ? (active ? doing : (task.resultLine ?? task.progress)) : undefined);
   const { data: taskAgent } = useAgent(task?.agentId);
   const detail = task ? taskDetailText(task, taskAgent?.name) : undefined;
@@ -88,22 +89,22 @@ function TaskCardBody({ runId }: { runId: string }) {
       {detail ? <p className="text-sm text-fg-muted">{detail}</p> : null}
       {summary ? <p className="text-sm text-fg-muted">{summary}</p> : null}
       {shot ? <img src={shot} alt="" className="w-full rounded-xl border border-border" /> : null}
-      <StepSection label={t("tasks.main")} steps={run?.steps ?? []} />
-      {childIds.map((id) => (
-        <ChildSection key={id} runId={id} />
+      <StepSection label={t("tasks.main")} agentId={run?.agentId} steps={run?.steps ?? []} />
+      {subagentIds.map((id) => (
+        <SubagentSection key={id} runId={id} />
       ))}
     </>
   );
 }
 
-/** One helper run: its title, whether it is still going, and its own steps (live while it runs). */
-function ChildSection({ runId }: { runId: string }) {
-  const { data: child } = useRun(runId);
-  if (!child) return null;
-  return <StepSection label={child.title || t("tasks.subtask")} status={child.status} steps={child.steps} />;
+/** One subagent run: its title, whether it is still going, and its own steps (live while it runs). */
+function SubagentSection({ runId }: { runId: string }) {
+  const { data: subagent } = useRun(runId);
+  if (!subagent) return null;
+  return <StepSection label={subagent.title || t("tasks.subtask")} agentId={subagent.agentId} status={subagent.status} steps={subagent.steps} />;
 }
 
-function StepSection({ label, status, steps }: { label: string; status?: Run["status"]; steps: readonly Step[] }) {
+function StepSection({ label, agentId, status, steps }: { label: string; agentId?: string; status?: Run["status"]; steps: readonly Step[] }) {
   const [shown, setShown] = useState(STEP_PAGE);
   const total = visibleSteps(steps).length;
   const live = status === "running" || status === "queued";
@@ -116,7 +117,7 @@ function StepSection({ label, status, steps }: { label: string; status?: Run["st
         {status === "failed" ? <span className="text-danger">{t("tasks.failed")}</span> : null}
         {status === "completed" ? <Check className="size-3" aria-label={t("tasks.completed")} /> : null}
       </h3>
-      <StepTimeline steps={steps} limit={shown} />
+      <StepTimeline steps={steps} limit={shown} extra={agentId ? (step) => <FileVersions step={step} agentId={agentId} /> : undefined} />
       <ShowMore hidden={total - shown} onClick={() => setShown((value) => value + STEP_PAGE)} />
     </div>
   );

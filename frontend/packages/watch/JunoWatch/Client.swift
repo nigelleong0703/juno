@@ -7,12 +7,9 @@ struct WatchSession: Codable, Equatable {
     var token: String
 }
 
-/// The backend the watch was built for (Config/Watch.xcconfig -> Info.plist `JunoServerURL`).
+/// The one backend every Juno build talks to (same address as the iPhone's `Backend.url`; set it to your own server before building).
 enum WatchServer {
-    static var url: URL {
-        let text = Bundle.main.object(forInfoDictionaryKey: "JunoServerURL") as? String ?? ""
-        return URL(string: text) ?? URL(string: "http://127.0.0.1:8787")!
-    }
+    static let url = URL(string: "https://juno.example.com")!
 }
 
 struct WatchAPIError: LocalizedError {
@@ -35,6 +32,7 @@ struct WatchConversation: Decodable {
 struct WatchAgent: Decodable {
     struct Avatar: Decodable { var character: String? }
     var id: String
+    var name: String?
     var avatar: Avatar?
 }
 
@@ -48,6 +46,12 @@ struct WatchItem: Decodable, Identifiable {
     var fromUser: Bool { type == "user_message" }
     var isMessage: Bool { type == "user_message" || type == "agent_message" }
     var body: String { text ?? markdown ?? "" }
+}
+
+/// One sentence-sized piece of a spoken reply.
+struct SpeechPart: Decodable {
+    var url: String
+    var text: String
 }
 
 /// What `POST /auth/device/code` returns.
@@ -142,14 +146,27 @@ struct WatchClient {
         try Self.decoder.decode(ListResponse<WatchItem>.self, from: await request("v1/conversations/\(conversationId)/items?order=desc&limit=20")).items
     }
 
-    func agent(_ id: String) async throws -> WatchAgent {
-        try Self.decoder.decode(WatchAgent.self, from: await request("v1/agents/\(id)"))
+    func agents() async throws -> [WatchAgent] {
+        try Self.decoder.decode(ListResponse<WatchAgent>.self, from: await request("v1/agents")).items
+    }
+
+    /// The direct chat with an agent, created on first use. The response is the conversation or `{conversation}`.
+    func createDirect(with agentId: String) async throws -> String {
+        struct Envelope: Decodable { var conversation: WatchConversation }
+        let data = try await request("v1/conversations", method: "POST", body: ["kind": "direct", "memberAgentIds": [agentId]])
+        return try (try? Self.decoder.decode(WatchConversation.self, from: data))?.id ?? Self.decoder.decode(Envelope.self, from: data).conversation.id
     }
 
     /// POST /v1/transcriptions: the recording (AAC m4a) in, the spoken text out. Nothing is kept server-side.
     func transcribe(_ recording: Data) async throws -> String {
         struct Result: Decodable { var text: String }
         return try Self.decoder.decode(Result.self, from: await request("v1/transcriptions", method: "POST", raw: (recording, "audio/mp4"))).text
+    }
+
+    /// POST /v1/speech: the reply as audio parts in playback order; `url` is relative to the server and needs the same token.
+    func speech(_ text: String) async throws -> [SpeechPart] {
+        struct Result: Decodable { var parts: [SpeechPart] }
+        return try Self.decoder.decode(Result.self, from: await request("v1/speech", method: "POST", body: ["text": text])).parts
     }
 
     func send(_ text: String, to conversationId: String) async throws {

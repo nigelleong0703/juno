@@ -85,10 +85,11 @@ struct Sidebar: View {
             .scrollIndicators(.hidden)
 
             HStack {
+                // The catalog primary button: its label takes Theme.primaryFg, so it reads in both modes (a tinted glassProminent drew white on the white dark-mode primary).
                 Button { creationEntry = .chat } label: {
-                    Label("New chat", systemImage: "square.and.pencil").font(.system(size: 17, weight: .semibold))
+                    Label("New chat", systemImage: "square.and.pencil")
                 }
-                .buttonStyle(.glassProminent).buttonBorderShape(.capsule).controlSize(.large).tint(Theme.primary)
+                .buttonStyle(WebButton(variant: .primary, size: .hero))
                 Spacer()
                 RoundGlassButton(symbol: "gearshape", label: "Settings") { showSettings = true }
             }

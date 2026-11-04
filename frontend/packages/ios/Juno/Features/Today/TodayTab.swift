@@ -313,11 +313,11 @@ private struct AgentStories: View {
                 ForEach(world.agents.prefix(Self.limit)) { agent in
                     VStack(spacing: 4) {
                         StoryRing(active: working.contains(agent.id), tint: agentTint(agent)) {
-                            AvatarView(agent: agent, size: 44)
+                            // The zoom's source is the avatar itself: it is what flies to the card.
+                            AvatarView(agent: agent, size: 44).agentZoomSource("today-\(agent.id)")
                         }
                         Text(agent.name ?? "").text(.xs).foregroundStyle(Theme.fgMuted).lineLimit(1).frame(width: 56)
                     }
-                    .agentZoomSource("today-\(agent.id)")
                     .tapOnly { world.openAgentPage(agent.id, from: "today-\(agent.id)") }
                     .accessibilityIdentifier("today-agent-\(agent.id)")
                 }

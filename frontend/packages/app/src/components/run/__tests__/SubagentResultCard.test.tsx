@@ -1,6 +1,6 @@
 /**
- * CT-ui: parent cards read the child result from canonical scoped run state.
- * Each test renders the actual ChildRuns component with a fake public client —
+ * CT-ui: parent cards read the subagent result from canonical scoped run state.
+ * Each test renders the actual SubagentRuns component with a fake public client —
  * source-level asserts are not enough.
  */
 import type { Agent, ApiClient, Run } from "@agent-desktop/client";
@@ -15,7 +15,7 @@ import { ClientProvider } from "../../../data/ClientProvider";
 import { applyEvent } from "../../../data/liveSync";
 import { qk } from "../../../data/keys";
 import { t } from "../../../lib/i18n";
-import { ChildRuns } from "../ChildRuns";
+import { SubagentRuns } from "../SubagentRuns";
 
 beforeAll(() => {
   class ResizeObserverStub implements ResizeObserver {
@@ -123,17 +123,17 @@ const AGENT: Agent = {
 
 function renderChildren(client: ApiClient, queryClient: QueryClient = newQueryClient()) {
   return render(
-    <ChildRuns parentRunId={PARENT} conversationId={CONV} agentById={(id) => (id === "agent-a" ? AGENT : undefined)} onOpenRun={vi.fn()} onStopRun={vi.fn()} />,
+    <SubagentRuns parentRunId={PARENT} conversationId={CONV} agentById={(id) => (id === "agent-a" ? AGENT : undefined)} onOpenRun={vi.fn()} onStopRun={vi.fn()} />,
     { wrapper: wrapperFor(client, queryClient) },
   );
 }
 
-describe("ChildResultCard", () => {
+describe("SubagentResultCard", () => {
   it("renders the childResult of a completed child from canonical run state", async () => {
     const { container } = renderChildren(
       clientWith([makeRun({ id: PARENT, status: "running" }), makeRun({ id: CHILD, status: "completed", childResult: RESULT })]),
     );
-    expect(await screen.findByTestId("child-run-" + CHILD)).toBeDefined();
+    expect(await screen.findByTestId("subagent-run-" + CHILD)).toBeDefined();
     expect(await screen.findByText(RESULT)).toBeDefined();
     expect(screen.queryByText("CHILD-ITEM-REPLY")).toBeNull();
     expect(container.hasChildNodes()).toBe(true);
@@ -143,7 +143,7 @@ describe("ChildResultCard", () => {
     renderChildren(
       clientWith([makeRun({ id: PARENT, status: "running" }), makeRun({ id: CHILD, status: "completed", childResult: RESULT })]),
     );
-    expect(await screen.findByTestId("child-run-" + CHILD)).toBeDefined();
+    expect(await screen.findByTestId("subagent-run-" + CHILD)).toBeDefined();
     expect(await screen.findByText(RESULT)).toBeDefined();
     expect(screen.queryByText("CHILD-ITEM-REPLY")).toBeNull();
     expect(screen.queryByRole("button", { name: t("run.stop") + " " + CHILD })).toBeNull();
@@ -154,7 +154,7 @@ describe("ChildResultCard", () => {
     const onGet = vi.fn();
     const queryClient = newQueryClient();
     renderChildren(clientWith([makeRun({ id: PARENT, status: "running" }), makeRun({ id: CHILD, status: "running" })], { onGet }), queryClient);
-    expect(await screen.findByTestId("child-run-" + CHILD)).toBeDefined();
+    expect(await screen.findByTestId("subagent-run-" + CHILD)).toBeDefined();
     expect(screen.queryByText(RESULT)).toBeNull();
     const before = onGet.mock.calls.length;
     applyEvent(queryClient, {
@@ -172,7 +172,7 @@ describe("ChildResultCard", () => {
     const onGet = vi.fn();
     const queryClient = newQueryClient();
     renderChildren(clientWith(current, { onGet }), queryClient);
-    await screen.findByTestId("child-run-" + CHILD);
+    await screen.findByTestId("subagent-run-" + CHILD);
     await waitFor(() => expect(onGet).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(RESULT)).toBeNull();
     current.splice(1, 1, makeRun({ id: CHILD, status: "completed", childResult: RESULT }));
@@ -211,7 +211,7 @@ describe("ChildResultCard", () => {
         { gotRuns: new Map([[CHILD, foreign]]) },
       ),
     );
-    expect(await screen.findByTestId("child-run-" + CHILD)).toBeDefined();
+    expect(await screen.findByTestId("subagent-run-" + CHILD)).toBeDefined();
     await waitFor(() => expect(screen.queryByText("FOREIGN RESULT")).toBeNull());
     expect(screen.queryByRole("button", { name: t("common.retry") })).toBeNull();
   });
@@ -225,7 +225,7 @@ describe("ChildResultCard", () => {
         { gotRuns: new Map([[CHILD, other]]) },
       ),
     );
-    expect(await screen.findByTestId("child-run-" + CHILD)).toBeDefined();
+    expect(await screen.findByTestId("subagent-run-" + CHILD)).toBeDefined();
     await waitFor(() => expect(screen.queryByText("FOREIGN RESULT")).toBeNull());
   });
 
@@ -239,7 +239,7 @@ describe("ChildResultCard", () => {
         { gotRuns: new Map([[CHILD, noConv]]) },
       ),
     );
-    expect(await screen.findByTestId("child-run-" + CHILD)).toBeDefined();
+    expect(await screen.findByTestId("subagent-run-" + CHILD)).toBeDefined();
     await waitFor(() => expect(screen.queryByText("FOREIGN RESULT")).toBeNull());
     expect(screen.queryByRole("button", { name: t("common.retry") })).toBeNull();
   });

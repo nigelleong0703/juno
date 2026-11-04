@@ -119,6 +119,7 @@ struct AppDetailPage: View {
     private func notice(_ app: Contract.App) -> String? {
         if app.isComingSoon { return nil }
         if app.available == false && !app.isAdded { return "\(app.displayName) isn't set up on this server." }
+        if app.needsScopeOnly { return "A tool needs a permission this sign-in doesn't have. Reconnect to allow it." }
         if app.needsSignIn { return "Sign in again to keep your agents using it." }
         return nil
     }
@@ -319,7 +320,7 @@ struct AppDetailPage: View {
             }
             Spacer(minLength: 8)
             Menu {
-                if app.isPerAgent { Button("Sign in again", systemImage: "arrow.clockwise") { installer.start(app, connectionId: account.id) } }
+                if app.isPerAgent { Button(account.needsScope == true ? "Reconnect" : "Sign in again", systemImage: "arrow.clockwise") { installer.start(app, connectionId: account.id) } }
                 Button("Remove", systemImage: "xmark.circle", role: .destructive) { removing = account }
             } label: {
                 Image(systemName: "ellipsis").foregroundStyle(Theme.fgMuted).frame(width: 36, height: 36).contentShape(.rect)
@@ -330,7 +331,8 @@ struct AppDetailPage: View {
     }
 
     @ViewBuilder private func accountStatus(_ account: Contract.AppInstallation, app: Contract.App) -> some View {
-        switch account.status {
+        switch account.needsScope == true ? "needs_scope" : account.status {
+        case "needs_scope": Text("Needs another permission").text(.sm).foregroundStyle(Theme.warning)
         case "expired": Text("Sign in").text(.sm).foregroundStyle(Theme.warning)
         case "error" where app.isChat && account.agentId != nil:
             // A Slack or Discord bot made with the agent's own token: it comes back through the shared Juno app.

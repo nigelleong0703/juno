@@ -1,18 +1,12 @@
+import CoreLocation
 import EventKit
 import Foundation
+import MapKit
 
 /// Calendar and Reminders through EventKit, for the agent (backend BACKEND 7.13). The service only runs what `PhoneDevice`
 /// hands it while the app is open; it never reads or writes by itself. Results are plain JSON for the model: ids, titles, times
 /// as ISO 8601 with this iPhone's offset, short notes.
-struct PhoneCallError: Error, Sendable {
-    var message: String
-    init(_ message: String) { self.message = message }
-}
-
-/// How far the owner has let Juno into one of the two stores.
-enum PhoneAccess: Equatable, Sendable {
-    case notAsked, full, writeOnly, denied
-
+extension PhoneAccess {
     init(_ status: EKAuthorizationStatus) {
         switch status {
         case .fullAccess: self = .full
@@ -23,6 +17,32 @@ enum PhoneAccess: Equatable, Sendable {
     }
 }
 
+/// The two stores as the owner's switches see them: Calendar and Reminders are separate rows over one EventKit service.
+@MainActor struct CalendarSystem: PhoneSystem {
+    let service: EventKitService
+    var access: PhoneAccess { EventKitService.calendarAccess() }
+    func request() async { await service.requestCalendar() }
+    /// Write-only calendar access can add events but not read any.
+    func actions(for access: PhoneAccess) -> [String] {
+        switch access {
+        case .full: ["calendar.read", "calendar.write"]
+        case .writeOnly: ["calendar.write"]
+        default: []
+        }
+    }
+    func run(_ action: String, _ args: [String: JSONValue]) async throws -> JSONValue { try await service.run(action, args) }
+    func changes(_ action: String) -> Bool { action.hasSuffix("create_event") || action.hasSuffix("update_event") || action.hasSuffix("delete_event") }
+}
+
+@MainActor struct RemindersSystem: PhoneSystem {
+    let service: EventKitService
+    var access: PhoneAccess { EventKitService.remindersAccess() }
+    func request() async { await service.requestReminders() }
+    func actions(for access: PhoneAccess) -> [String] { access == .full ? ["reminders.read", "reminders.write"] : [] }
+    func run(_ action: String, _ args: [String: JSONValue]) async throws -> JSONValue { try await service.run(action, args) }
+    func changes(_ action: String) -> Bool { ["reminders.create", "reminders.update", "reminders.delete"].contains(action) }
+}
+
 actor EventKitService {
     private let store = EKEventStore()
 
@@ -30,18 +50,6 @@ actor EventKitService {
 
     nonisolated static func calendarAccess() -> PhoneAccess { PhoneAccess(EKEventStore.authorizationStatus(for: .event)) }
     nonisolated static func remindersAccess() -> PhoneAccess { PhoneAccess(EKEventStore.authorizationStatus(for: .reminder)) }
-
-    /// What the app may declare to the server: only what is authorized (write-only calendar access can add, not read).
-    nonisolated static func declaredActions() -> [String] {
-        var actions: [String] = []
-        switch calendarAccess() {
-        case .full: actions += ["calendar.read", "calendar.write"]
-        case .writeOnly: actions += ["calendar.write"]
-        default: break
-        }
-        if remindersAccess() == .full { actions += ["reminders.read", "reminders.write"] }
-        return actions
-    }
 
     func requestCalendar() async {
         _ = try? await store.requestFullAccessToEvents()
@@ -62,9 +70,9 @@ actor EventKitService {
         case "calendar.update_event": return try updateEvent(args)
         case "calendar.delete_event": return try deleteEvent(args)
         case "reminders.list": return try await listReminders(args)
-        case "reminders.create": return try createReminder(args)
-        case "reminders.update": return try updateReminder(args)
-        case "reminders.delete": return try deleteReminder(args)
+        case "reminders.create": return try await remindersBatch(args) { try await self.createReminder($0) }
+        case "reminders.update": return try await remindersBatch(args) { try self.updateReminder($0) }
+        case "reminders.delete": return try await remindersBatch(args) { try self.deleteReminder($0) }
         default: throw PhoneCallError("This version of Juno on the iPhone does not know \(action).")
         }
     }
@@ -76,7 +84,7 @@ actor EventKitService {
         case .full: return
         case .writeOnly where !read: return
         case .writeOnly: throw PhoneCallError("Juno only has add-only access to the calendar, so it can't read it. The owner can allow full access in iPhone Settings > Juno > Calendars.")
-        default: throw PhoneCallError("Juno isn't allowed to use the calendar on this iPhone. The owner can allow it in Juno > Settings > iPhone calendar and reminders.")
+        default: throw PhoneCallError("Juno isn't allowed to use the calendar on this iPhone. The owner can switch it on in Juno > Settings > iPhone access.")
         }
     }
 
@@ -179,7 +187,7 @@ actor EventKitService {
 
     private func requireReminders() throws {
         guard Self.remindersAccess() == .full else {
-            throw PhoneCallError("Juno isn't allowed to use Reminders on this iPhone. The owner can allow it in Juno > Settings > iPhone calendar and reminders.")
+            throw PhoneCallError("Juno isn't allowed to use Reminders on this iPhone. The owner can switch it on in Juno > Settings > iPhone access.")
         }
     }
 
@@ -200,8 +208,41 @@ actor EventKitService {
         return .array(sorted.prefix(limit).map(\.json))
     }
 
-    private func createReminder(_ args: [String: JSONValue]) throws -> JSONValue {
+    /// A reminder one item of a batch touched; `summary` is set when it must be read before the change (a delete).
+    private struct Touched {
+        let reminder: EKReminder
+        var summary: JSONValue?
+    }
+
+    /// Runs a write on every reminder of `args.reminders` (1 to 20), saving each without committing and committing once at the end.
+    /// The answer is per item, in the order sent: `{ok: true, reminder}` or `{ok: false, error}`. One item failing does not stop the others.
+    private func remindersBatch(_ args: [String: JSONValue], _ apply: ([String: JSONValue]) async throws -> Touched) async throws -> JSONValue {
         try requireReminders()
+        guard case .array(let items)? = args["reminders"], (1...20).contains(items.count) else {
+            throw PhoneCallError("Give 1 to 20 reminders in \"reminders\". Nothing was changed.")
+        }
+        var outcomes: [Result<Touched, PhoneCallError>] = []
+        for item in items {
+            do { outcomes.append(.success(try await apply(item.fields ?? [:]))) }
+            catch let error as PhoneCallError { outcomes.append(.failure(error)) }
+            catch { outcomes.append(.failure(PhoneCallError(error.localizedDescription))) }
+        }
+        if outcomes.contains(where: { if case .success = $0 { true } else { false } }) {
+            do { try store.commit() } catch {
+                store.reset()
+                throw PhoneCallError("Reminders refused the changes, so none were saved: \(error.localizedDescription)")
+            }
+        }
+        // Read after the commit: a new reminder only has its final id once it is saved.
+        return .object(["results": .array(outcomes.map { outcome in
+            switch outcome {
+            case .success(let touched): .object(["ok": .bool(true), "reminder": touched.summary ?? Self.json(touched.reminder)])
+            case .failure(let error): .object(["ok": .bool(false), "error": .string(error.message)])
+            }
+        })])
+    }
+
+    private func createReminder(_ args: [String: JSONValue]) async throws -> Touched {
         let reminder = EKReminder(eventStore: store)
         reminder.title = try Self.requiredString(args, "title")
         reminder.notes = args.string("notes")
@@ -209,27 +250,54 @@ actor EventKitService {
         else if let fallback = store.defaultCalendarForNewReminders() { reminder.calendar = fallback }
         else { throw PhoneCallError("There is no default Reminders list on this iPhone.") }
         if args["due"] != nil { Self.setDue(reminder, try Self.date(args, "due")) }
-        try store.save(reminder, commit: true)
-        return Self.json(reminder)
+        if let place = args["place"]?.fields { reminder.addAlarm(try await Self.locationAlarm(place)) }
+        try store.save(reminder, commit: false)
+        return Touched(reminder: reminder)
     }
 
-    private func updateReminder(_ args: [String: JSONValue]) throws -> JSONValue {
-        try requireReminders()
+    /// A location alarm, the system's own geofence in Reminders (no tracking by Juno): fires when arriving at or leaving the place.
+    /// Without coordinates the place is looked up on the map; a name that finds nothing is an error the agent can act on.
+    private static func locationAlarm(_ place: [String: JSONValue]) async throws -> EKAlarm {
+        let name = try place.requiredString("name")
+        var title = name
+        let location: CLLocation
+        if let latitude = place.double("latitude"), let longitude = place.double("longitude") {
+            location = CLLocation(latitude: latitude, longitude: longitude)
+        } else {
+            let request = MKLocalSearch.Request()
+            request.naturalLanguageQuery = name
+            guard let found = try? await MKLocalSearch(request: request).start().mapItems.first else {
+                throw PhoneCallError("The map found no place called \"\(name)\". Ask the user for a street address, or pass latitude and longitude. Nothing was added.")
+            }
+            location = found.location
+            title = found.name ?? name
+        }
+        let structured = EKStructuredLocation(title: title)
+        structured.geoLocation = location
+        structured.radius = place.double("radiusMeters") ?? 0
+        let alarm = EKAlarm()
+        alarm.structuredLocation = structured
+        alarm.proximity = place.string("when") == "leaving" ? .leave : .enter
+        return alarm
+    }
+
+    private func updateReminder(_ args: [String: JSONValue]) throws -> Touched {
         let reminder = try existingReminder(try Self.requiredString(args, "id"))
+        // Read the new due time first so an unreadable one leaves the reminder untouched.
+        let due = args["due"] == nil ? nil : try Self.date(args, "due")
         if let title = args.string("title") { reminder.title = title }
         if let notes = args.string("notes") { reminder.notes = notes }
-        if args["due"] != nil { Self.setDue(reminder, try Self.date(args, "due")) }
+        if let due { Self.setDue(reminder, due) }
         if let completed = args.bool("completed") { reminder.isCompleted = completed }
-        try store.save(reminder, commit: true)
-        return Self.json(reminder)
+        do { try store.save(reminder, commit: false) } catch { reminder.reset(); throw error }
+        return Touched(reminder: reminder)
     }
 
-    private func deleteReminder(_ args: [String: JSONValue]) throws -> JSONValue {
-        try requireReminders()
+    private func deleteReminder(_ args: [String: JSONValue]) throws -> Touched {
         let reminder = try existingReminder(try Self.requiredString(args, "id"))
         let summary = Self.json(reminder)
-        try store.remove(reminder, commit: true)
-        return .object(["deleted": summary])
+        try store.remove(reminder, commit: false)
+        return Touched(reminder: reminder, summary: summary)
     }
 
     private func reminderList(_ nameOrId: String) throws -> EKCalendar {
@@ -259,50 +327,18 @@ actor EventKitService {
         ]
         if let due = dueDate(reminder) { out["due"] = .string(iso(due)) }
         if let notes = reminder.notes, !notes.isEmpty { out["notes"] = .string(String(notes.prefix(500))) }
+        if let alarm = reminder.alarms?.first(where: { $0.structuredLocation != nil }), let place = alarm.structuredLocation {
+            out["place"] = .object([
+                "name": .string(place.title ?? ""), "when": .string(alarm.proximity == .leave ? "leaving" : "arriving"),
+                "latitude": .number(place.geoLocation?.coordinate.latitude ?? 0), "longitude": .number(place.geoLocation?.coordinate.longitude ?? 0),
+            ])
+        }
         return .object(out)
     }
 
     // MARK: Dates and arguments
 
-    /// ISO 8601 with this iPhone's offset.
-    private static func iso(_ date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.timeZone = .current
-        return formatter.string(from: date)
-    }
-
-    /// ISO 8601 with an offset (or Z), else a local time ("2026-10-22T15:00", "2026-10-22 15:00", "2026-10-22") in this iPhone's zone.
-    static func parseDate(_ text: String) -> Date? {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        for options: ISO8601DateFormatter.Options in [[.withInternetDateTime], [.withInternetDateTime, .withFractionalSeconds]] {
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = options
-            if let date = formatter.date(from: trimmed) { return date }
-        }
-        for format in ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm", "yyyy-MM-dd"] {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.timeZone = .current
-            formatter.dateFormat = format
-            if let date = formatter.date(from: trimmed) { return date }
-        }
-        return nil
-    }
-
-    private static func date(_ args: [String: JSONValue], _ key: String) throws -> Date {
-        let text = try requiredString(args, key)
-        guard let date = parseDate(text) else { throw PhoneCallError("`\(key)` (\"\(text)\") is not a time I can read. Use ISO 8601 such as 2026-10-22T15:00:00+08:00.") }
-        return date
-    }
-
-    private static func requiredString(_ args: [String: JSONValue], _ key: String) throws -> String {
-        guard let value = args.string(key), !value.isEmpty else { throw PhoneCallError("`\(key)` is required.") }
-        return value
-    }
-}
-
-private extension Dictionary where Key == String, Value == JSONValue {
-    func string(_ key: String) -> String? { if case .string(let value)? = self[key] { return value } else { return nil } }
-    func bool(_ key: String) -> Bool? { if case .bool(let value)? = self[key] { return value } else { return nil } }
-    func int(_ key: String) -> Int? { if case .number(let value)? = self[key] { return Int(value) } else { return nil } }
+    private static func iso(_ date: Date) -> String { PhoneTime.iso(date) }
+    private static func date(_ args: [String: JSONValue], _ key: String) throws -> Date { try PhoneTime.date(args, key) }
+    private static func requiredString(_ args: [String: JSONValue], _ key: String) throws -> String { try args.requiredString(key) }
 }

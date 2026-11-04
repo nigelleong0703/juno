@@ -155,6 +155,16 @@ describe("App detail: accounts", () => {
     await waitFor(() => expect(remove).toHaveBeenCalledWith("gmail", expect.any(String)));
   });
 
+  it("an account that lacks a permission says so and Reconnect signs in again with that installation's connection", async () => {
+    const client = createMockClient({ seed: 7 });
+    const install = vi.spyOn(client.apps, "install");
+    renderApps(client, "/apps/spotify");
+    expect((await screen.findAllByText("Needs another permission")).length).toBeGreaterThan(0);
+    const row = (await screen.findByRole("region", { name: "Accounts" })).querySelector("li") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "Reconnect" }));
+    await waitFor(() => expect(install).toHaveBeenCalledWith("spotify", { connectionId: expect.any(String) }));
+  });
+
   it("an expired account says so and Sign in again re-signs that account", async () => {
     const client = createMockClient({ seed: 7 });
     const install = vi.spyOn(client.apps, "install");

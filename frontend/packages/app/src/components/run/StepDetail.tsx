@@ -28,7 +28,7 @@ export function StepDetail({ step }: { step: Step }) {
           {url}
         </a>
       ) : null}
-      {excerpt ? <p className="text-sm text-fg-muted">{excerpt}</p> : null}
+      {excerpt ? <p className="whitespace-pre-line text-sm text-fg-muted">{excerpt}</p> : null}
       {image ? <img src={image} alt="" className="w-full rounded-lg border border-border" /> : null}
     </div>
   );

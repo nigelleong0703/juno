@@ -27,9 +27,6 @@ private extension JSONValue {
 
 private extension Dictionary where Key == String, Value == JSONValue {
     var junoObject: [String: JSONValue]? { self["juno"]?.object }
-    func string(_ key: String) -> String? { self[key]?.string }
-    func int(_ key: String) -> Int? { self[key]?.int }
-    func bool(_ key: String) -> Bool? { self[key]?.bool }
 }
 
 private extension Contract.AgentEvent {
@@ -99,7 +96,7 @@ extension World {
         self.conversations = loaded.1
         // Housekeeping runs (memory jobs) are the agent's own upkeep, not work for the user: never shown as activity or status.
         self.runs = loaded.2.filter { $0.kind != "background" }
-        self.childRuns = Dictionary(loaded.2.filter { $0.kind == "background" && $0.parentRunId != nil }.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
+        self.subagentRuns = Dictionary(loaded.2.filter { $0.kind == "background" && $0.parentRunId != nil }.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
         self.requests = loaded.3
         // Secondary lists: a missing endpoint on an older server must not block sign-in.
         self.library = (try? await library) ?? []
@@ -107,10 +104,8 @@ extension World {
         self.skills = (try? await skills) ?? []
         self.rules = (try? await rules) ?? []
         self.computers = (try? await computers) ?? []
-        let liveGoals: [PlannedGoal] = (try? await goals) ?? []
-        let liveIdeas: [PlannedIdea] = (try? await ideas) ?? []
-        self.goals = liveGoals.filter { $0.status != "done" }
-        self.ideas = liveIdeas.filter { $0.status == nil || $0.status == "open" }
+        showGoals((try? await goals) ?? [])
+        showIdeas((try? await ideas) ?? [])
         self.feed = Self.newestFirst((try? await feed) ?? [])
         scheduleTodayRefresh(now: true)
         self.usage = try? await api.get("/v1/usage", as: Usage.self)
@@ -125,6 +120,7 @@ extension World {
         // The app opens on Chat; keep a chat already opened (a link or launch argument) if it exists on this server.
         if !self.conversations.contains(where: { $0.id == self.currentConversationId }) { self.currentConversationId = nil }
         if let c = currentConversationId { loadItems(c) }
+        listsFresh = true
         startStream(session, after: resumeAfter)
         if seed { Task { await seedRecentChats() } }
         PushRegistrar.shared.signedIn(api)
@@ -158,12 +154,13 @@ extension World {
         streamToken = token
         PhoneDevice.shared.signedIn(API(session: session))
         streamTask = Task { @MainActor in
-            // Every (re)connect re-reads the agents: an event missed while the stream was down is never replayed.
+            // Every (re)connect compares the app with the server (`reconnected`): a deletion missed while the stream was down,
+            // or made past the server's log, is never replayed.
             let stream = EventStream(session: session, after: after.map(String.init), onLive: { live in
                 guard self.streamToken == token else { return }
                 self.streamLive = live
                 PhoneDevice.shared.streamChanged(live)
-                if live { Task { await self.refreshAgents(); await self.refreshRequests() } }
+                if live { Task { await self.reconnected() } }
             })
             for await frame in stream.frames() {
                 guard !Task.isCancelled, self.streamToken == token else { return }
@@ -181,6 +178,7 @@ extension World {
         guard let api, let fresh = try? await api.list("/v1/agents?limit=200", as: Agent.self) else { return }
         agents = fresh
         doing = doing.filter { id, _ in fresh.contains { $0.id == id && $0.status == "working" } }
+        tasks = tasks.filter { id, _ in fresh.contains { $0.id == id } }
     }
 
     /// `request.resolved` can be missed while the stream is down, which leaves a card pending (and counted in Needs you):
@@ -197,7 +195,8 @@ extension World {
         // Standard AG-UI chat events have their own lifecycle reducer. Product events continue through the
         // names below (agents, conversations, requests, items, feed, devices, ...).
         if applyAgui(frame) { return }
-        struct Head: Decodable { var type: String; var agentId: String?; var status: String?; var doing: String?; var conversationId: String?; var runId: String?; var goalId: String? }
+        struct Head: Decodable { var type: String; var agentId: String?; var status: String?; var doing: String?; var conversationId: String?; var runId: String?; var goalId: String?
+            var ideaId: String?; var postId: String?; var itemId: String? }
         struct E<T: Decodable>: Decodable { var agent: T?; var run: T?; var item: T?; var conversation: T?; var request: T?; var routine: T?; var goal: T?; var idea: T?; var step: T?; var post: T?; var task: T?; var artifact: T? }
         guard let head = try? isoDecoder.decode(Head.self, from: frame) else { return }
         // What the Today header shows changes with requests, runs and feed posts; the server's copy is re-read shortly after.
@@ -215,10 +214,13 @@ extension World {
         case "agent.home.changed":
             homeRevision += 1
         case "agent.deleted":
-            // Everything of a deleted agent goes, not just its row: its direct chats, runs, requests and tasks
-            // (otherwise Home "Today" and the transcript kept showing them until a relaunch).
+            // Everything of a deleted agent goes, not just its row: its direct chats, runs, requests, tasks, goals, ideas
+            // and feed posts (otherwise Home "Today" and the transcript kept showing them until a relaunch).
             if let agentId = head.agentId {
                 agents.removeAll { $0.id == agentId }
+                goals.removeAll { $0.agentId == agentId }
+                ideas.removeAll { $0.agentId == agentId }
+                feed.removeAll { $0.agentId == agentId }
                 let gone = Set(conversations.filter { $0.agentIds == [agentId] }.map(\.id))
                 conversations.removeAll { gone.contains($0.id) }
                 for id in gone { items[id] = nil; history[id] = nil; store?.deleteChat(id) }
@@ -229,6 +231,13 @@ extension World {
             }
         case "item.added":
             if let c = head.conversationId, let item = (try? isoDecoder.decode(E<Item>.self, from: frame))?.item { receive(item, in: c) }
+        case "item.deleted":
+            // One message removed on the server (a streamed bubble the final layout dropped): out of memory and the database.
+            if let c = head.conversationId, let id = head.itemId {
+                items[c]?.removeAll { $0.id == id }
+                fetching[c]?.removeAll { $0.id == id }
+                store?.deleteItem(id)
+            }
         case "artifact.updated":
             // A new version: the existing card shows it in place.
             if let a = (try? isoDecoder.decode(E<LibraryItem>.self, from: frame))?.artifact {
@@ -272,6 +281,10 @@ extension World {
             upsert(&goals, (try? isoDecoder.decode(E<PlannedGoal>.self, from: frame))?.goal)
         case "goal.deleted":
             goals.removeAll { $0.id == head.goalId }
+        case "idea.deleted":
+            ideas.removeAll { $0.id == head.ideaId }
+        case "feed.deleted":
+            feed.removeAll { $0.id == head.postId }
         case "feed.created", "feed.updated":
             if let post = (try? isoDecoder.decode(E<FeedPost>.self, from: frame))?.post {
                 upsert(&feed, post)
@@ -318,14 +331,14 @@ extension World {
             if outcome == "interrupt" { break }
             let status = juno?.string("runStatus") ?? (outcome == "cancelled" ? "stopped" : outcome == "success" ? "completed" : nil)
             if let status, let row = aguiRun(event, juno: juno, status: status, finished: true) {
-                let previous = run(row.id) ?? childRuns[row.id]
+                let previous = run(row.id) ?? subagentRuns[row.id]
                 upsertAguiRun(row)
                 notifyFinished(previous: previous, run: row)
             }
         case "RUN_ERROR":
             let message = event.message ?? "run failed"
             if let row = aguiRun(event, juno: juno, status: juno?.string("runStatus") ?? "failed", error: message, finished: true) {
-                let previous = run(row.id) ?? childRuns[row.id]
+                let previous = run(row.id) ?? subagentRuns[row.id]
                 upsertAguiRun(row)
                 notifyFinished(previous: previous, run: row)
             }
@@ -352,7 +365,7 @@ extension World {
     private func aguiRun(_ event: Contract.AgentEvent, juno: [String: JSONValue]?, status: String, error: String? = nil, finished: Bool = false) -> Run? {
         let id = juno?.string("runId") ?? event.runId
         guard let id else { return nil }
-        let old = run(id) ?? childRuns[id]
+        let old = run(id) ?? subagentRuns[id]
         // A replay of RUN_STARTED must not pull a settled durable row back into work.
         if !finished, let old, Self.aguiTerminal.contains(old.status ?? "") { return nil }
         let agentId = juno?.string("agentId") ?? old?.agentId
@@ -368,7 +381,7 @@ extension World {
 
     private func upsertAguiRun(_ row: Run) {
         if row.kind == "background", row.parentRunId != nil {
-            childRuns[row.id] = row
+            subagentRuns[row.id] = row
         } else if row.kind != "background" {
             if let i = runs.firstIndex(where: { $0.id == row.id }) { runs[i] = row } else { runs.append(row) }
         }
@@ -399,7 +412,7 @@ extension World {
             return row
         }
         if let i = runs.firstIndex(where: { $0.id == runId }) { runs[i] = merge(runs[i]) }
-        else if let row = childRuns[runId] { childRuns[runId] = merge(row) }
+        else if let row = subagentRuns[runId] { subagentRuns[runId] = merge(row) }
     }
 
     private static let aguiSettledSteps: Set<String> = ["completed", "failed", "skipped"]
@@ -456,7 +469,7 @@ extension World {
 
     private func aguiCustom(_ event: Contract.AgentEvent, juno: [String: JSONValue]?) {
         guard event.name == "juno.run.updated", let raw = event.value, let row: Run = decodeJSONValue(raw) else { return }
-        let previous = run(row.id) ?? childRuns[row.id]
+        let previous = run(row.id) ?? subagentRuns[row.id]
         upsertAguiRun(row)
         notifyFinished(previous: previous, run: row)
     }

@@ -10,7 +10,6 @@ import { SuggestionCard } from "../ideas/SuggestionCard";
 import { APP_PILLS, APP_ROWS, defaultPill, featuredApps, filterApps, isAdded, rowState, type AppPill } from "../../lib/apps";
 import { CustomAppDialog } from "./CustomAppDialog";
 import { MacRow, macRowMatches } from "./MacRow";
-
 /** One app: brand icon, name, one-line blurb, its state ("Sign in" in the warning colour) and a chevron. No box. */
 export function AppRow({ app, onOpen }: { app: App; onOpen: () => void }) {
   const state = rowState(app);
@@ -24,6 +23,7 @@ export function AppRow({ app, onOpen }: { app: App; onOpen: () => void }) {
       trailing={
         <span className="flex items-center gap-2">
           {state === "sign-in" ? <span className="text-xs text-warning">{t("apps.state.signIn")}</span> : null}
+          {state === "needs-scope" ? <span className="text-xs text-warning">{t("apps.state.needsScope")}</span> : null}
           {state === "coming-soon" ? <span className="text-xs text-fg-subtle">{t("apps.state.comingSoon")}</span> : null}
           <ChevronRight className="size-4 text-fg-subtle" aria-hidden />
         </span>

@@ -137,6 +137,8 @@ struct Item: Codable, Identifiable, Hashable {
     var markdown: String?
     /// Where an agent reply was also sent (a platform chat); nil for replies that stayed in the app.
     var replyTo: Contract.ChannelOrigin?
+    /// Whether the platform got the reply (`pending`, `sent`, `dropped`); nil for replies that stayed in the app.
+    var delivery: Contract.DeliveryState?
     var citations: [Citation]?
     /// Structured card under the lead-in (`markdown`), see UiDoc.
     var ui: UiDoc?
@@ -163,6 +165,10 @@ struct Item: Codable, Identifiable, Hashable {
     var feedPostId: String?
     var imageUrl: String?
     var summary: String?
+    // screen_ref (agentId + the run it belongs to; `title` / `url` are the latest page the agent opened)
+    var url: String?
+    /// screen_ref: the library image of the screen's latest frame (the server re-sends the item as the run browses).
+    var previewLibraryId: String?
 }
 
 struct SystemAction: Codable, Hashable {
@@ -324,6 +330,8 @@ struct RequestPayload: Codable, Hashable {
     var delegationOffer: Contract.DelegationOffer?
     // approval: an agent wants to use (or bring to the front) an app on the owner's Mac
     var macApp: Contract.ApprovalPayload.MacApp?
+    // approval: someone other than the owner asked for this in a platform chat (who, where, teammate or stranger)
+    var askedBy: Contract.ApprovalPayload.AskedBy?
 }
 
 struct AgentRequest: Codable, Identifiable, Hashable {

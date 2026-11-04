@@ -38,6 +38,7 @@ const CATEGORY_NAME: Record<AppDetail["category"], string> = {
 const STATE_NAME = {
   connected: "apps.state.connected",
   "sign-in": "apps.state.signIn",
+  "needs-scope": "apps.state.needsScope",
   "not-added": "apps.state.notAdded",
   "coming-soon": "apps.state.comingSoon",
 } as const;
@@ -148,7 +149,7 @@ export function AppDetailPage() {
   const primary = (() => {
     if (state === "coming-soon") return <Button size="sm" disabled>{t("apps.state.comingSoon")}</Button>;
     if (!canAdd(app)) return <Button size="sm" disabled>{t("apps.unavailable")}</Button>;
-    if (expired && app.category !== "chat") return <Button size="sm" disabled={install.isPending} onClick={() => start(expired.id)}>{t("apps.signInAgain")}</Button>;
+    if (expired && app.category !== "chat") return <Button size="sm" disabled={install.isPending} onClick={() => start(expired.id)}>{state === "needs-scope" ? t("apps.reconnect") : t("apps.signInAgain")}</Button>;
     if (added) return <Button variant="secondary" size="sm" onClick={() => document.getElementById("app-accounts")?.scrollIntoView({ behavior: "smooth" })}>{t("apps.manage")}</Button>;
     return <Button size="sm" disabled={install.isPending} onClick={() => start()}>{t("apps.connect")}</Button>;
   })();
@@ -167,7 +168,7 @@ export function AppDetailPage() {
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-2xl font-bold tracking-tight text-fg">{app.name}</h1>
             <p className="text-sm text-fg-muted">
-              {t(CATEGORY_NAME[app.category])} · <span className={state === "sign-in" ? "text-warning" : undefined}>{t(STATE_NAME[state])}</span>
+              {t(CATEGORY_NAME[app.category])} · <span className={state === "sign-in" || state === "needs-scope" ? "text-warning" : undefined}>{t(STATE_NAME[state])}</span>
             </p>
           </div>
           {primary}

@@ -8,7 +8,7 @@ import { BrandIcon } from "../../../components/BrandIcon";
 import { ChannelIcon } from "../../../components/channel/platforms";
 import { useApps, useRemoveInstallation, useSetAgentApp, useSetWorkspaceAgent } from "../../../data/apps";
 import { t } from "../../../lib/i18n";
-import { enabledAgentIds, isAdded, policyOf } from "../../../lib/apps";
+import { enabledAgentIds, isAdded, needsScopeOnly, needsSignIn, policyOf } from "../../../lib/apps";
 import { ChatConnectDialog } from "../../apps/chat/ChatConnectDialog";
 import type { ChatKind } from "../../apps/chat/flows";
 import { canEditAgent } from "../canEditAgent";
@@ -25,11 +25,9 @@ function toastError(error: unknown, fallback: string): void {
   toast.error(error instanceof Error && error.message ? error.message : fallback);
 }
 
-const signInExpired = (app: App): boolean => app.installations.some((installation) => installation.status !== "connected");
-
-/** A row's subtitle: an expired sign-in first, else the Actions policy in words; an app with no change capability keeps its blurb. */
+/** A row's subtitle: an expired sign-in or a missing permission first, else the Actions policy in words; an app with no change capability keeps its blurb. */
 function appState(app: App, agentId: string): { text: string; warning: boolean } {
-  if (signInExpired(app)) return { text: t("agentApps.signInAgain"), warning: true };
+  if (needsSignIn(app)) return { text: needsScopeOnly(app) ? t("agentApps.needsScope") : t("agentApps.signInAgain"), warning: true };
   if (!app.grants.actions) return { text: app.blurb, warning: false };
   const policy = POLICIES.find((entry) => entry.value === policyOf(app, agentId)) ?? POLICIES[0];
   return { text: t(policy?.state ?? ""), warning: false };

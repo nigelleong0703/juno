@@ -101,6 +101,18 @@ final class TeamMemoryStore {
         }) { try await world.updateMemoryItem(item.id, text: text, audience: audience, sensitive: sensitive) }
     }
 
+    /// Shares the item with all agents or keeps it for one; shown at once, put back if the server refuses.
+    func setKeeper(_ world: World, _ item: Contract.MemoryItemView, _ keeper: MemoryKeeper) {
+        optimistic(world, { rows in
+            rows.map { candidate in
+                guard candidate.id == item.id else { return candidate }
+                var copy = candidate
+                if case .agent(let id) = keeper { copy.agentId = id } else { copy.agentId = nil }
+                return copy
+            }
+        }) { try await world.updateMemoryItem(item.id, keeper: keeper) }
+    }
+
     func forget(_ world: World, _ item: Contract.MemoryItemView) {
         optimistic(world, { rows in rows.filter { $0.id != item.id } }) { try await world.deleteMemoryItem(item.id) }
     }

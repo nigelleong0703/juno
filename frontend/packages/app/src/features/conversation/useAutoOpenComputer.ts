@@ -1,6 +1,6 @@
 import type { Run, Step } from "@agent-desktop/client";
 import { useEffect, useRef } from "react";
-import { canStopRun } from "../../data/child-runs";
+import { canStopRun } from "../../data/subagent-runs";
 import { useUiStore } from "../../store/ui";
 
 /** A step on the agent's computer: a computer or browser step, or a computer.* / browser.* tool. */

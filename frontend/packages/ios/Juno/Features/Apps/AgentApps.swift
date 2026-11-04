@@ -208,7 +208,7 @@ private struct AgentAppRow: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(app.displayName).text(.md, .medium).foregroundStyle(Theme.fg).lineLimit(1)
                         if app.needsSignIn {
-                            Text("Sign-in expired \u{00B7} sign in again").text(.sm).foregroundStyle(Theme.warning).lineLimit(1)
+                            Text(app.needsScopeOnly ? "Needs another permission \u{00B7} reconnect" : "Sign-in expired \u{00B7} sign in again").text(.sm).foregroundStyle(Theme.warning).lineLimit(1)
                         } else if app.grants?.actions != false {
                             Text(app.policy(for: agentId).stateWords).text(.sm).foregroundStyle(Theme.fgMuted).lineLimit(1)
                         } else if let blurb = app.blurb, !blurb.isEmpty {
@@ -259,7 +259,7 @@ private struct AgentAppSheet: View {
                     .accessibilityIdentifier("agent-app-sheet-switch")
                     .inputField()
                 if app.needsSignIn {
-                    Button { onSignIn(); dismiss() } label: { Text("Sign in again").frame(maxWidth: .infinity) }
+                    Button { onSignIn(); dismiss() } label: { Text(app.needsScopeOnly ? "Reconnect" : "Sign in again").frame(maxWidth: .infinity) }
                         .buttonStyle(WebButton(variant: .secondary, size: .large))
                         .accessibilityIdentifier("agent-app-sheet-signin")
                 }

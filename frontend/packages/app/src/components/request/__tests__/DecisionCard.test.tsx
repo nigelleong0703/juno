@@ -131,6 +131,24 @@ describe("decision card", () => {
     expect(bodies.at(-1)).toEqual({ action: "approve" });
   });
 
+  it("says who asked and where only when someone other than the owner asked in a platform chat", async () => {
+    const client = createMockClient({ seed: 3 });
+    const request = await emailRequest(client);
+    const asked = (askedBy: object | undefined): Request =>
+      request.payload.kind === "approval" ? { ...request, payload: { ...request.payload, askedBy } } as Request : request;
+
+    const mine = renderCard(client, (entry) => <RequestCard request={entry} onResolve={() => {}} />, asked(undefined));
+    expect(screen.queryByText(/asked in |outside the team/u)).toBeNull();
+    mine.unmount();
+
+    const teammate = renderCard(client, (entry) => <RequestCard request={entry} onResolve={() => {}} />, asked({ name: "Mia", where: "Design team", kind: "teammate" }));
+    expect(screen.getByText("Mia asked in Design team")).toBeDefined();
+    teammate.unmount();
+
+    renderCard(client, (entry) => <RequestCard request={entry} onResolve={() => {}} />, asked({ kind: "stranger" }));
+    expect(screen.getByText("Someone outside the team asked")).toBeDefined();
+  });
+
   it("a decided one is a slim row with the outcome in words", async () => {
     const client = createMockClient({ seed: 3 });
     renderCard(client, (request) => <RequestCard request={request} />, await client.requests.get("req-decided-revised"));

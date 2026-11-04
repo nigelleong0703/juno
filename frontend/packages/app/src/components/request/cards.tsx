@@ -260,7 +260,7 @@ function ConnectOfferRow({ appId, problem, request, agentName, readOnly, disable
   const app = apps?.find((entry) => entry.id === appId);
   if (appId === "mac") return <MacConnect agentId={request.agentId} agentName={agentName} resolved={request.status === "approved"} disabled={disabled || readOnly} />;
   // The card's reason can be stale once the person fixes it; the live list says when the agent can use the app now.
-  // The list cannot show a missing permission (the account reads as connected), so a card that says `scope_missing` stays until the server resolves it.
+  // The list shows a missing permission only until the person starts signing in again (the server clears the flag then), so a card that says `scope_missing` stays until the server resolves it.
   const ready = apps !== undefined && appProblem(app, request.agentId) === null && problem !== "scope_missing";
   return (
     <div className="flex items-center gap-3 py-1.5">

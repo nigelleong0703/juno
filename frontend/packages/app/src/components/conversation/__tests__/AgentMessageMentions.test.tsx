@@ -80,6 +80,28 @@ describe("agent prose mentions", () => {
     expect(container.textContent).not.toContain("@newagent");
   });
 
+  it("renders a message mention matched by the agent's name and drops a repeated trailing line", () => {
+    const life = agent({ id: "agent-life", name: "Personal Life", handle: "life" });
+    const open = vi.fn();
+    const item: AgentMessageItem = {
+      ...message("@Personal Life 一周三练\n\n@Personal Life", nova.id),
+      mentions: [{ kind: "agent", id: life.id, label: "@Personal Life" }],
+    };
+    const { container } = render(
+      <ThemeProvider defaultTheme="light">
+        <TooltipProvider>
+          <AgentMessage item={item} agents={[nova, life]} onOpenAgent={open} />
+        </TooltipProvider>
+      </ThemeProvider>,
+    );
+    expect(container.textContent).toContain("Personal Life 一周三练");
+    expect(container.textContent).not.toContain("@Personal Life");
+    expect(screen.getAllByRole("button", { name: "Personal Life" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Personal Life" }));
+    fireEvent.click(screen.getByRole("button", { name: "Message" }));
+    expect(open).toHaveBeenCalledWith(life.id);
+  });
+
   it("opens the canonical agent through the identity popover action", () => {
     const open = vi.fn();
     renderMessage("Ping @newagent.", [nova], open);
