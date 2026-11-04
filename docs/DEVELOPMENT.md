@@ -13,7 +13,7 @@ pnpm check          # backend check, then frontend check
 
 ```sh
 cp backend/.env.example backend/.env         # edit the secrets; add a model provider
-pnpm -C backend dev:infra                    # Postgres 18 in Docker on 127.0.0.1:54330
+pnpm -C backend dev:infra                    # Postgres 18 with pgvector in Docker on 127.0.0.1:54330
 pnpm -C backend db:migrate                   # apply SQL migrations
 pnpm -C backend dev:backend                  # api :8787, agentd :8788, computerd :8791, memoryd :8796
 ```
