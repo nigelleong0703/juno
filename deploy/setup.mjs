@@ -279,6 +279,12 @@ function inspectCompose(values, options) {
   if (edgeMounts.some((mount) => mount.type !== 'volume' || mount.source === '.' || mount.source?.includes('Caddyfile'))) fail('The edge service must not bind-mount host files; only named Caddy data/config volumes are allowed.');
   for (const name of ['caddy-data', 'caddy-config']) if (!edgeMounts.some((mount) => mount.type === 'volume' && mount.source === name)) fail(`The edge service must retain the named ${name} volume.`);
   if (!base.services.app.depends_on?.migrate || base.services.app.depends_on.migrate.condition !== 'service_completed_successfully') fail('The app must wait for the one-shot database migration service.');
+  if (base.services.postgres.build?.context?.split('/').at(-1) !== 'postgres') fail('The postgres service must build deploy/postgres (postgres:18-alpine with pgvector).');
+  if (base.services.voice) fail('The optional voice service must stay behind the voice compose profile.');
+  const voiceText = run(['docker', ...composeArgs(values, options, [BASE_COMPOSE], ['--profile', 'voice', 'config', '--format', 'json'])], 'Docker Compose voice profile', { env: composeEnv(values) });
+  let voice;
+  try { voice = JSON.parse(voiceText).services?.voice; } catch { fail('Docker Compose did not return valid JSON for the voice profile.'); }
+  if (!voice || voice.network_mode !== 'service:app' || voice.ports?.length) fail('The voice worker must share the app network namespace and publish no ports.');
   composeConfig(values, options, [BASE_COMPOSE, SOCKET_COMPOSE]);
 }
 

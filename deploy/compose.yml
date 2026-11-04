@@ -80,6 +80,10 @@ x-app-environment: &app-environment
   COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
   COMPOSIO_AUTH_CONFIG_SPOTIFY: ${COMPOSIO_AUTH_CONFIG_SPOTIFY:-}
   COMPOSIO_AUTH_CONFIG_SHOPIFY: ${COMPOSIO_AUTH_CONFIG_SHOPIFY:-}
+  LIVEKIT_URL: ${LIVEKIT_URL:-}
+  LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+  LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+  LIVEKIT_VOICE_AGENT_NAME: ${LIVEKIT_VOICE_AGENT_NAME:-juno-voice}
   APNS_KEY_ID: ${APNS_KEY_ID:-}
   APNS_TEAM_ID: ${APNS_TEAM_ID:-}
   APNS_KEY: ${APNS_KEY:-}
@@ -139,6 +143,33 @@ services:
       start_period: 120s
     restart: unless-stopped
     networks: [data, edge]
+
+  # Optional voice calls: `docker compose ... --profile voice up -d`. agentd listens on loopback only, so the worker joins the app
+  # container's network namespace instead of publishing a port. It needs LiveKit, ElevenLabs and Fish Audio accounts.
+  voice:
+    profiles: [voice]
+    image: juno-voice:${JUNO_IMAGE_TAG:-local}
+    build:
+      context: ../backend/services/voice
+    network_mode: "service:app"
+    environment:
+      LIVEKIT_URL: ${LIVEKIT_URL:-}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      LIVEKIT_VOICE_AGENT_NAME: ${LIVEKIT_VOICE_AGENT_NAME:-juno-voice}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      FISH_API_KEY: ${FISH_API_KEY:-}
+      FISH_VOICE_ID: ${FISH_VOICE_ID:-}
+      INTERNAL_AGENTD_TOKEN: ${INTERNAL_AGENTD_TOKEN:?run node deploy/setup.mjs first}
+      JUNO_AGENTD_URL: http://127.0.0.1:8788
+      VOICE_STT_MODEL: ${VOICE_STT_MODEL:-scribe_v2_realtime}
+      VOICE_STT_LANGUAGE: ${VOICE_STT_LANGUAGE:-zh}
+      VOICE_STT_SECONDARY_LANGUAGES: ${VOICE_STT_SECONDARY_LANGUAGES:-en}
+      FISH_TTS_MODEL: ${FISH_TTS_MODEL:-s2.1-pro}
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
 
   edge:
     image: juno-edge:${JUNO_IMAGE_TAG:-local}

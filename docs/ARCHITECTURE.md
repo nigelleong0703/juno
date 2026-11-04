@@ -48,7 +48,7 @@ Each agent has a home of files (identity, memory, skills) mirrored and indexed i
 
 ## Voice calls
 
-An owner can start a voice call with an agent from an in-app conversation. agentd issues the LiveKit room and token (`/v1/conversations/:id/voice-calls`), the Python worker in `backend/services/voice` joins it for speech in and out, and every spoken turn is an ordinary run whose text streams back in process. Calls are off unless the `LIVEKIT_*` variables of `backend/.env.example` are set; `pnpm -C backend dev:backend` starts the worker when `VOICE_ENABLED=1` and `VOICE_PYTHON` names an environment with `services/voice/requirements.txt` installed. The Docker deployment does not include the worker or a LiveKit server.
+An owner can start a voice call with an agent from an in-app conversation. agentd issues the LiveKit room and token (`/v1/conversations/:id/voice-calls`), the Python worker in `backend/services/voice` joins it for speech in and out, and every spoken turn is an ordinary run whose text streams back in process. Calls are off unless the `LIVEKIT_*` variables of `backend/.env.example` are set; `pnpm -C backend dev:backend` starts the worker when `VOICE_ENABLED=1` and `VOICE_PYTHON` names an environment with `services/voice/requirements.txt` installed. The Docker deployment runs the worker only under the optional `voice` Compose profile (in the app container's network namespace, since agentd listens on loopback) and has no LiveKit server.
 
 ## Clients
 
