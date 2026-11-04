@@ -138,12 +138,24 @@ describe('Tool Registry', () => {
       const registry = await createToolRegistry({ store, enqueuer, config: {} });
       const tool = registry.get('send_message');
       if (!tool) throw new Error('send_message missing');
-      const result = await tool.execute({ kind: 'question', ui }, createMockToolContext(store, enqueuer));
+      const result = await tool.execute({ kind: 'question', purpose: 'decision', ui }, createMockToolContext(store, enqueuer));
 
       expect(result.suspend).toBeUndefined();
-      expect(JSON.stringify(result.content)).toContain('end your turn');
+      // The card ends the turn by the harness's decision (endsTurn), not by asking the model for a closing line.
+      expect(result.endsTurn).toBe(true);
+      expect(result.details).toBeUndefined();
       const [request] = (await store.list('requests')).items;
       expect(request).toMatchObject({ kind: 'question', status: 'pending', summary: 'Proceed with this configuration?', payload: { kind: 'question', ui: { ...ui, text: 'Proceed with this configuration?\n\nModel: Mac mini M4\nMemory: 16GB\nOptions: Continue / Cancel' } } });
+    });
+
+    it('posts the text the model gave with a question card as the lead-in bubble above it (the onboarding greeting was dropped)', async () => {
+      const registry = await createToolRegistry({ store, enqueuer, config: {} });
+      const ctx = createMockToolContext(store, enqueuer);
+      const result = await registry.get('send_message')!.execute({ kind: 'question', purpose: 'decision', text: 'Hi! I need one thing from you.', ui }, ctx);
+      expect(result.endsTurn).toBe(true);
+      const items = (await store.list('items', { where: { conversationId: ctx.conversationId } })).items;
+      expect(items.flatMap((item) => (item.type === 'agent_message' ? [item.markdown] : []))).toEqual(['Hi! I need one thing from you.']);
+      expect((await store.list('requests')).items).toHaveLength(1);
     });
 
     it.each([
@@ -152,7 +164,7 @@ describe('Tool Registry', () => {
       ['two interactive blocks', { version: 1, blocks: [ui.blocks[1], { type: 'fields', id: 'f', fields: [{ id: 'a', label: 'A', kind: 'text' }] }] }, /one interactive/],
     ])('refuses %s without raising a request', async (_name, bad, message) => {
       const registry = await createToolRegistry({ store, enqueuer, config: {} });
-      const result = await registry.get('send_message')!.execute({ kind: 'question', ui: bad }, createMockToolContext(store, enqueuer));
+      const result = await registry.get('send_message')!.execute({ kind: 'question', purpose: 'decision', ui: bad }, createMockToolContext(store, enqueuer));
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result.content)).toMatch(message);
       expect((await store.list('requests')).items).toHaveLength(0);
@@ -164,26 +176,29 @@ describe('Tool Registry', () => {
       const registry = await createToolRegistry({ store, enqueuer, config: {} });
       const tool = registry.get('send_message')!;
       const card = { version: 1, title: 'Result', blocks: [{ type: 'facts', rows: [{ label: 'Total', value: 'S$5' }] }] };
-      await tool.execute({ kind: 'text', ui: card }, createMockToolContext(store, enqueuer));
-      await tool.execute({ kind: 'text', text: 'Here you go.', ui: card }, createMockToolContext(store, enqueuer));
+      await tool.execute({ kind: 'text', purpose: 'result', ui: card }, createMockToolContext(store, enqueuer));
+      await tool.execute({ kind: 'text', purpose: 'result', text: 'Here you go.', ui: card }, createMockToolContext(store, enqueuer));
       const items = (await store.list('items')).items as Array<{ markdown: string; ui?: unknown }>;
       expect(items.map((item) => item.markdown).sort()).toEqual(['Here you go.', 'Result\n\nTotal: S$5']);
       expect(items.every((item) => item.ui !== undefined)).toBe(true);
     });
 
-    it('posts quick replies alone without their text form as a bubble', async () => {
+    it('refuses quick replies without words, and posts them under a lead-in', async () => {
       const registry = await createToolRegistry({ store, enqueuer, config: {} });
       const replies = { version: 1, blocks: [{ type: 'replies', options: ['Search more shops', 'Not now'] }] };
-      const result = await registry.get('send_message')!.execute({ kind: 'text', ui: replies }, createMockToolContext(store, enqueuer));
-      expect(result.isError).toBeUndefined();
+      const bare = await registry.get('send_message')!.execute({ kind: 'text', purpose: 'result', ui: replies }, createMockToolContext(store, enqueuer));
+      expect(bare.isError).toBe(true);
+      expect((await store.list('items')).items).toHaveLength(0);
+      const worded = await registry.get('send_message')!.execute({ kind: 'text', purpose: 'result', text: 'Two shops have it.', ui: replies }, createMockToolContext(store, enqueuer));
+      expect(worded.isError).toBeUndefined();
       const [item] = (await store.list('items')).items as Array<{ markdown: string; ui?: unknown }>;
-      expect(item).toMatchObject({ markdown: '', ui: { blocks: replies.blocks } });
+      expect(item).toMatchObject({ markdown: 'Two shops have it.', ui: { blocks: replies.blocks } });
     });
 
     it('refuses an answerable block in a plain message', async () => {
       const registry = await createToolRegistry({ store, enqueuer, config: {} });
       const bad = { version: 1, blocks: [{ type: 'choices', id: 'c', options: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] }] };
-      const result = await registry.get('send_message')!.execute({ kind: 'text', text: 'Pick', ui: bad }, createMockToolContext(store, enqueuer));
+      const result = await registry.get('send_message')!.execute({ kind: 'text', purpose: 'result', text: 'Pick', ui: bad }, createMockToolContext(store, enqueuer));
       expect(result.isError).toBe(true);
       expect((await store.list('items')).items).toHaveLength(0);
     });

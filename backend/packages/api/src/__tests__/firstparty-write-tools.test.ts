@@ -8,7 +8,9 @@ import { CONNECTOR_CATALOG } from './builtin-catalog.js';
 import { handleGoogleMcp, SERVICES } from '../modules/google-mcp.js';
 
 const API = { gmail: 'https://gmail.test/gmail/v1', calendar: 'https://cal.test/calendar/v3', drive: 'https://drive.test/drive/v3', graph: 'https://graph.test/v1.0' };
-const deps = (fetchImpl: typeof fetch) => ({ publicUrl: 'https://gw.example.com', apis: API, fetchImpl });
+const deps = (fetchImpl: typeof fetch) => ({ publicUrl: 'https://gw.example.com', hostedToken: 'svc', apis: API, fetchImpl });
+/** What agentd's MCP client sends a hosted connector: the service credential, and the owner's token in its own header. */
+const asAgentd = (upstream: string) => ({ authorization: 'Bearer svc', 'x-upstream-authorization': 'Bearer ' + upstream, 'content-type': 'application/json' });
 
 interface Seen { method: string; path: string; query: Record<string, string>; body: unknown; raw: string; headers: Headers }
 
@@ -32,7 +34,7 @@ function fake(routes: Record<string, unknown | ((seen: Seen) => unknown)>): { fe
 
 async function call(fetchImpl: typeof fetch, service: string, name: string, args: Record<string, unknown> = {}) {
   const response = await handleGoogleMcp(deps(fetchImpl), service, new Request('https://gw.example.com/mcp/google/' + service, {
-    method: 'POST', headers: { authorization: 'Bearer tok', 'content-type': 'application/json' },
+    method: 'POST', headers: asAgentd('tok'),
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
   }));
   if (response.status !== 200) return { status: response.status, challenge: response.headers.get('www-authenticate') ?? '', text: '', json: undefined as unknown, isError: false };
@@ -49,7 +51,7 @@ async function call(fetchImpl: typeof fetch, service: string, name: string, args
 
 async function tools(service: string): Promise<Map<string, { annotations: Record<string, unknown> }>> {
   const response = await handleGoogleMcp(deps(fetch), service, new Request('https://gw.example.com/x', {
-    method: 'POST', headers: { authorization: 'Bearer t', 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    method: 'POST', headers: asAgentd('t'), body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
   }));
   const list = ((await response.json()) as { result: { tools: { name: string; annotations: Record<string, unknown> }[] } }).result.tools;
   return new Map(list.map((tool) => [tool.name, tool]));

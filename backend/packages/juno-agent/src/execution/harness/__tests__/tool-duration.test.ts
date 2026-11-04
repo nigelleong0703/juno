@@ -4,7 +4,7 @@
  * elapsed time. Drives the real executeSingleToolCall path with a real ask-then-approve wait. */
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, it, expect } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { Doc, Store, Tool, ToolRegistry, ToolResult, WakeEvent } from '../../../contracts/index.js';
 import { CANCELLED } from '../services/cancel.js';
@@ -34,15 +34,15 @@ function askContext(): AskContext {
   let settle: ((value: unknown) => void) | undefined;
   return {
     rand: { uuidv4: () => 'stp-1' },
-    run<T>(name: string, action: () => Promise<T>): RestatePromise<T> {
-      if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-      return RestatePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
+    run<T>(name: string, action: () => Promise<T>): DurablePromise<T> {
+      if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+      return DurablePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
     },
-    awakeable<T>(): { id: string; promise: RestatePromise<T> } {
+    awakeable<T>(): { id: string; promise: DurablePromise<T> } {
       const promise = new Promise<T>((resolve) => { settle = (value) => resolve(value as T); });
-      return { id: 'awk-1', promise: RestatePromise.resolve(promise) };
+      return { id: 'awk-1', promise: DurablePromise.resolve(promise) };
     },
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
     decide: (value) => settle?.(value),
   };
 }

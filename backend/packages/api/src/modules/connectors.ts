@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import type { Store } from '@agent-desktop/contracts';
 import { connectionSchema, type Connection, type CreateMcpServerInput, type CustomAppConfirm, type InstallAppResponse, type ProbeCustomAppResponse } from '@agent-desktop/public-contracts';
 import { encryptSecret } from '@agent-desktop/contracts/secrets';
-import { appIdOfConnection, composioAuthConfig, composioOffered, connectionInstallation, entryClientAvailable, connectionStanding, mcpUrlRefused, McpOAuthError, openOAuth, probeMcpEndpoint, type McpManager } from '@agent-desktop/contracts/mcp';
+import { appIdOfConnection, composioAuthConfig, composioOffered, connectionInstallation, entryClientAvailable, connectionStanding, hostedPathOfUrl, isHostedCatalogId, mcpUrlRefused, McpOAuthError, openOAuth, probeMcpEndpoint, type McpManager } from '@agent-desktop/contracts/mcp';
 import { callbackBase, chosenReturnUrl, clientMetadataUrl, McpAuthorizationError, startMcpAuthorization, type McpAuthorizationDeps } from './mcp-authorization.js';
 import { COMPOSIO_CALLBACK_PATH, newComposioPending, type ComposioClient } from './composio.js';
 import { createIntegrationsModule } from './integrations.js';
@@ -96,11 +96,14 @@ export function resolveUserConfig(entry: CatalogEntry, input: UserValues | undef
   };
 }
 
-/** The fields a connection row keeps for an app that took values: the resolved URL, and the headers and values sealed. */
+/**
+ * The fields a connection row keeps for an app that took values: the resolved URL (for a server our own gateway hosts, only its path:
+ * we never store our own origin, BACKEND 10.18.5), and the headers and values sealed.
+ */
 function userConfigFields(resolved: ResolvedUserConfig, entry: CatalogEntry): Record<string, unknown> {
   const seal = (record: Record<string, string>): Record<string, string> => Object.fromEntries(Object.entries(record).map(([key, value]) => [key, encryptSecret(value)]));
   return {
-    endpoint: resolved.endpoint,
+    endpoint: (isHostedCatalogId(entry.id) ? hostedPathOfUrl(resolved.endpoint) : undefined) ?? resolved.endpoint,
     headers: Object.keys(resolved.headers).length === 0 ? null : seal(resolved.headers),
     userConfig: Object.keys(resolved.values).length === 0 ? null : seal(resolved.values),
     ...(entry.version === undefined ? {} : { catalogVersion: entry.version }),
@@ -117,7 +120,7 @@ async function installDirect(deps: ConnectorsDeps, entry: CatalogEntry, ownerId:
   const resolved = resolveUserConfig(entry, input);
   const scoped = scopedStore(deps.authorization.store, ownerId);
   if (entry.probe !== undefined) {
-    const probed = await deps.manager.probe({ url: resolved.endpoint, headers: resolved.headers, tool: entry.probe.tool, ...(entry.probe.args === undefined ? {} : { args: entry.probe.args }) });
+    const probed = await deps.manager.probe({ url: resolved.endpoint, catalogId: entry.id, headers: resolved.headers, tool: entry.probe.tool, ...(entry.probe.args === undefined ? {} : { args: entry.probe.args }) });
     if (!probed.ok) throw new McpAuthorizationError(400, 'CONNECTOR_PROBE_FAILED', 'Could not connect ' + entry.name + ': ' + probed.reason + '. Check the value and try again.');
   }
   if (existing !== undefined) await deps.manager.disconnect({ ownerId, store: scoped, connectionId: existing.id });

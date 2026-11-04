@@ -50,7 +50,7 @@ export function createPreferenceNoteTool(opts: { computer?: ComputerClientProvid
     replay: 'safe',
     sideEffect: true,
     async execute(args: unknown, ctx: ToolContext): Promise<ToolResult> {
-      if (ctx.wake.kind === 'child_task') return result('a sub-task cannot record preferences; tell the agent that started you.', true);
+      if (ctx.wake.kind === 'subagent_task') return result('a sub-task cannot record preferences; tell the agent that started you.', true);
       if (!ctx.wake.trusted || ctx.wake.kind !== 'user_message') return result("preferences are recorded only in a run your owner's own message started. Tell the person you cannot record it from here.", true);
       const parsed = schema.safeParse(args);
       if (!parsed.success) return invalidArguments('preference_note', args, parsed.error);

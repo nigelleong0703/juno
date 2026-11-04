@@ -30,6 +30,7 @@ export function buildToolContext(
     ...(input.supportsImages === undefined ? {} : { supportsImages: input.supportsImages }),
     ...(input.toolSearch === undefined ? {} : { toolSearch: input.toolSearch }),
     ...(input.toolScope === undefined ? {} : { toolScope: input.toolScope }),
+    ...(input.sendOnly === undefined ? {} : { sendOnly: input.sendOnly }),
     ...(services.brain.quickText === undefined ? {} : { quickText: services.brain.quickText.bind(services.brain) }),
     ...(services.brain.systemOne === undefined ? {} : { systemOne: services.brain.systemOne }),
   };

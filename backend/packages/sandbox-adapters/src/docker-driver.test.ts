@@ -29,6 +29,14 @@ describe('local container arguments', () => {
     expect(args).toContain('JUNO_LINK_ID=link-id-0001');
   });
 
+  it('sets no restart policy (Docker must never bring a computer back by itself) and labels the deployment', () => {
+    expect(args).not.toContain('--restart');
+    expect(args.join(' ')).not.toContain('unless-stopped');
+    expect(args.join(' ')).not.toContain('dev.agent-desktop.deployment');
+    const labelled = runArguments({ name: 'agent-local-x', hash: 'h', spec, storageArgs: [], deployment: 'dep-1' });
+    expect(labelled).toContain('dev.agent-desktop.deployment=dep-1');
+  });
+
   it('keeps the storage arguments before the image', () => {
     expect(args.indexOf('vol:/juno')).toBeLessThan(args.indexOf('juno-desktop:local'));
     expect(args.at(-1)).toBe('juno-desktop:local');
@@ -41,22 +49,21 @@ describe('idle window', () => {
     expect(idleWindowMs(500, 3_600_000)).toBe(3_600_000);
     expect(idleWindowMs(30, 3_600_000)).toBe(30 * 60_000);
     expect(idleWindowMs(0, 3_600_000)).toBe(3_600_000);
-    expect(idleWindowMs(undefined, 3_600_000)).toBe(30 * 60_000);
   });
 });
 
 describe('image upgrade at a cold boundary', () => {
   const OLD = 'sha256:old';
   const NEW = 'sha256:new';
-  const inspect = (status: string) =>
-    JSON.stringify([{ Image: OLD, State: { Status: status }, Config: { Image: 'juno-desktop:local', Labels: { [OWNER_LABEL]: ownerHash('o1'), [MANAGED_LABEL]: '1' } } }]);
+  const inspect = (status: string, capAdd: string[]) =>
+    JSON.stringify([{ Image: OLD, State: { Status: status }, HostConfig: { CapAdd: capAdd }, Config: { Image: 'juno-desktop:local', Labels: { [OWNER_LABEL]: ownerHash('o1'), [MANAGED_LABEL]: '1' } } }]);
 
-  function fakeDocker(status: string, tag: { exitCode: number; stdout: string }) {
+  function fakeDocker(status: string, tag: { exitCode: number; stdout: string }, capAdd = ['NET_ADMIN', 'SYS_ADMIN']) {
     const calls: string[][] = [];
     const docker: DockerCli = {
       async run(args) {
         calls.push(args);
-        if (args[0] === 'inspect') return { exitCode: 0, stdout: inspect(status), stderr: '' };
+        if (args[0] === 'inspect') return { exitCode: 0, stdout: inspect(status, capAdd), stderr: '' };
         if (args[0] === 'image') return { ...tag, stderr: '' };
         return { exitCode: 0, stdout: '', stderr: '' };
       },
@@ -79,6 +86,20 @@ describe('image upgrade at a cold boundary', () => {
     await expect(driver.resume!(binding, signal)).rejects.toMatchObject({ reason: 'image_outdated', computerId: 'c1' });
     expect(calls).toContainEqual(['rm', '-f', 'c1']);
     expect(ops(calls)).not.toContain('unpause');
+  });
+
+  it('replaces a container made without SYS_ADMIN (no agent network namespaces there), at a cold boundary and when first seen running', async () => {
+    const old = ['NET_ADMIN'];
+    const cold = fakeDocker('paused', { exitCode: 0, stdout: `${OLD}\n` }, old);
+    await expect(cold.driver.resume!(binding, signal)).rejects.toMatchObject({ reason: 'image_outdated', computerId: 'c1' });
+    expect(cold.calls).toContainEqual(['rm', '-f', 'c1']);
+    expect(ops(cold.calls)).not.toContain('unpause');
+    const running = fakeDocker('running', { exitCode: 0, stdout: `${OLD}\n` }, old);
+    await expect(running.driver.assertCurrent!(binding, signal)).rejects.toMatchObject({ reason: 'image_outdated', computerId: 'c1' });
+    expect(running.calls).toContainEqual(['rm', '-f', 'c1']);
+    const current = fakeDocker('running', { exitCode: 0, stdout: `${OLD}\n` });
+    await current.driver.assertCurrent!(binding, signal);
+    expect(ops(current.calls)).not.toContain('rm');
   });
 
   it('keeps the container when the image tag cannot be inspected', async () => {

@@ -4,7 +4,7 @@
  * absent from the transcript and the step rows, and every claim is asserted on real output. */
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, it, expect } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore } from '../../../testing/store.js';
 import type { Store, Tool, ToolContext, ToolRegistry, ToolResult, WakeEvent } from '../../../contracts/index.js';
 import { CANCELLED, NEVER_CANCELLED } from '../../../execution/harness/services/cancel.js';
@@ -65,9 +65,9 @@ function testContext(): ToolCallContext {
   let next = 0;
   return {
     rand: { uuidv4: () => (next++ === 0 ? 's1' : 's1') },
-    run<T>(name: string, action: () => Promise<T>): RestatePromise<T> {
-      if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-      return RestatePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
+    run<T>(name: string, action: () => Promise<T>): DurablePromise<T> {
+      if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+      return DurablePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
     },
   };
 }

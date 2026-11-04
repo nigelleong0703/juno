@@ -6,9 +6,11 @@
 import { createHash } from 'node:crypto';
 import type { Tool, ToolContext, ToolResult } from '../../contracts/index.js';
 import type { McpManager } from './manager.js';
-import type { McpTool } from './protocol.js';
+import { refusalKind, refusedArguments, type McpTool } from './protocol.js';
+import { McpToolRemovedError } from './client.js';
 import type { ToolAccess } from './tool-access.js';
 import { AppAccessError } from './access-error.js';
+import { checkArguments, decodeJsonText, invalidArgumentsResult } from '../tools/toolArguments.js';
 
 function sanitize(value: string): string {
   const cleaned = value.toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
@@ -169,6 +171,12 @@ export function createMcpTool(binding: McpToolBinding): Tool {
       if (ctx.agentId !== agentId || ctx.ownerId !== ownerId) {
         return unavailable(name, 'MCP tool ' + name + ' is not available for this agent (bound to a different owner or agent)');
       }
+      // The arguments against the server's own schema, before anything is sent. An object/array field sent as JSON text of that shape is
+      // decoded; any other wrong shape is answered with the field and the type it wants, and the server is never called.
+      const schema = tool.inputSchema ?? { type: 'object', properties: {} };
+      const sent = decodeJsonText(schema, isRecord(args) ? args : {}).args;
+      const problems = checkArguments({ parameters: schema }, sent);
+      if (problems.length > 0) return { ...invalidArgumentsResult({ name, parameters: tool.inputSchema ?? {} }, problems), details: { mcp: true, tool: name, errorKind: 'validation', notExecuted: true } };
       const store = ctx.store.forOwner?.(ownerId) ?? ctx.store;
       try {
         const outcome = await manager.callTool({
@@ -177,7 +185,7 @@ export function createMcpTool(binding: McpToolBinding): Tool {
           agentId: ctx.agentId,
           connectionId,
           toolName: tool.name,
-          args: isRecord(args) ? args : {},
+          args: sent,
           signal: ctx.signal,
         });
         const content: ToolResult['content'] = [];
@@ -205,7 +213,15 @@ export function createMcpTool(binding: McpToolBinding): Tool {
         if (outcome.isError || nothingUsable) result.isError = true;
         return result;
       } catch (error) {
-        const refused = unavailable(name, error instanceof Error ? error.message : String(error));
+        const said = error instanceof Error ? error.message : String(error);
+        // The model is told what to do with a refusal of its arguments: read the server's words, fix them and call again (a retry is its
+        // decision, made with this text in front of it; nothing is retried here).
+        const failed = unavailable(name, refusedArguments(error) ? said + '\nThe server refused these arguments and nothing was run. Check each field against the tool\'s schema (an object field takes an object, not text that encodes one), correct the arguments and call ' + name + ' again.' : said);
+        // A server's refusal (HTTP 400/404/405/415/422/429, a refused credential, invalid params), an app that is not available and a tool
+        // the server no longer offers all happened before anything ran: a definite failure the model reads as an ordinary tool error. Anything
+        // else (a timeout after send, a reset, 5xx) may have run and is left unmarked, which the harness treats as an unknown outcome.
+        const kind = error instanceof AppAccessError ? 'permission' : error instanceof McpToolRemovedError ? 'validation' : refusalKind(error);
+        const refused = kind === undefined ? failed : { ...failed, details: { ...failed.details, errorKind: kind, notExecuted: true } };
         // The state that refused the call travels with the result, next to the sentence the model reads.
         return error instanceof AppAccessError ? { ...refused, details: { ...refused.details, access: error.access } } : refused;
       }

@@ -6,7 +6,7 @@
  */
 import type { Run } from '@agent-desktop/public-contracts';
 import type { BackgroundTask, DeclaredTask, Store } from '../../contracts/index.js';
-import { isTerminal } from './childRead.js';
+import { isTerminal } from './subagentRead.js';
 import { subagentStartedEvent, subagentTerminalEvent } from '../../execution/harness/services/agui-events.js';
 import { isSubagentRun, isWorkRun, projectBackground, projectDeclared, projectRun, type WorkRun } from './work-view.js';
 

@@ -14,24 +14,18 @@ describe('connector catalog', () => {
     expect(urls.get('google-calendar')).toBe('/mcp/google/calendar');
   });
 
-  it('a connector with a brand file has an icon url, one without has none', () => {
+  it('a connector id maps to its brand file; a name that is no id has none', () => {
     expect(brandIconUrl('gmail')).toBe('/v1/brand-icons/gmail.png');
     expect(brandIconUrl('microsoft-todo')).toBe('/v1/brand-icons/todo.png');
-    expect(CONNECTOR_CATALOG.some((entry) => entry.id === 'sg-transport')).toBe(true);
-    expect(brandIconUrl('sg-transport')).toBeUndefined();
     expect(brandIconUrl('constructor')).toBeUndefined();
   });
 
-  it('Strava is Strava\'s own MCP with a configured client, read scopes and a revocation endpoint', () => {
-    const strava = CONNECTOR_CATALOG.find((entry) => entry.id === 'strava');
-    expect(strava).toMatchObject({ url: 'https://mcp.strava.com/mcp', category: 'health', configuredClientIssuer: 'https://www.strava.com/mcp-issuer', revocationEndpoint: 'https://www.strava.com/oauth/mcp/revoke' });
-    expect(strava?.scopes).toEqual(['activity:read_all', 'profile:read_all']);
-    expect(strava?.description).toMatch(/Read-only/);
-    expect(configuredClientFor('https://www.strava.com/mcp-issuer', { STRAVA_CLIENT_ID: 'id', STRAVA_CLIENT_SECRET: 's' })).toMatchObject({ clientId: 'id', clientSecret: 's' });
-    expect(configuredClientFor('https://www.strava.com/mcp-issuer', {})).toBeUndefined();
+  it('apps an ordinary person cannot connect with one tap are not in the catalog', () => {
+    const ids = CONNECTOR_CATALOG.map((entry) => entry.id);
+    for (const gone of ['hevy', 'strava', 'salesforce', 'spotify', 'shopify-admin', 'dropbox']) expect(ids, gone).not.toContain(gone);
   });
 
-  it('Calendly and Todoist register dynamically; Dropbox needs our own app (it accepts dynamic registration from a trusted list only)', () => {
+  it('Calendly and Todoist register dynamically; Asana needs our own app (no dynamic registration) and is listed only with its client', () => {
     const entry = (id: string) => CONNECTOR_CATALOG.find((candidate) => candidate.id === id);
     expect(entry('calendly')).toMatchObject({ url: 'https://mcp.calendly.com', provides: ['calendar.read', 'calendar.write'] });
     expect(entry('calendly')?.configuredClientIssuer).toBeUndefined();
@@ -39,13 +33,9 @@ describe('connector catalog', () => {
     // A vendor-published read tool is a read; a tool nobody named (a new one, or a write) is not in the table and so asks.
     expect(entry('todoist')?.toolAccess).toMatchObject({ 'find-tasks': 'read', fetch: 'read' });
     expect(entry('todoist')?.toolAccess?.['add-tasks']).toBeUndefined();
-    const dropbox = entry('dropbox');
-    expect(dropbox).toMatchObject({ url: 'https://mcp.dropbox.com/mcp', configuredClientIssuer: 'https://www.dropbox.com', provides: ['files.read', 'files.write'] });
-    expect(dropbox?.scopes).not.toContain('sharing.write');
-    expect(Object.values(dropbox?.toolAccess ?? {}).every((access) => access === 'read')).toBe(true);
-    expect(dropbox?.toolAccess?.Delete).toBeUndefined();
-    expect(configuredClientFor('https://www.dropbox.com', {})).toBeUndefined();
-    expect(configuredClientFor('https://www.dropbox.com', { DROPBOX_CLIENT_ID: 'id', DROPBOX_CLIENT_SECRET: 's' })).toMatchObject({ clientId: 'id', clientSecret: 's', extraAuthParams: { token_access_type: 'offline' } });
+    expect(entry('asana')).toMatchObject({ url: 'https://mcp.asana.com/v2/mcp', configuredClientIssuer: 'https://app.asana.com' });
+    expect(configuredClientFor('https://app.asana.com', {})).toBeUndefined();
+    expect(configuredClientFor('https://app.asana.com', { ASANA_CLIENT_ID: 'id', ASANA_CLIENT_SECRET: 's' })).toMatchObject({ clientId: 'id', clientSecret: 's' });
   });
 
   it('Stripe\'s write tools are changes and it provides payments.write', () => {

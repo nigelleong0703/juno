@@ -1,7 +1,7 @@
 /**
  * Background execution owner boundary (E66).
  *
- * Account HTTP enters the request owner scope once per request, but Restate handlers run on their own
+ * Account HTTP enters the request owner scope once per request, but runner handlers run on their own
  * async chains (and survive restarts), so a wake's owner has to be re-established for every handler.
  * The execution services capture the request-scoped store facade, so `inOwnerScope` re-entering the
  * scope is what makes every read, write and emitted event resolve to the validated owner instead of
@@ -43,10 +43,10 @@ export interface WakeTarget {
   sessionKey: string;
 }
 /** Marker separating a canonical child session from its root session. */
-export const CHILD_SESSION_MARKER = '::child:';
+export const SUBAGENT_SESSION_MARKER = '::child:';
 /** The reserved child run id named by a canonical child session, or undefined for a root session. */
-export function childRunIdOfSession(sessionKeyValue: string, agentId: string, conversationId: string): string | undefined {
-  const prefix = sessionKey(agentId, conversationId) + CHILD_SESSION_MARKER;
+export function subagentRunIdOfSession(sessionKeyValue: string, agentId: string, conversationId: string): string | undefined {
+  const prefix = sessionKey(agentId, conversationId) + SUBAGENT_SESSION_MARKER;
   if (!sessionKeyValue.startsWith(prefix)) return undefined;
   const runId = sessionKeyValue.slice(prefix.length);
   return runId.length > 0 ? runId : undefined;
@@ -81,19 +81,19 @@ export function resolveWakeOwner(events: readonly WakeEvent[], target: WakeTarge
   const conversationId = readId(target.conversationId);
   if (agentId === undefined || conversationId === undefined) return { reason: 'invalid_target' };
   const expectedSession = sessionKey(agentId, conversationId);
-  const childRunId = childRunIdOfSession(target.sessionKey, agentId, conversationId);
-  const isChildSession = childRunId !== undefined;
+  const childRunId = subagentRunIdOfSession(target.sessionKey, agentId, conversationId);
+  const isSubagentSession = childRunId !== undefined;
   // Every transcript write, inbox drain and finish RPC derives from the caller's own session key, so
   // a non-canonical key would address a foreign session even when the wake events look correct.
-  if (target.sessionKey !== expectedSession && !isChildSession) return { reason: 'session_key_mismatch' };
+  if (target.sessionKey !== expectedSession && !isSubagentSession) return { reason: 'session_key_mismatch' };
   for (const event of events) {
     if (readWakeOwner(event) !== owner) return { reason: 'mixed_owner_wake' };
     if (event.agentId !== agentId || event.conversationId !== conversationId) {
       return { reason: 'wake_target_mismatch' };
     }
     if (event.sessionKey !== target.sessionKey) return { reason: 'session_key_mismatch' };
-    if (isChildSession && event.kind !== 'child_task') return { reason: 'wake_target_mismatch' };
-    if (!isChildSession && event.kind === 'child_task') return { reason: 'wake_target_mismatch' };
+    if (isSubagentSession && event.kind !== 'subagent_task') return { reason: 'wake_target_mismatch' };
+    if (!isSubagentSession && event.kind === 'subagent_task') return { reason: 'wake_target_mismatch' };
   }
   return { ownerId: owner };
 }
@@ -115,7 +115,7 @@ export async function resolveAdmittedOwner(store: Store, events: readonly WakeEv
   const resolved = resolveWakeOwner(events, target);
   if (resolved.ownerId === undefined) return { reason: resolved.reason ?? 'missing_owner' };
   const ownerId = resolved.ownerId;
-  const childRunId = childRunIdOfSession(target.sessionKey, target.agentId, target.conversationId);
+  const childRunId = subagentRunIdOfSession(target.sessionKey, target.agentId, target.conversationId);
   if (childRunId === undefined) {
     if (docOwner(await store.get('agents', target.agentId)) !== ownerId) return { reason: 'agent_owner_mismatch' };
     const conversation = await store.get('conversations', target.conversationId);
@@ -124,7 +124,7 @@ export async function resolveAdmittedOwner(store: Store, events: readonly WakeEv
     if (docOwner(conversation) !== ownerId) return { reason: 'conversation_owner_mismatch' };
     return { ownerId };
   }
-  return admitChildSession(store, events, target, ownerId, childRunId);
+  return admitSubagentSession(store, events, target, ownerId, childRunId);
 }
 function payloadId(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
@@ -139,13 +139,13 @@ function storedField(doc: unknown, key: string): string | undefined {
   if (!isRecord(doc)) return undefined;
   return payloadId(doc[key]);
 }
-async function admitChildSession(store: Store, events: readonly WakeEvent[], target: WakeTarget, ownerId: string, childRunId: string): Promise<AdmittedOwner> {
+async function admitSubagentSession(store: Store, events: readonly WakeEvent[], target: WakeTarget, ownerId: string, childRunId: string): Promise<AdmittedOwner> {
   const row = await store.get('runs', childRunId);
   if (row === null) return { reason: 'unknown_child_run' };
   const parentRunId = isRecord(row) ? payloadId(row['parentRunId']) : undefined;
   if (parentRunId === undefined) return { reason: 'unknown_child_run' };
-  const childSession = storedField(row, 'childSessionKey');
-  if (childSession !== target.sessionKey) return { reason: 'session_key_mismatch' };
+  const subagentSession = storedField(row, 'childSessionKey');
+  if (subagentSession !== target.sessionKey) return { reason: 'session_key_mismatch' };
   if (row.agentId !== target.agentId) return { reason: 'wake_target_mismatch' };
   const rowConversation = typeof row.conversationId === 'string' ? row.conversationId : undefined;
   if (rowConversation !== target.conversationId) return { reason: 'wake_target_mismatch' };

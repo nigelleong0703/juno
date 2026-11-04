@@ -15,7 +15,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { CommandResult, SandboxRuntime } from './runtime.js';
 import { shq } from './screen-boot.js';
-import { cleanupProgram, readProgram, startProgram, stopProgram, writeProgram } from './processPrograms.js';
+import { anyRunningProgram, cleanupProgram, readProgram, startProgram, stopProgram, writeProgram } from './processPrograms.js';
 import { aborted, failed, notAllowed } from './errors.js';
 import { emptySlice, readStream } from './processStreams.js';
 import type {
@@ -47,6 +47,18 @@ export interface SandboxProcesses {
   stop(agentId: string, input: ProcessStopInput, signal: AbortSignal): Promise<ProcessStopResult>;
   /** Remove scratch directories for processes that finished more than the TTL ago. */
   cleanup(agentId: string, signal: AbortSignal): Promise<void>;
+}
+
+/**
+ * Whether any background process (`shell.start`, with or without notifyOnExit) of any agent is alive in the computer. A failed
+ * check reads as "no": the caller is deciding whether to pause, and an unreachable computer is paused as before.
+ */
+export async function hasRunningProcess(runtime: SandboxRuntime, signal: AbortSignal, root: string = PROCESS_ROOT): Promise<boolean> {
+  try {
+    return (await runtime.run(anyRunningProgram(root), { timeoutMs: 10_000, signal })).stdout.trim() === 'RUNNING';
+  } catch {
+    return false;
+  }
 }
 
 export function createSandboxProcesses(runtime: SandboxRuntime, root: string = PROCESS_ROOT): SandboxProcesses {

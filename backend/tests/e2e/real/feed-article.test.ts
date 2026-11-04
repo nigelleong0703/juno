@@ -33,7 +33,7 @@ describe('real model: illustrated Feed article', () => {
       const calls = activities.flatMap(activity => activity.calls);
       const results = activities.flatMap(activity => activity.results);
       writeFileSync(resolve(evidenceDir, 'result.json'), JSON.stringify({ posts, calls, results }, null, 2));
-      expect(calls.some(call => call.name === 'child_spawn' || (call.name === 'tool_call' && call.arguments['name'] === 'child_spawn')), 'substantive research is delegated').toBe(true);
+      expect(calls.some(call => call.name === 'subagent_start' || (call.name === 'tool_call' && call.arguments['name'] === 'subagent_start')), 'substantive research is delegated').toBe(true);
       expect(calls.some(call => call.name === 'skill_read' && call.arguments['name'] === 'feed-article'), 'execution reads the production skill').toBe(true);
       expect(results.some(result => result.toolName === 'web_fetch' && !result.isError), 'sources are opened').toBe(true);
       const imageTurns = await sql<Array<{ count: string }>>`SELECT count(*)::text AS count FROM transcripts WHERE owner_id=${account.userId} AND jsonb_path_exists(doc, '$.message.content[*] ? (@.type == "image")')`;
@@ -67,6 +67,40 @@ describe('real model: illustrated Feed article', () => {
     }
   }, 600_000);
 
+  it('takes inline pictures from the story pages it web_fetched, never guessed URLs', async () => {
+    const account = await createAccount('feed-article-sources');
+    const agent = await defaultAgent(account);
+    const chat = await account.api('POST', '/v1/conversations', { kind: 'direct', memberAgentIds: [agent.id] });
+    const conversationId: string = chat.body.id;
+    const events = await listenEvents(account.cookie);
+    const sql = postgres(stackUrls().databaseUrl, { max: 1 });
+    const evidenceDir = resolve('../../.data/feed-article-sources');
+    mkdirSync(evidenceDir, { recursive: true });
+    try {
+      const sent = await account.api('POST', `/v1/conversations/${conversationId}/runs`, aguiInput(`/v1/conversations/${conversationId}/runs`, { text: '做一篇图文并茂的本周 AI 新闻 Feed 文章' }));
+      expect(sent.status).toBe(202);
+      await events.waitFor(event => event.data.type === 'feed.created', 540_000);
+      const posts: Post[] = (await account.api('GET', '/v1/feed')).body.items;
+      const sessions = await sql<Array<{ key: string }>>`SELECT DISTINCT doc->>'sessionKey' AS key FROM transcripts WHERE owner_id=${account.userId}`;
+      const activities = await Promise.all(sessions.map(row => toolActivity(row.key)));
+      const calls = activities.flatMap(activity => activity.calls);
+      const fetched = calls.flatMap(call => {
+        const args = call.name === 'tool_call' && typeof call.arguments['arguments'] === 'object' ? call.arguments['arguments'] as Record<string, unknown> : call.arguments;
+        const named = call.name === 'tool_call' ? call.arguments['name'] : call.name;
+        return named === 'web_fetch' && typeof args['url'] === 'string' ? [args['url']] : [];
+      });
+      const body = posts[0]?.body ?? '';
+      const images = [...body.matchAll(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)/g)].map(match => match[1] ?? '');
+      const sources = [...body.matchAll(/(?<!!)\[[^\]]+\]\((https:\/\/[^)\s]+)/g)].map(match => match[1] ?? '');
+      writeFileSync(resolve(evidenceDir, 'result.json'), JSON.stringify({ images, sources, fetched, shellCalls: calls.filter(call => /^shell/.test(call.name)).length, cover: posts[0]?.imageUrl, feedPostResults: activities.flatMap(activity => activity.results).filter(result => result.toolName === 'feed_post').map(result => result.text.slice(0, 600)), feedPostBody: calls.filter(call => call.name === 'feed_post').map(call => String(call.arguments['body'] ?? '').slice(0, 1500)) }, null, 2));
+      expect(images.length, 'at least one verified inline image').toBeGreaterThanOrEqual(1);
+      expect(sources.some(source => fetched.includes(source)), 'a cited source page was web_fetched in the run').toBe(true);
+    } finally {
+      events.close();
+      await sql.end();
+    }
+  }, 600_000);
+
   it('keeps conversation local and delegates a new small app without a topic-specific rule', async () => {
     const account = await createAccount('generic-routing');
     const agent = await defaultAgent(account);
@@ -79,11 +113,11 @@ describe('real model: illustrated Feed article', () => {
       expect((await account.api('POST', `/v1/conversations/${conversationId}/runs`, aguiInput(`/v1/conversations/${conversationId}/runs`, { text: '用一句话解释粤语是什么。' }))).status).toBe(202);
       await events.waitFor(event => event.data.type === 'RUN_FINISHED' && event.data.metadata.juno.run.conversationId === conversationId && !event.data.metadata.juno.run.parentRunId, 90_000);
       const conversation = await toolActivity(sessionKey);
-      expect(conversation.calls.some(call => call.name === 'child_spawn'), 'a simple explanation stays with the main agent').toBe(false);
+      expect(conversation.calls.some(call => call.name === 'subagent_start'), 'a simple explanation stays with the main agent').toBe(false);
       expect((await account.api('POST', `/v1/conversations/${conversationId}/runs`, aguiInput(`/v1/conversations/${conversationId}/runs`, { text: '帮我做个学粤语的小程序，能翻单词卡、听发音和做小测验，做好给我打开。' }))).status).toBe(202);
       await events.waitFor(event => event.data.type === 'RUN_STARTED' && event.data.metadata.juno.run.conversationId === conversationId && Boolean(event.data.metadata.juno.run.parentRunId), 120_000);
       const creation = await toolActivity(sessionKey);
-      const spawnIndex = creation.calls.findIndex(call => call.name === 'child_spawn');
+      const spawnIndex = creation.calls.findIndex(call => call.name === 'subagent_start');
       expect(spawnIndex, 'creating a deliverable is delegated without a Feed-specific trigger').toBeGreaterThanOrEqual(0);
       const beforeSpawn = creation.calls.slice(conversation.calls.length, spawnIndex);
       expect(beforeSpawn.some(call => /^(files[.]write|shell[.]|artifact_publish)/.test(call.name)), 'main does not start implementation before handoff').toBe(false);

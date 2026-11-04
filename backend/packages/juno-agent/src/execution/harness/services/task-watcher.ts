@@ -12,7 +12,7 @@ import type { ComputerClient } from '../../../ports/computer/index.js';
 import { inOwnerScope } from '../../execution-owner.js';
 import { sendCompletionWake, taskDoneWake } from './completion-wake.js';
 import { reportSummary } from './output-capture.js';
-import { endBackgroundTask, exitOutcome } from '../../../modules/tasks/background-registry.js';
+import { endBackgroundTask, exitOutcome, isUnknownProcess, ORPHAN_OUTCOME } from '../../../modules/tasks/background-registry.js';
 import { taskWatcherDef } from './definitions.js';
 
 type TaskWatcherDef = typeof taskWatcherDef;
@@ -32,7 +32,7 @@ export interface WatchState {
   done: boolean;
 }
 
-/** The context surface a tick needs; Restate adapts to it, tests fake it. */
+/** The context surface a tick needs; the runner adapts to it, tests fake it. */
 export interface WatcherContext {
   key: string;
   store: Store;
@@ -49,7 +49,7 @@ type EndStatus = Exclude<BackgroundTask['status'], 'running' | 'stopped'>;
 
 /** A read the journal may hold from before the stderr/cursor fields existed, so those are optional here. */
 type ReadOk = { state: string; exitCode: number | null; output: string; stderr?: string; cursor?: number; truncated?: boolean };
-type Read = ReadOk | { error: string };
+type Read = ReadOk | { error: string; unknown?: boolean };
 
 export function watchInterval(attempt: number): number {
   return Math.min(WATCH_MAX_INTERVAL_MS, WATCH_MIN_INTERVAL_MS * 2 ** Math.max(0, attempt));
@@ -78,7 +78,7 @@ export async function watchTick(ctx: WatcherContext, computer: ComputerClient | 
       const out = await inOwnerScope(input.ownerId, () => readProcess(input.agentId, { handle: input.handle, maxBytes: WATCH_READ_BYTES }, AbortSignal.timeout(15_000), input.computer));
       return { state: out.state, exitCode: out.exitCode, output: out.output, stderr: out.stderr, cursor: out.cursor, truncated: out.truncated };
     } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) };
+      return { error: error instanceof Error ? error.message : String(error), ...(isUnknownProcess(error) ? { unknown: true } : {}) };
     }
   });
   const finish = async (status: EndStatus, text: string, outcome?: string): Promise<void> => {
@@ -89,7 +89,7 @@ export async function watchTick(ctx: WatcherContext, computer: ComputerClient | 
     }, text, SUMMARY_MAX)));
     const task = await ctx.run('end:' + String(state.attempt), () => inOwnerScope(input.ownerId, () => endBackgroundTask(ctx.store, input.taskId, status, at, outcome)));
     // The agent stopped this process itself between the read and the end: it already knows, so no wake.
-    if (task?.status === 'stopped') return;
+    if (task?.status === 'stopped' || input.silent === true) return;
     ctx.sendWake(taskDoneWake(
       { ownerId: input.ownerId, agentId: input.agentId, conversationId: input.conversationId, ...(input.hop === undefined ? {} : { hop: input.hop }) },
       { taskId: input.taskId, taskKind: 'shell', status, summary, ...(input.generation === undefined ? {} : { generation: input.generation }), ...(input.originRunId === undefined ? {} : { originRunId: input.originRunId }) },
@@ -98,6 +98,8 @@ export async function watchTick(ctx: WatcherContext, computer: ComputerClient | 
   };
   if ('error' in read) {
     const errors = state.errors + 1;
+    // The computer no longer holds the process (replaced or expired): there is nothing left to wait for.
+    if (read.unknown === true) return finish('failed', 'Process ' + input.handle + ' no longer exists: ' + read.error, ORPHAN_OUTCOME);
     if (errors >= WATCH_MAX_READ_ERRORS) return finish('failed', 'Could not read process ' + input.handle + ': ' + read.error);
     ctx.setState({ ...state, attempt: state.attempt + 1, errors });
     return ctx.rearm(input, watchInterval(state.attempt));

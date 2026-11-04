@@ -1,6 +1,6 @@
 import { aguiInput } from '../../agui-input.js';
 import { describe, expect, it } from 'vitest';
-import { createAccount, insertDocRow, listenEvents, runReport, toolActivity, transcriptMessages, type Account, type EventListener } from '../harness/client';
+import { createAccount, diagnose, insertDocRow, listenEvents, runReport, toolActivity, transcriptMessages, type Account, type EventListener } from '../harness/client';
 
 /**
  * Posting to the Feed from routines with a real model (BACKEND §3.6.1, §10.10). The agent, not the server, does the right
@@ -156,7 +156,7 @@ describe('real model: a news routine', () => {
 });
 
 describe('real model: a routine with genuinely nothing to report (BACKEND §3.3b)', () => {
-  it('ends quietly: no message in the chat, no unread, no post, and the task says why', async () => {
+  it('ends with nothing sent: no message in the chat, no unread, no post, and the task keeps the final text as its result', async () => {
     const account = await createAccount('real-quiet');
     const events = await listenEvents(account.cookie);
     try {
@@ -175,22 +175,65 @@ describe('real model: a routine with genuinely nothing to report (BACKEND §3.3b
       expect(run.status, await runReport(account, run.id)).toBe('completed');
 
       const activity = await toolActivity(sessionKey);
-      const quiet = activity.results.filter((result) => result.toolName === 'finish_quietly');
       note('tool calls', activity.calls.map((call) => call.name === 'tool_call' ? String(call.arguments['name']) : call.name));
-      note('finish_quietly results', quiet);
-      expect(quiet.length, JSON.stringify(activity.calls)).toBeGreaterThan(0);
-      expect(quiet.every((result) => !result.isError), JSON.stringify(quiet)).toBe(true);
+      expect(activity.calls.some((call) => call.name === 'web_fetch'), 'the routine looked at the page').toBe(true);
       // Nothing reached the person: no message of any kind from the agent, no post, nothing unread.
       expect(await agentTexts(account, conversationId), await runReport(account, run.id)).toEqual([]);
       expect((await account.api('GET', '/v1/feed')).body.items).toHaveLength(0);
       expect((await account.api('GET', `/v1/conversations/${conversationId}`)).body.unreadCount).toBe(0);
-      // The task list says why.
+      // The task list shows the run's final text as its result.
       const tasks = (await account.api('GET', '/v1/tasks?routineId=' + routineId)).body.items as Array<{ id: string; status: string; resultLine?: string }>;
       const ended = tasks.find((task) => task.id === run.id);
       note('task result', ended?.resultLine ?? '');
-      expect(ended?.resultLine ?? '', JSON.stringify(tasks)).toMatch(/^Nothing to report: \S/);
+      expect(ended?.resultLine ?? '', JSON.stringify(tasks)).not.toBe('');
     } finally {
       events.close();
     }
   }, 900_000);
+});
+
+/** A line that is a placeholder or a delivery note rather than something to tell the owner: the live incident 2026-10-31 posted "(empty)". */
+const PLACEHOLDER = /^\W*(?:\(empty\)|empty|nothing(?: new)?|no (?:new )?(?:updates?|news)|n\/a|all quiet|none|sent|done|ok|posted)\W*$/i;
+
+describe('real model: the daily AI digest routine that delegates to a subagent (BACKEND §3.3b)', () => {
+  it('reads the feed-article skill, hands the research to a subagent, posts to the Feed after it finishes, and never posts a placeholder to the chat', async () => {
+    const account = await createAccount('real-ai-digest');
+    const events = await listenEvents(account.cookie);
+    try {
+      const { agentId, conversationId } = await agentWithChat(account, 'Daily');
+      const created = await account.api('POST', '/v1/routines', {
+        name: 'AI 日报', agentId, enabled: true,
+        instructions: '每天早上用简体普通话给主人做一份AI日报，发到Feed。做法：先用 skill_read feed-article 学图文规范，再 web_search 查最近24小时的AI新闻，并用 web_fetch 读原文，整理成图文并茂的日报。Post it to my Feed only when there is something new.',
+        trigger: { kind: 'schedule', cron: '0 * * * * *', human: 'every minute', tz: 'UTC' },
+        delivery: { channel: 'chat', target: conversationId }, notify: { mode: 'always' },
+      });
+      expect(created.status).toBe(201);
+      const routineId: string = created.body.id;
+      await events.waitFor(() => finishedRuns(events, conversationId).some((e) => e.data.metadata.juno.run.kind === 'routine'), 360_000);
+      await account.api('POST', `/v1/routines/${routineId}/toggle`, { enabled: false });
+      // The subagent finishes later and wakes the routine run's agent, which posts; wait for the post (or give up with the evidence).
+      await events.waitFor((e) => e.data.type === 'feed.created', 840_000).catch(() => undefined);
+      const sessionKey = `${agentId}:${conversationId}`;
+      const sessions = [sessionKey];
+      const calls = (await Promise.all(sessions.map((key) => toolActivity(key)))).flatMap((activity) => activity.calls);
+      const names = calls.map((call) => call.name === 'tool_call' ? String(call.arguments['name']) : call.name);
+      note('tool calls', names);
+      const posts = await feed(account);
+      const said = await agentTexts(account, conversationId);
+      note('feed posts', posts.map((post) => post.title));
+      note('chat messages', said);
+      if (posts.length === 0) {
+        await diagnose('ai-digest', account, conversationId, sessionKey);
+        const wakes = (await transcriptMessages(sessionKey)).map((message) => `${message.role}: ${message.text.slice(0, 700)}`);
+        console.error('[ai-digest] transcript', JSON.stringify(wakes.slice(-12)));
+      }
+      expect(names, 'read the skill').toContain('skill_read');
+      expect(names, 'delegated the research').toContain('subagent_start');
+      expect(posts.length, 'a Feed post after the subagent finished: ' + JSON.stringify(names)).toBeGreaterThanOrEqual(1);
+      expect(said.filter((line) => PLACEHOLDER.test(line)), 'no placeholder or delivery note in the chat').toEqual([]);
+      expect(said.length, 'the chat has no agent message unless it is a real result: ' + JSON.stringify(said)).toBeLessThanOrEqual(1);
+    } finally {
+      events.close();
+    }
+  }, 1_200_000);
 });

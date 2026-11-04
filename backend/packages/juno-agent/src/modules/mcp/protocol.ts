@@ -17,10 +17,38 @@ export const MCP_CLIENT_INFO = { name: 'agent-desktop', version: '0.1.0' } as co
 export const TOOLS_LIST_CHANGED = 'notifications/tools/list_changed';
 
 export class McpProtocolError extends Error {
-  constructor(public readonly code: number, message: string) {
+  /** `httpStatus` is set when the server answered with that HTTP status (then `code` is the same number). */
+  constructor(public readonly code: number, message: string, public readonly httpStatus?: number) {
     super(message);
     this.name = 'McpProtocolError';
   }
+}
+
+/** HTTP answers that mean the request was refused and nothing ran (BACKEND §3.3d.4); 5xx and 408 may have run, so they are not here. */
+const REFUSED_HTTP_STATUSES: ReadonlySet<number> = new Set([400, 401, 403, 404, 405, 415, 422, 429]);
+/** JSON-RPC answers that mean the server refused the call itself: method not found, invalid params. */
+const REFUSED_RPC_CODES: ReadonlySet<number> = new Set([-32601, -32602]);
+
+/**
+ * Whether the server definitely refused this call before running it, and the kind of failure that is (the step's `errorKind`):
+ * `validation` for a request it cannot accept, `permission` for a refused credential, `external` for a rate limit.
+ * Undefined for anything that may have run (a timeout after send, a reset connection, 5xx, 408) or that is not a server answer.
+ */
+export function refusalKind(error: unknown): 'validation' | 'permission' | 'external' | undefined {
+  if (error instanceof McpAuthError) return 'permission';
+  if (!(error instanceof McpProtocolError)) return undefined;
+  const status = error.httpStatus;
+  if (status !== undefined) {
+    if (!REFUSED_HTTP_STATUSES.has(status)) return undefined;
+    return status === 401 || status === 403 ? 'permission' : status === 429 ? 'external' : 'validation';
+  }
+  return REFUSED_RPC_CODES.has(error.code) ? 'validation' : undefined;
+}
+
+/** The server refused the arguments themselves (HTTP 400 / 422, JSON-RPC invalid params): the model can fix them and call again. */
+export function refusedArguments(error: unknown): boolean {
+  if (!(error instanceof McpProtocolError)) return false;
+  return error.httpStatus === undefined ? error.code === -32602 : error.httpStatus === 400 || error.httpStatus === 422;
 }
 
 export class McpAuthError extends Error {

@@ -5,7 +5,7 @@
  */
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import type { AgentTask, Run } from '@agent-desktop/public-contracts';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { AssistantTurn, Brain, BrainContext, Store, ToolRegistry, WakeEvent } from '../../../contracts/index.js';
@@ -61,9 +61,9 @@ function runContext(): RunContext {
   let ids = 0;
   return {
     rand: { uuidv4: () => `id${ids++}` },
-    run: <T>(_name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
-    awakeable: <T>() => ({ id: 'awake', promise: RestatePromise.resolve(new Promise<T>(() => {})) }),
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    run: <T>(_name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()),
+    awakeable: <T>() => ({ id: 'awake', promise: DurablePromise.resolve(new Promise<T>(() => {})) }),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
 }
 
@@ -94,7 +94,7 @@ async function taskEvents(store: { eventBus: ReturnType<typeof createMemoryStore
 
 describe('agent task list', () => {
   it('a plain chat reply creates no task', async () => {
-    const store = await runChat([call('c1', 'send_message', { kind: 'text', text: 'Hi there!' }), final('')]);
+    const store = await runChat([call('c1', 'send_message', { kind: 'text', purpose: 'answer', text: 'Hi there!' }), final('')]);
     expect(await listAgentTasks(store, 'agent-1')).toEqual([]);
     expect(await taskEvents(store)).toEqual([]);
   });
@@ -121,7 +121,7 @@ describe('agent task list', () => {
   });
 
   it('a run that ends closes the task it left running, but a waiting task stays open', async () => {
-    const failed = await runChat([call('c1', 'task_update', { title: 'Book a table' }), final('')], 'failed');
+    const failed = await runChat([call('c1', 'task_update', { title: 'Book a table' }), final('On it.')], 'failed');
     expect((await listAgentTasks(failed, 'agent-1'))[0]).toMatchObject({ title: 'Book a table', status: 'ended', outcome: 'failed' });
 
     const waiting = await runChat([call('c1', 'task_update', { title: 'Find rain jackets', status: 'waiting', outcome: 'Asked for a size choice to find rain jackets' }), final('Which size?')]);
@@ -140,13 +140,17 @@ describe('agent task list', () => {
     await appendRunStep(store, 'run-child', { id: 'stp-1', runId: 'run-child', index: 0, kind: 'browser', verb: 'Opened', target: 'uniqlo.com/rain-jackets', status: 'completed', startedAt: at, durationMs: 5 });
     expect((await listAgentTasks(store, 'agent-1'))[0]).toMatchObject({ kind: 'subagent', title: 'Find rain jacket options', status: 'running', progress: 'Opened uniqlo.com/rain-jackets', childRunId: 'run-child', runId: 'run-parent', parentId: 'run-parent', rootRunId: 'run-parent', depth: 1, mode: 'awaited', replyTo: { type: 'parent_run', runId: 'run-parent' }, origin: { type: 'owner_message', conversationId: 'conv-1' } });
 
+    // A bookkeeping (internal) step is never the progress line: the last visible step stays.
+    await appendRunStep(store, 'run-child', { id: 'stp-2', runId: 'run-child', index: 1, kind: 'mcp', verb: 'Executed', target: 'task_update', status: 'completed', internal: true, startedAt: at, durationMs: 1 });
+    expect((await listAgentTasks(store, 'agent-1'))[0]).toMatchObject({ progress: 'Opened uniqlo.com/rain-jackets' });
+
     const services: RunServices = { store, blobs: createMemoryBlobStore(), enqueuer: new NoopEnqueuer(), brain: new ScriptedTurns([final('')]), toolRegistry: { forAgent: async () => [], get: () => undefined } };
     await store.patch('runs', 'run-child', { childResult: 'Found 4 jackets under $60.\nDetails follow.' } as Partial<Run>);
     await finalizeTerminalRun(runContext(), services, { ...input, sessionKey: 'child' }, 'run-child', { kind: 'completed' });
     const [done] = await listAgentTasks(store, 'agent-1');
     expect(done).toMatchObject({ status: 'ended', outcome: 'done', resultLine: 'Found 4 jackets under $60.' });
     expect(done?.progress).toBeUndefined();
-    expect((await taskEvents(store)).map((task) => task.status)).toEqual(['running', 'running', 'ended']);
+    expect((await taskEvents(store)).map((task) => task.status)).toEqual(['running', 'running', 'running', 'ended']);
     const wire = (await store.eventBus.since(0, 500)).map((row) => row.event).filter((event) => event.type.startsWith('SUBAGENT_'));
     expect(wire[0]).toMatchObject({
       type: 'SUBAGENT_STARTED',

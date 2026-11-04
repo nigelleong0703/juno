@@ -36,10 +36,10 @@ export function resolveToolScope(stored: ToolScope | undefined, previous: ToolSc
 
 /**
  * Native tools hidden outside the owner's own chat, by name prefix: the shell, the sandbox and the Mac's desktop, browser
- * sessions (signed in as the owner), the Mac's apps (mail, calendar, reminders, notes), the iPhone's calendar and reminders, and the
- * owner's documents (BACKEND 5.11a).
+ * sessions (signed in as the owner), the Mac's apps (mail, calendar, reminders, notes), everything on the iPhone (`phone_`: calendar,
+ * contacts, location, health, photos, music, home), and the owner's documents (BACKEND 5.11a).
  */
-const HIDDEN_OUTSIDE_OWNER: readonly string[] = ['shell.', 'computer.', 'computer_', 'browser.', 'mac_', 'phone_calendar_', 'phone_reminders_', 'document_'];
+const HIDDEN_OUTSIDE_OWNER: readonly string[] = ['shell.', 'computer.', 'computer_', 'browser.', 'mac_', 'phone_', 'document_'];
 
 /** The agent's own schedule: reading it shows the owner's plans, so it stays with the owner. Scheduling (`schedule_add`) is open in a group. */
 const SCHEDULE_READ_TOOLS: ReadonlySet<string> = new Set(['schedule_list', 'schedule_get']);

@@ -14,6 +14,8 @@ import { buildDelegationOffer, NO_USAGE, readDelegationUsage } from './decision/
 import type { Derived } from './decision/derive.js';
 import { stripHarnessArgs } from './decision/binding.js';
 import { STRANGER_RULE_ID } from './decision/stranger.js';
+import { connectorReads, GUARDIAN_RULE_ID, INJECTION_RULE_ID, knownRecipients, reviewWithGuardian, scanContext, screenAutoAllow, type GuardianCase, type GuardianVerdict, type Screening } from './guardian.js';
+import { readTranscript } from '../../brain/index.js';
 import { auditInitiatorFor } from '../logic/run-origin.js';
 import {
   deriveFor,
@@ -60,6 +62,8 @@ export interface ApprovalBinding {
   extras?: Pick<ApprovalPayload, 'purchase' | 'preview' | 'ui'>;
   /** The card's line for a send to someone else in an owner-only run (batch 5b); see draftNoticeOf. */
   notice?: string;
+  /** Someone other than the owner asked in a platform chat (BACKEND 6.8): the card goes to the owner, never into that chat. */
+  askedBy?: NonNullable<ApprovalPayload['askedBy']>;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -80,6 +84,9 @@ function recipientLine(derived: Derived): string | undefined {
   return names.length <= 3 ? names.join(', ') : `${names.slice(0, 3).join(', ')} +${names.length - 3}`;
 }
 
+/** Rules whose reason is the card's "why": the platform's own words about this ask, which the agent's account of it must not replace. */
+const LEADING_REASON_RULES: ReadonlySet<string> = new Set([STRANGER_RULE_ID, GUARDIAN_RULE_ID, INJECTION_RULE_ID]);
+
 /** The card's payload: plain words (never the raw tool name), the brief, and the exact reviewed arguments. */
 function approvalPayloadFor(binding: ApprovalBinding): ApprovalPayload {
   const { brief } = binding.derived;
@@ -89,13 +96,14 @@ function approvalPayloadFor(binding: ApprovalBinding): ApprovalPayload {
     kind: 'approval',
     action: binding.derived.action,
     target: binding.review,
-    // A stranger's ask says who asked and where, whatever story the agent tells (its own words stay in `brief.why`).
-    why: binding.ruleId === STRANGER_RULE_ID ? binding.reason : (brief.why ?? binding.reason),
+    // A stranger's ask says who asked and where, and a Guardian ask says what it noticed, whatever story the agent tells (its own words stay in `brief.why`).
+    why: binding.ruleId !== undefined && LEADING_REASON_RULES.has(binding.ruleId) ? binding.reason : (brief.why ?? binding.reason),
     ...(binding.derived.app === undefined ? {} : { app: binding.derived.app }),
     ...(brief.platform.kind === 'site' && brief.platform.host !== undefined ? { site: brief.platform.host } : {}),
     ...(recipient === undefined ? {} : { recipient }),
     ...(draft === undefined ? {} : { draft }),
     ...(binding.notice === undefined ? {} : { notice: binding.notice }),
+    ...(binding.askedBy === undefined ? {} : { askedBy: binding.askedBy }),
     ...binding.extras,
     brief,
     delegationOffer: binding.offer,
@@ -163,6 +171,10 @@ function bindingFor(
   extras: ApprovalBinding['extras'],
 ): ApprovalBinding {
   const notice = draftNoticeOf(brief.config, call.name, call.arguments);
+  const chat = brief.config.chat;
+  const askedBy: ApprovalBinding['askedBy'] = ruleId === STRANGER_RULE_ID && chat?.stranger !== undefined
+    ? { ...(chat.stranger.name === undefined ? {} : { name: chat.stranger.name }), ...(chat.title === undefined ? {} : { where: chat.title.slice(0, 120) }), kind: chat.teammate === true ? 'teammate' : 'stranger' }
+    : undefined;
   return {
     requestId: 'req_' + step.id,
     itemId: 'itm_' + step.id,
@@ -178,6 +190,7 @@ function bindingFor(
     ...(ruleId === undefined ? {} : { ruleId }),
     ...(extras === undefined ? {} : { extras }),
     ...(notice === undefined ? {} : { notice }),
+    ...(askedBy === undefined ? {} : { askedBy }),
   };
 }
 
@@ -390,6 +403,8 @@ interface PolicyDecision {
   requestId?: string;
   /** An `ask` whose arguments cannot be shown in full: it is refused instead of half-reviewed. */
   tooLarge?: boolean;
+  /** The call would run by itself but writes to the outside with outside content in the context: nothing is recorded yet, the Guardian reviews it next (BACKEND 8.3). */
+  review?: GuardianCase;
 }
 
 const NOTE_MAX = 1000;
@@ -410,6 +425,90 @@ function notApproved(decided: Pick<Request, 'status' | 'decision'> | null): Tool
 }
 
 /**
+ * What the Guardian (BACKEND 8.3) and the deterministic checks of 8.4 make of a call the policy allowed: `pass` for nearly every call
+ * (not an outside write, or nothing from outside in the model's context), else an `ask` or the case for the model to review.
+ */
+async function screenAllowed(
+  services: RunServices,
+  input: RunInput,
+  call: { name: string; arguments: unknown },
+  config: Awaited<ReturnType<typeof readToolPolicyConfig>>,
+): Promise<Screening> {
+  const origin = config.origins?.get(call.name);
+  return screenAutoAllow({
+    toolName: call.name,
+    args: call.arguments,
+    ...(origin === undefined ? {} : { origin }),
+    derived: deriveFor(config, call.name, call.arguments, input.wakeEvents[0]),
+    conversationId: input.conversationId,
+    scan: async () => scanContext(await readTranscript(services.store, input.sessionKey), (name) => connectorReads(config.origins?.get(name))),
+    known: knownRecipients(config.rules),
+  });
+}
+
+/**
+ * The journaled policy decision of one call: the verdict, and for an `ask` the raised card. A call the policy allows is first screened
+ * (`screenAllowed`); when it needs the Guardian the first pass returns `review` and records nothing, and the caller runs the second pass
+ * with the Guardian's answer. `guardian` is that answer: an `ask` turns the allow into a card whose reason is the Guardian's.
+ */
+async function decidePolicy(
+  services: RunServices,
+  input: RunInput,
+  runId: string,
+  step: Doc<'steps'>,
+  call: { name: string; arguments: unknown },
+  cancellation: RunCancellation,
+  guardian?: GuardianVerdict,
+): Promise<PolicyDecision> {
+  const ownerId = input.wakeEvents[0]?.ownerId ?? '';
+  const config = await readToolPolicyConfig(services.store, services.toolRegistry, input.agentId, ownerId, cancellation.signal, policyCallOf(input, call.name, call.arguments));
+  let verdict = evaluateToolPolicy(config, call.name, input.wakeEvents[0], call.arguments);
+  if (verdict.kind === 'allow') {
+    if (guardian !== undefined) {
+      if (guardian.verdict === 'ask') verdict = { kind: 'ask', reason: guardian.reason, ruleId: GUARDIAN_RULE_ID };
+    } else {
+      const screening = await screenAllowed(services, input, call, config);
+      if (screening.kind === 'review') return { verdict, review: screening.review };
+      if (screening.kind === 'ask') verdict = { kind: 'ask', reason: screening.reason, ruleId: screening.ruleId };
+    }
+  }
+  const auditFor = (decided: ToolPolicyVerdict): ToolAuditRow => ({ id: 'aud-policy-' + step.id, actor: 'agent', tool: call.name, decision: VERDICT_DECISION[decided.kind],
+    reason: decided.kind === 'allow' ? 'allowed by policy' : decided.reason, ...(decided.kind !== 'allow' && decided.ruleId !== undefined ? { ruleId: decided.ruleId } : {}) });
+  let audit = auditFor(verdict);
+  if (verdict.kind === 'allow' && verdict.delegationId !== undefined) {
+    // A delegation's limits are checked against every decision already recorded, and this one is recorded in the same transaction.
+    const reserved = await reserveDelegation(services, input, runId, step, call, config);
+    if (reserved.kind === 'recorded') return { verdict: reserved.verdict, requestId: reserved.requestId };
+    verdict = reserved.verdict;
+    audit = auditFor(verdict);
+  }
+  const delegationId = verdict.kind === 'allow' ? verdict.delegationId : undefined;
+  if (verdict.kind !== 'ask' && delegationId === undefined) {
+    // A default allow is already the step itself; the audit keeps only decisions (asked, denied, handed off, delegated).
+    if (verdict.kind !== 'allow') await auditToolDecision(services.store, input, runId, audit);
+    return { verdict };
+  }
+  const derived = deriveFor(config, call.name, call.arguments, input.wakeEvents[0]);
+  const brief: CallBrief = { derived, config, offer: buildDelegationOffer(derived, input.wakeEvents[0], config.ownerTimeZone, config.rules) };
+  // The review bound applies ONLY to an approval: a normal authorized call keeps its full,
+  // schema-validated arguments (a large patch or file edit is not rejected here).
+  const review = reviewableArgs(call.arguments);
+  if (verdict.kind !== 'ask') return { verdict };
+  if (review === null) {
+    await auditToolDecision(services.store, input, runId, { ...audit, decision: 'denied', reason: 'arguments too large to review' });
+    return { verdict, tooLarge: true };
+  }
+  const late = await takeLateApproval(services.store, input, call, review, derived.brief.binding);
+  if (late !== undefined) {
+    await auditToolDecision(services.store, input, runId, { ...audit, decision: 'approved', reason: 'approved by the user after their message', requestId: late.id, brief: auditBrief(derived) });
+    return { verdict: { kind: 'allow' }, preApproved: true, requestId: late.id };
+  }
+  const requestId = await raiseApproval(services, input, runId, step, call, verdict, review, brief, cancellation.signal);
+  await auditToolDecision(services.store, input, runId, { ...audit, requestId, brief: auditBrief(derived) });
+  return { verdict, requestId };
+}
+
+/**
  * Decide and, for `ask`, wait for the durable decision before any effect. A rule that changed while
  * the approval was pending is caught by the fresh check the caller runs just before executing.
  */
@@ -424,45 +523,13 @@ export async function authorizeToolCall(
 ): Promise<ToolAuthorization> {
   let decision: PolicyDecision;
   try {
-    decision = await ctx.run(`policy:${step.id}`, async (): Promise<PolicyDecision> => {
-      const ownerId = input.wakeEvents[0]?.ownerId ?? '';
-      const config = await readToolPolicyConfig(services.store, services.toolRegistry, input.agentId, ownerId, cancellation.signal, policyCallOf(input, call.name, call.arguments));
-      let verdict = evaluateToolPolicy(config, call.name, input.wakeEvents[0], call.arguments);
-      const auditFor = (decided: ToolPolicyVerdict): ToolAuditRow => ({ id: 'aud-policy-' + step.id, actor: 'agent', tool: call.name, decision: VERDICT_DECISION[decided.kind],
-        reason: decided.kind === 'allow' ? 'allowed by policy' : decided.reason, ...(decided.kind !== 'allow' && decided.ruleId !== undefined ? { ruleId: decided.ruleId } : {}) });
-      let audit = auditFor(verdict);
-      if (verdict.kind === 'allow' && verdict.delegationId !== undefined) {
-        // A delegation's limits are checked against every decision already recorded, and this one is recorded in the same transaction.
-        const reserved = await reserveDelegation(services, input, runId, step, call, config);
-        if (reserved.kind === 'recorded') return { verdict: reserved.verdict, requestId: reserved.requestId };
-        verdict = reserved.verdict;
-        audit = auditFor(verdict);
-      }
-      const delegationId = verdict.kind === 'allow' ? verdict.delegationId : undefined;
-      if (verdict.kind !== 'ask' && delegationId === undefined) {
-        // A default allow is already the step itself; the audit keeps only decisions (asked, denied, handed off, delegated).
-        if (verdict.kind !== 'allow') await auditToolDecision(services.store, input, runId, audit);
-        return { verdict };
-      }
-      const derived = deriveFor(config, call.name, call.arguments, input.wakeEvents[0]);
-      const brief: CallBrief = { derived, config, offer: buildDelegationOffer(derived, input.wakeEvents[0], config.ownerTimeZone, config.rules) };
-      // The review bound applies ONLY to an approval: a normal authorized call keeps its full,
-      // schema-validated arguments (a large patch or file edit is not rejected here).
-      const review = reviewableArgs(call.arguments);
-      if (verdict.kind !== 'ask') return { verdict };
-      if (review === null) {
-        await auditToolDecision(services.store, input, runId, { ...audit, decision: 'denied', reason: 'arguments too large to review' });
-        return { verdict, tooLarge: true };
-      }
-      const late = await takeLateApproval(services.store, input, call, review, derived.brief.binding);
-      if (late !== undefined) {
-        await auditToolDecision(services.store, input, runId, { ...audit, decision: 'approved', reason: 'approved by the user after their message', requestId: late.id, brief: auditBrief(derived) });
-        return { verdict: { kind: 'allow' }, preApproved: true, requestId: late.id };
-      }
-      const requestId = await raiseApproval(services, input, runId, step, call, verdict, review, brief, cancellation.signal);
-      await auditToolDecision(services.store, input, runId, { ...audit, requestId, brief: auditBrief(derived) });
-      return { verdict, requestId };
-    });
+    decision = await ctx.run(`policy:${step.id}`, () => decidePolicy(services, input, runId, step, call, cancellation));
+    if (decision.review !== undefined) {
+      // Its own durable step: a replay reads the answer that was given, it does not ask the model again.
+      const review = decision.review;
+      const guardian = await ctx.run(`guardian:${step.id}`, () => reviewWithGuardian(services.brain, input.agentId, review));
+      decision = await ctx.run(`policy:${step.id}:guardian`, () => decidePolicy(services, input, runId, step, call, cancellation, guardian));
+    }
   } catch (error) {
     // A stop during tool discovery is a cancellation, not a policy failure: nothing was reviewed.
     if (cancellation.signal.aborted) return { kind: 'cancelled' };

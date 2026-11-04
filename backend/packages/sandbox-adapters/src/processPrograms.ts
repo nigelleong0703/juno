@@ -117,6 +117,29 @@ export function stopProgram(dir: string, agentId: string): string {
   ].join('\n');
 }
 
+/** How long a background job (`shell.start`) keeps its computer awake, counted from the job's start; an older job no longer does. */
+export const BACKGROUND_JOB_KEEP_AWAKE_MINUTES = 120;
+
+/**
+ * Prints RUNNING when any agent's process under `root` is still alive, else IDLE: no exit or stopped marker, started less than
+ * `BACKGROUND_JOB_KEEP_AWAKE_MINUTES` ago (the `pid` file is written once, at start, so its modification time is the start time),
+ * and the recorded pid is still that handle's process (its command line carries the handle's directory, so a recycled pid does
+ * not count). The idle timer asks this before pausing a computer.
+ */
+export function anyRunningProgram(root: string): string {
+  return [
+    'for d in ' + shq(root) + '/*/p_*; do',
+    '  [ -d "$d" ] || continue',
+    '  [ -f "$d/exit" ] || [ -f "$d/stopped" ] && continue',
+    '  [ -n "$(find "$d/pid" -mmin +' + BACKGROUND_JOB_KEEP_AWAKE_MINUTES + ' 2>/dev/null)" ] && continue',
+    '  p=$(cat "$d/pid" 2>/dev/null)',
+    '  [ -n "$p" ] || continue',
+    '  kill -0 "$p" 2>/dev/null && ps -o command= -p "$p" 2>/dev/null | grep -q -e "$d" && { printf "RUNNING\\n"; exit 0; }',
+    'done',
+    'printf "IDLE\\n"',
+  ].join('\n');
+}
+
 export function cleanupProgram(scopeDir: string): string {
   return [
     'S=' + shq(scopeDir),

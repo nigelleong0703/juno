@@ -1,6 +1,6 @@
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { AssistantTurn, Brain, BrainContext, ToolRegistry, ToolContext, WakeEvent } from '../../../contracts/index.js';
 import type { Run } from '@agent-desktop/public-contracts';
@@ -66,11 +66,11 @@ async function setup() {
   const inbox: WakeEvent[] = [];
   const ctx: RunContext = {
     rand: { uuidv4: () => 'id' },
-    date: { now: () => RestatePromise.resolve(clock) },
-    run: <T>(_name: string, action: () => Promise<T>) => RestatePromise.resolve(action()),
+    date: { now: () => DurablePromise.resolve(clock) },
+    run: <T>(_name: string, action: () => Promise<T>) => DurablePromise.resolve(action()),
     awakeable: () => { throw new Error('Event wait must not create a human request'); },
-    sleep: (ms) => { sleeps.push(ms); clock += ms; return RestatePromise.resolve(onSleep()); },
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>(inbox.splice(0, inbox.length)),
+    sleep: (ms) => { sleeps.push(ms); clock += ms; return DurablePromise.resolve(onSleep()); },
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>(inbox.splice(0, inbox.length)),
   };
   const toolCtx: ToolContext = {
     ownerId: 'owner', agentId: input.agentId, conversationId: input.conversationId, runId: 'run-1',
@@ -131,7 +131,7 @@ describe('wait_for event suspension', () => {
     const deps = await setup();
     const sub = (await deps.store.list('subscriptions')).items[0];
     if (sub === undefined) throw new Error('No subscription');
-    deps.ctx.date = { now: () => RestatePromise.resolve((async () => {
+    deps.ctx.date = { now: () => DurablePromise.resolve((async () => {
       await deps.store.patch('subscriptions', sub.id, { event: { id: 'edge', source: 'github', type: 'pr.merged', data: { text: 'at boundary' } } });
       return Date.parse(sub.expiresAt);
     })()) };

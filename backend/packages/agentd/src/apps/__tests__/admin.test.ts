@@ -2,7 +2,7 @@
  * The app catalog admin routes (BACKEND 10.18) through agentd's HTTP surface: an operator adds, edits, hides and retires apps with no code
  * change and no restart, and the owner API follows at once. The seed is the built-in connectors plus the four chat platforms.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Hono } from 'hono';
 import { createMemoryStore } from '@agent-desktop/db';
 import type { Store, WakeEvent } from '@agent-desktop/contracts';
@@ -37,12 +37,16 @@ const acme = {
 };
 
 beforeEach(async () => {
+  // The apps listing offers an app that needs our OAuth client only when this deployment has it (Gmail: Google's).
+  vi.stubEnv('GOOGLE_OAUTH_CLIENT_ID', 'test-google-client');
   const mem = createMemoryStore();
   store = withDefaultOwner(mem, OWNER);
   const enqueuer = { async enqueue(event: WakeEvent) { void event; return { accepted: true }; }, async stopRun() {}, async resolveAwakeable() {}, async scheduleRoutine() {} } as never;
   catalog = await createStoredCatalog({ store: mem, seed: seedRows(BUILTIN_CATALOG_ENTRIES, KINDS) });
   app = createTestApp({ store, bus: mem.eventBus, enqueuer, appCatalog: catalog });
 });
+
+afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('access', () => {
   it('needs the service bearer and no owner; anyone else is refused', async () => {
@@ -62,7 +66,6 @@ describe('seed', () => {
     expect(rows.every((row) => row['status'] === 'listed' && row['ownerId'] === undefined)).toBe(true);
     expect(rows.find((row) => row['id'] === 'slack')).toMatchObject({ category: 'chat', version: 1, binding: { plugin: 'slack' }, interface: { displayName: 'Slack' } });
     expect(rows.find((row) => row['id'] === 'gmail')).toMatchObject({ category: 'work', version: 1, mcpServers: { gmail: { type: 'streamable-http', auth: 'oauth', url: expect.stringContaining('gmail') } } });
-    expect(rows.find((row) => row['id'] === 'hevy')).toMatchObject({ userConfig: { api_key: { sensitive: true, required: true } }, mcpServers: { hevy: { auth: 'api_key', headers: { 'api-key': '${user_config.api_key}' } } } });
     expect((await apps()).map((entry) => entry.id).slice(0, 4)).toEqual(KINDS);
   });
 });

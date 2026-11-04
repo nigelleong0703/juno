@@ -19,7 +19,7 @@ class RecordingEnqueuer implements Enqueuer {
   failEnqueue = false;
 
   async enqueue(event: WakeEvent): Promise<{ accepted: boolean; reason?: string }> {
-    if (this.failEnqueue) throw new Error('restate ingress unavailable');
+    if (this.failEnqueue) throw new Error('runner unavailable');
     this.wakes.push(event);
     return { accepted: true };
   }

@@ -7,7 +7,8 @@
 import { BlockList, isIP } from 'node:net';
 
 const BLOCKED = new BlockList();
-const BLOCKED_IPV4: ReadonlyArray<[string, number]> = [
+/** The blocked ranges as [network, prefix]; the sandbox's own egress rules (BACKEND 7.9) are generated from the same tables. */
+export const BLOCKED_IPV4: ReadonlyArray<[string, number]> = [
   ['0.0.0.0', 8],
   ['10.0.0.0', 8],
   ['100.64.0.0', 10],
@@ -19,12 +20,15 @@ const BLOCKED_IPV4: ReadonlyArray<[string, number]> = [
   ['224.0.0.0', 4],
   ['240.0.0.0', 4],
 ];
+export const BLOCKED_IPV6: ReadonlyArray<[string, number]> = [
+  ['::', 128],
+  ['::1', 128],
+  ['fc00::', 7],
+  ['fe80::', 10],
+  ['ff00::', 8],
+];
 for (const [network, prefix] of BLOCKED_IPV4) BLOCKED.addSubnet(network, prefix, 'ipv4');
-BLOCKED.addAddress('::', 'ipv6');
-BLOCKED.addAddress('::1', 'ipv6');
-BLOCKED.addSubnet('fc00::', 7, 'ipv6');
-BLOCKED.addSubnet('fe80::', 10, 'ipv6');
-BLOCKED.addSubnet('ff00::', 8, 'ipv6');
+for (const [network, prefix] of BLOCKED_IPV6) BLOCKED.addSubnet(network, prefix, 'ipv6');
 const BLOCKED_SUFFIXES: readonly string[] = ['.localhost', '.local', '.internal', '.ts.net'];
 
 /** A literal IP (v4 or v6) in a blocked range. A non-IP string is not judged here; see isBlockedHostname. */

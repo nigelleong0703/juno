@@ -3,14 +3,13 @@ import { describe, expect, it } from 'vitest';
 import { createAccount, listenEvents, runReport } from '../harness/client';
 
 /**
- * Emoji with a real model (context.ts "Emoji like a friend texting"): casual talk carries an emoji now and then even
- * when the user never types one; a work answer and bad news carry none. Owner feedback 2026-10-21: "u looks very cold".
- * Checks presence only, never which emoji or wording.
+ * Emoji with a real model (system.voice "How a reply reads"): owner 2026-11-02 "emoji should be on" — light casual moments get a fitting
+ * emoji (at most one per message, not every reply), work answers and sad news never. Checks presence only, never wording.
  */
 const EMOJI = /\p{Extended_Pictographic}/u;
 
 describe('real model: emoji', () => {
-  it('uses emoji in casual talk without the user using any, and none in work answers or bad news', async () => {
+  it('uses a fitting emoji in some casual replies, at most one per message, and none in work answers or bad news', async () => {
     const account = await createAccount('real-emoji');
     const events = await listenEvents(account.cookie);
     try {
@@ -41,13 +40,20 @@ describe('real model: emoji', () => {
         return reply;
       };
 
-      // Casual banter, no emoji from the user: at least one reply should carry one.
+      // Casual banter: at least one reply carries an emoji, none carries more than one.
       const casual = [
         await ask('haha my cat just knocked my coffee off the table again'),
         await ask('finally friday, finished all my work early today'),
         await ask('thanks for chatting, you are fun'),
       ];
       expect(casual.some((reply) => EMOJI.test(reply)), JSON.stringify(casual)).toBe(true);
+      const count = (reply: string): number => [...reply.matchAll(/\p{Extended_Pictographic}/gu)].length;
+      expect(casual.filter((reply) => count(reply) > 1), JSON.stringify(casual)).toEqual([]);
+
+      // Task moments with a feeling: a hello and something done carry one.
+      const hello = await ask('hey');
+      const done = await ask('remind me tomorrow at 9 to call mum');
+      expect([hello, done].filter((reply) => EMOJI.test(reply)).length, JSON.stringify([hello, done])).toBeGreaterThanOrEqual(1);
 
       const work = await ask('give me the steps to boil an egg so the yolk is still soft. just from what you know');
       expect(work, work).not.toMatch(EMOJI);

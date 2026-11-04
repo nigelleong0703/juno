@@ -1,21 +1,21 @@
 /**
  * tasks_list / task_stop: the agent's own background work, listed and stopped by id, so the model can
  * still find and end it after its context was compacted (Claude Code's /tasks and TaskStop). Covers the
- * background-task registry (shell processes, MCP background calls, wait_for notify) and background child
- * runs, which are read from their run rows and stopped through child_cancel's own checks.
+ * background-task registry (shell processes, MCP background calls, wait_for notify) and subagents (background
+ * child runs), which are read from their run rows and stopped through the parent-only checks of subagentControl.
  */
 import { z } from 'zod';
 import type { BackgroundTask, Store, Tool, ToolContext, ToolResult } from '../../../contracts/index.js';
 import type { ComputerClient } from '../../../ports/computer/index.js';
 import type { ComputerClientProvider } from '../computer/client.js';
-import { cancelChildRun } from '../../tasks/childControl.js';
-import { isTerminal } from '../../tasks/childRead.js';
+import { cancelSubagentRun } from '../../tasks/subagentControl.js';
+import { isTerminal } from '../../tasks/subagentRead.js';
 import { endBackgroundTask, exitOutcome, stopBackgroundTask } from '../../tasks/background-registry.js';
 
 /** Rows per source in one listing: live work first, then the most recent finished ones. */
 export const TASKS_LIST_MAX = 20;
 /** Background runs scanned for children; live ones are put first among them. */
-const CHILD_SCAN = 100;
+const SUBAGENT_SCAN = 100;
 
 const stopSchema = z.object({ taskId: z.string().min(1) });
 
@@ -69,14 +69,17 @@ export function createTasksListTool(opts: { computer?: ComputerClientProvider })
         const task = await refresh(ctx.store, client, ctx.agentId, row, at, ctx.signal);
         lines.push('- ' + task.id + ' · ' + task.kind + ' · ' + task.status + ' · started ' + task.startedAt + ' · ' + task.label + ' · ' + readHint(task));
       }
-      const runs = await ctx.store.list('runs', { where: { conversationId: ctx.conversationId, kind: 'background' }, orderBy: 'at', order: 'desc', limit: CHILD_SCAN });
+      const runs = await ctx.store.list('runs', { where: { conversationId: ctx.conversationId, kind: 'background' }, orderBy: 'at', order: 'desc', limit: SUBAGENT_SCAN });
       const children = runs.items
         .filter((run) => run.parentRunId !== undefined)
         .sort((a, b) => Number(isTerminal(a.status)) - Number(isTerminal(b.status)))
         .slice(0, TASKS_LIST_MAX);
       for (const run of children) {
         const state = isTerminal(run.status) ? run.status : run.status + ' (running)';
-        lines.push('- ' + run.id + ' · child · ' + state + ' · started ' + run.startedAt + ' · ' + run.title + ' · result: child_wait or child_results; stop: task_stop');
+        const done = isTerminal(run.status);
+        const ref: unknown = Reflect.get(run, 'childResultRef');
+        const result = run.childResult === undefined ? '' : ' · result: ' + run.childResult.replace(/\s+/g, ' ').trim().slice(0, 200) + (typeof ref === 'string' ? ' (full: output_read ' + ref + ')' : '');
+        lines.push('- ' + run.id + ' · subagent · ' + state + ' · started ' + run.startedAt + ' · ' + run.title + (done ? result : ' · result: task_done wakes you with it; stop: task_stop'));
       }
       if (lines.length === 0) return text('No background tasks in this chat.');
       return { content: [{ type: 'text', text: lines.join('\n') }], details: { count: lines.length } };
@@ -102,12 +105,14 @@ export function createTaskStopTool(opts: { computer?: ComputerClientProvider }):
       if (child === null || child.kind !== 'background' || child.parentRunId === undefined || child.conversationId !== ctx.conversationId) {
         return text('No background task ' + parsed.taskId + ' in this chat. Call tasks_list for the ids.', true);
       }
-      // The calling run must own the child (or be a later root run that may control its earlier spawner's child), as child_cancel checks.
-      const outcome = await cancelChildRun(ctx.store, (runId) => ctx.enqueuer.stopRun(runId), {
-        ownerId: ctx.ownerId, agentId: ctx.agentId, parentRunId: ctx.runId, childRunId: child.id, conversationId: ctx.conversationId,
+      // The calling run must own the child (or be a later root run that may control its earlier spawner's child), as subagentControl checks.
+      const outcome = await cancelSubagentRun(ctx.store, (runId) => ctx.enqueuer.stopRun(runId), {
+        ownerId: ctx.ownerId, agentId: ctx.agentId, parentRunId: ctx.runId, subagentRunId: child.id, conversationId: ctx.conversationId,
       });
-      if (!outcome.ok) return text('Child ' + parsed.taskId + ' could not be stopped (' + outcome.reason + ').', true);
-      const message = outcome.state === 'already_terminal' ? 'Child ' + outcome.runId + ' already ended (status ' + outcome.status + ').' : 'Stop requested for child ' + outcome.runId + '; its own terminal state will show it.';
+      if (!outcome.ok) return text('Subagent ' + parsed.taskId + ' could not be stopped (' + outcome.reason + ').', true);
+      const message = outcome.state === 'already_terminal' ? 'Subagent ' + outcome.runId + ' already ended (status ' + outcome.status + ').'
+        : outcome.state === 'terminal' ? 'Subagent ' + outcome.runId + ' is now ' + outcome.status + '.'
+          : 'Stop requested for subagent ' + outcome.runId + '; its own terminal state will show it.';
       return text(message);
     },
   };

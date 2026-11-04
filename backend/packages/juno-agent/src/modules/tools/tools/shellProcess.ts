@@ -16,8 +16,8 @@ import {
 } from '../computer/client.js';
 import { ComputerError, isEnvAbsolute, resolveEnvPath, type ComputerTarget } from '../computer/contract.js';
 import { actionResult, computerFailure, ON_PROPERTY, ON_SCHEMA } from '../computer/shared.js';
-import { BACKGROUND_LIMIT_TEXT, backgroundCapRefusal, backgroundSpawnOf, type BackgroundSpawn } from '../../tasks/child-background.js';
-import { recordBackgroundTask, taskLabel } from '../../tasks/background-registry.js';
+import { BACKGROUND_LIMIT_TEXT, backgroundCapRefusal, backgroundSpawnOf, type BackgroundSpawn } from '../../tasks/subagent-background.js';
+import { isUnknownProcess, recordBackgroundTask, settleShellTask, taskLabel } from '../../tasks/background-registry.js';
 
 /** The sandbox's wall-clock ceiling for one process (the computerd route refuses more). */
 export const PROCESS_TIMEOUT_MAX_MS = 3_600_000;
@@ -75,10 +75,10 @@ export function createShellStartTool(opts: ProcessToolOptions): Tool {
         const snapshot = await start(ctx.agentId, { command: parsed.command, cwd, ...(parsed.timeoutMs === undefined ? {} : { timeoutMs: parsed.timeoutMs }) }, ctx.signal, parsed.on);
         // Every started process is listed (tasks_list); only an armed notify watcher wakes the session and counts toward the chain.
         const spawn = backgroundSpawnOf(ctx.wake, ctx.runId);
-        const watch = parsed.notifyOnExit === true ? await watchProcess(ctx, snapshot.handle, spawn, parsed.on) : { note: '', armed: false };
+        const watch = parsed.notifyOnExit === true ? await watchProcess(ctx, snapshot.handle, spawn, parsed.on) : await watchQuietly(ctx, snapshot.handle, parsed.on);
         await recordBackgroundTask(ctx.store, {
           id: 'shell-' + ctx.agentId + '-' + snapshot.handle, ownerId: ctx.ownerId, agentId: ctx.agentId, conversationId: ctx.conversationId, runId: ctx.runId,
-          kind: 'shell', ...(parsed.on === 'mac' ? { computer: 'mac' as const } : {}), label: taskLabel(parsed.command), ...(parsed.title === undefined ? {} : { title: taskLabel(parsed.title) }), handle: snapshot.handle, notify: watch.armed, chainId: spawn.chainId, generation: spawn.generation,
+          kind: 'shell', ...(parsed.on === 'mac' ? { computer: 'mac' as const } : {}), label: taskLabel(parsed.command), ...(parsed.title === undefined ? {} : { title: taskLabel(parsed.title) }), handle: snapshot.handle, notify: watch.armed && parsed.notifyOnExit === true, chainId: spawn.chainId, generation: spawn.generation,
           status: 'running', startedAt: new Date().toISOString(),
         });
         const watched = watch.note;
@@ -141,6 +141,8 @@ export function createShellPollTool(opts: ProcessToolOptions): Tool {
           ctx.signal,
           on,
         );
+        // Seeing the process finished is what ends its task row, whether or not a watcher is armed.
+        await settleShellTask(ctx.store, 'shell-' + ctx.agentId + '-' + parsed.handle, output);
         const content: ToolResult['content'] = [{ type: 'text', text: output.output || '(no new output)' }];
         if (output.stderr !== '') content.push({ type: 'text', text: '[stderr] ' + output.stderr });
         if (output.truncated) content.push({ type: 'text', text: '[bounded: more output remains; poll again with cursor=' + output.cursor + ']' });
@@ -160,10 +162,27 @@ export function createShellPollTool(opts: ProcessToolOptions): Tool {
           },
         };
       } catch (error) {
+        if (isUnknownProcess(error)) await settleShellTask(ctx.store, 'shell-' + ctx.agentId + '-' + parsed.handle, { state: 'expired' });
         return computerFailure(error, ctx.signal);
       }
     },
   };
+}
+
+/**
+ * A process the agent did not ask to be told about is still watched, silently: when it ends (or its computer no longer has it)
+ * the task row ends too, so the task list never shows a finished process as running. Best effort: no watcher, no wake, no failure.
+ */
+async function watchQuietly(ctx: ToolContext, handle: string, on: ComputerTarget | undefined): Promise<{ note: string; armed: boolean }> {
+  try {
+    await ctx.enqueuer.watchTask?.({
+      taskId: 'shell-' + ctx.agentId + '-' + handle, ownerId: ctx.ownerId, agentId: ctx.agentId, conversationId: ctx.conversationId,
+      handle, startedAt: Date.now(), silent: true, originRunId: ctx.runId, ...(on === 'mac' ? { computer: 'mac' as const } : {}),
+    });
+    return { note: '', armed: true };
+  } catch {
+    return { note: '', armed: false };
+  }
 }
 
 /**

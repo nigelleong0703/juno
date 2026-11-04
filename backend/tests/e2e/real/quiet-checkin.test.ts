@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { createAccount, diagnose, listItems, listRuns, listenEvents, runNow, toolActivity, transcriptTexts, type Account } from '../harness/client';
 
 /**
- * A goal check-in with nothing to tell, with a real model (BACKEND §3.3b, §5.10): the agent records the step in the goal timeline and
- * ends with finish_quietly, so nothing reaches the chat: no placeholder like "(empty)" or "no update". Shape checks only.
+ * A goal check-in with nothing to tell, with a real model (BACKEND §3.3b, §5.10): the scheduled check-in is a run nobody waits on, so the
+ * agent records the step in the goal timeline and just finishes. Its final text is a record line, so nothing reaches the chat: no
+ * placeholder like "(empty)" or "no update". Shape checks only.
  */
 const HOUR = 3_600_000;
 
@@ -53,8 +54,7 @@ describe('real model: a goal check-in where nothing changed', () => {
       await settled(account, conversationId, 2);
 
       const messagesBefore = await agentTexts(account, conversationId);
-      const quietCalls = async (): Promise<number> => (await toolActivity(sessionKey)).results.filter((result) => result.toolName === 'finish_quietly').length;
-      const quietBefore = await quietCalls();
+      const updatesBefore = (await toolActivity(sessionKey)).calls.filter((call) => call.name === 'goal_update').length;
       const unreadBefore: number = (await account.api('GET', `/v1/conversations/${conversationId}`)).body.unreadCount;
       const runsBefore = (await listRuns(account, conversationId)).length;
 
@@ -71,7 +71,7 @@ describe('real model: a goal check-in where nothing changed', () => {
       const lastWake = wakes.at(-1) ?? '';
       expect(lastWake, 'the last wake is the scheduled check-in: ' + lastWake.slice(-400)).toContain('It is time to check in on this goal');
       expect(await agentTexts(account, conversationId), 'no message from the check-in').toEqual(messagesBefore);
-      expect(await quietCalls(), 'the check-in ended with finish_quietly').toBeGreaterThan(quietBefore);
+      expect((await toolActivity(sessionKey)).calls.filter((call) => call.name === 'goal_update').length, 'the check-in recorded its step').toBeGreaterThan(updatesBefore);
       expect((await account.api('GET', `/v1/conversations/${conversationId}`)).body.unreadCount, 'the check-in left the unread count as it was').toBe(unreadBefore);
     } finally {
       events.close();

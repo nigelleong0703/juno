@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DEFAULT_SCREEN_RESOLUTION } from '../contracts/computer.js';
+import { DEFAULT_IDLE_PAUSE_MINUTES, DEFAULT_SCREEN_RESOLUTION } from '../contracts/computer.js';
 
 // ---------------------------------------------------------------------------
 // Config (env) — one place, so every process agrees on ports and URLs.
@@ -57,6 +57,8 @@ export const backendConfigSchema = z.object({
   E2B_SANDBOX_ID: z.string().default(''),
   E2B_TEMPLATE: z.string().default('desktop-debian'),
   COMPUTER_RESOLUTION: z.string().default(DEFAULT_SCREEN_RESOLUTION),
+  /** The variable computerd reads too: the idle minutes shown on the owner's computer row. */
+  COMPUTER_IDLE_PAUSE_MINUTES: z.coerce.number().int().default(DEFAULT_IDLE_PAUSE_MINUTES),
   /** Web search provider for the web_search tool: exa | brave | tavily; empty leaves web_search unregistered. */
   SEARCH_PROVIDER: z.string().default(''),
   /** API key for SEARCH_PROVIDER; required when a provider is set. */

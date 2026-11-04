@@ -1,4 +1,4 @@
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import type { Store } from '../../../contracts/index.js';
 import { trackBackgroundCall, untrackBackgroundCall } from '../../../modules/tasks/background-registry.js';
 import { createRunCancellation } from './cancel.js';
@@ -7,7 +7,7 @@ import { createRunCancellation } from './cancel.js';
 export function backgroundCancellation(store: Store, taskId: string) {
   const signal = trackBackgroundCall(taskId);
   let resolveStop: (stopped: boolean) => void = () => {};
-  const stopped = RestatePromise.resolve(new Promise<boolean>((resolve) => { resolveStop = resolve; }));
+  const stopped = DurablePromise.resolve(new Promise<boolean>((resolve) => { resolveStop = resolve; }));
   const cancellation = createRunCancellation({
     peek: async () => signal.aborted || (await store.get('backgroundTasks', taskId))?.status === 'stopped',
     get: () => stopped,

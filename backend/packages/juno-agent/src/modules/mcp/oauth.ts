@@ -9,7 +9,9 @@ import { UnsafeTargetError } from '../tools/net/safeFetch.js';
 import { MCP_PROTOCOL_VERSION } from './protocol.js';
 import { parseChallenge } from './challenge.js';
 
-const CLIENT_INFO = { name: 'Vomu', version: '1.0.0' };
+const CLIENT_INFO = { name: 'Juno', version: '1.0.0' };
+/** What a provider's consent page shows about us (RFC 7591 client_uri / policy_uri / tos_uri); the pages exist on the product site. */
+const CLIENT_PAGES = { client_uri: 'https://junoteam.app', policy_uri: 'https://junoteam.app/privacy', tos_uri: 'https://junoteam.app/terms' };
 const FETCH_TIMEOUT_MS = 15_000;
 
 /** Stable reason codes the API maps to HTTP statuses; the message is safe to show to a client. */
@@ -85,13 +87,8 @@ const CONFIGURED_CLIENTS: ReadonlyArray<{
   },
   // Microsoft identity platform, multi-tenant `common` authority (work/school and personal accounts); see MICROSOFT_AUTHORITY.
   { issuer: MICROSOFT_ISSUER, idEnv: 'MICROSOFT_CLIENT_ID', secretEnv: 'MICROSOFT_CLIENT_SECRET', extraAuthParams: {}, loopbackHost: 'localhost' },
-  // Strava's own MCP: dynamic registration exists but only accepts a few known clients' redirect URIs, so ours is registered by hand.
-  { issuer: 'https://www.strava.com/mcp-issuer', idEnv: 'STRAVA_CLIENT_ID', secretEnv: 'STRAVA_CLIENT_SECRET', extraAuthParams: {} },
-  // Salesforce hosted MCP: the client is the External Client App Juno's operator registers (an org's admin installs it); no extra authorize parameters.
-  { issuer: 'https://login.salesforce.com', idEnv: 'SALESFORCE_CLIENT_ID', secretEnv: 'SALESFORCE_CLIENT_SECRET', extraAuthParams: {} },
-  // Dropbox's remote MCP registers only a trusted list of clients dynamically (we are not on it): our own Dropbox app, with `<PUBLIC_URL>/oauth/mcp/callback` as a redirect URI.
-  // `token_access_type=offline` is what makes Dropbox return a refresh token (https://docs.dropboxapi.com/dropbox-api/docs/oauth).
-  { issuer: 'https://www.dropbox.com', idEnv: 'DROPBOX_CLIENT_ID', secretEnv: 'DROPBOX_CLIENT_SECRET', extraAuthParams: { token_access_type: 'offline' } },
+  // Asana's MCP has no dynamic registration: our own "MCP app" (distribution: any workspace), with `<PUBLIC_URL>/oauth/mcp/callback` as its redirect URL (developers.asana.com/docs/integrating-with-asanas-mcp-server).
+  { issuer: 'https://app.asana.com', idEnv: 'ASANA_CLIENT_ID', secretEnv: 'ASANA_CLIENT_SECRET', extraAuthParams: {} },
 ];
 
 /** The NAMES of the deployment secrets holding a provided client's id and secret; an app package gives them, never the values. */
@@ -311,6 +308,7 @@ export async function registerClient(server: AuthorizationServer, redirectUri: s
       headers: { 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({
         client_name: CLIENT_INFO.name,
+        ...CLIENT_PAGES,
         redirect_uris: [redirectUri],
         grant_types: ['authorization_code', 'refresh_token'],
         response_types: ['code'],
@@ -360,6 +358,7 @@ export function clientMetadataDocument(clientId: string, redirectUris: readonly 
   return {
     client_id: clientId,
     client_name: CLIENT_INFO.name,
+    ...CLIENT_PAGES,
     redirect_uris: redirectUris,
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],

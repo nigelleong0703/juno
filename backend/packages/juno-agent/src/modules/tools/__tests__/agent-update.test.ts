@@ -80,7 +80,7 @@ function ctxFor(store: Store, ownerId: string, agentId: string, steps: string[] 
     agentId,
     sessionKey: agentId + ':conv-au',
     conversationId: 'conv-au',
-    kind: 'child_task',
+    kind: 'subagent_task',
     origin: { type: 'system' },
     trusted: true,
     priority: 'background',

@@ -15,11 +15,11 @@ import {
 } from '../../usage/index.js';
 import type { RunContext, RunServices } from './run-types.js';
 import type { RunUsage } from '@agent-desktop/public-contracts';
-import { descendantUsage, emptyUsage } from '../../../modules/tasks/childRead.js';
-import { childSnapshotFor, parseChildFrozenBudget, snapshotOf, snapshotOfRun, type ChildFrozenBudget, type RunWithBudgetSnapshot } from './budget-snapshot.js';
+import { descendantUsage, emptyUsage } from '../../../modules/tasks/subagentRead.js';
+import { subagentSnapshotFor, parseSubagentFrozenBudget, snapshotOf, snapshotOfRun, type SubagentFrozenBudget, type RunWithBudgetSnapshot } from './budget-snapshot.js';
 
 // The snapshot parsers live beside the snapshot types; these re-exports keep existing import paths.
-export { childSnapshotFor, parseBudgetSnapshot, parseChildFrozenBudget, snapshotOf, snapshotOfRun } from './budget-snapshot.js';
+export { subagentSnapshotFor, parseBudgetSnapshot, parseSubagentFrozenBudget, snapshotOf, snapshotOfRun } from './budget-snapshot.js';
 export type { BudgetSnapshot, RunWithBudgetSnapshot } from './budget-snapshot.js';
 
 /** Owner settings row id: the owner is part of the id, so budgets stay per account. */
@@ -33,7 +33,7 @@ export interface RunBudget {
   readonly explicitCost: boolean;
   charge(key: string, sample: UsageSample, activeMs: number): void;
   /** The spend of this run's descendants; only its cost is counted by check(), and never by totals(). */
-  inheritChildren(spent: RunUsage): void;
+  inheritSubagents(spent: RunUsage): void;
   /** A durable step name for one child-spend read: unique per check in this run, same order on replay. */
   nextSpendStep(key: string): string;
   check(): BudgetCheck;
@@ -47,7 +47,7 @@ export interface RunBudget {
  * tokens and active time stay per run: children run in parallel and each is bounded by its own snapshot,
  * so adding them here would block a parent with several children early and double count active time.
  */
-function withChildCost(state: UsageState, spent: RunUsage): UsageState {
+function withSubagentCost(state: UsageState, spent: RunUsage): UsageState {
   return {
     ...state,
     totals: { ...state.totals, costUsd: state.totals.costUsd + spent.costUsd },
@@ -70,14 +70,14 @@ export function createRunBudget(limits: BudgetLimits, explicitCost: boolean): Ru
       if (state.counted.has(key)) return;
       state = addActiveMs(observeUsage(state, sample, key), activeMs);
     },
-    inheritChildren: (spent) => {
+    inheritSubagents: (spent) => {
       children = spent;
     },
     nextSpendStep: (key) => {
       spendReads += 1;
       return 'child-spend:' + key + '#' + String(spendReads);
     },
-    check: () => checkBudget(children === undefined ? state : withChildCost(state, children)),
+    check: () => checkBudget(children === undefined ? state : withSubagentCost(state, children)),
     // Totals leave as a copy: mutating the returned object must not move the authority.
     totals: () => ({ ...state.totals }),
     unknowns: () => ({ cost: state.unknownCost, tokens: state.unknownTokens, active: state.unknownActive, actions: state.counted.size }),
@@ -110,7 +110,7 @@ function failClosedBudget(): RunBudget {
  * (or never claimed parent spend) fall through to the frozen limits. Malformed snapshots still
  * fail closed at the caller, and a legacy child whose frozen limits carry no explicit price
  * keeps the static cost ceiling. */
-function childFrozenBudget(frozen: ChildFrozenBudget): RunBudget {
+function subagentFrozenBudget(frozen: SubagentFrozenBudget): RunBudget {
   const limits = frozen.snapshot.limits;
   const explicit = limits.tokens !== undefined || limits.costUsd !== undefined;
   const blockUnknown = limits.onUnknown ?? (explicit ? 'block' : 'ignore');
@@ -143,9 +143,9 @@ export async function loadRunBudget(
       const ownSnapshot = snapshotOfRun(own);
       if (ownSnapshot !== undefined) return createRunBudget(ownSnapshot.limits, ownSnapshot.explicitCost);
       if (Reflect.get(own, 'executionBudget') !== undefined) return failClosedBudget();
-      const frozen = parseChildFrozenBudget(Reflect.get(own, 'budgetSnapshot'));
+      const frozen = parseSubagentFrozenBudget(Reflect.get(own, 'budgetSnapshot'));
       if (frozen === 'malformed') return failClosedBudget();
-      if (frozen !== undefined) return childFrozenBudget(frozen);
+      if (frozen !== undefined) return subagentFrozenBudget(frozen);
     }
   }
   const parentRunId = inherit?.parentRunId;
@@ -154,7 +154,7 @@ export async function loadRunBudget(
     if (parent === null) return failClosedBudget();
     const parentSnapshot = snapshotOfRun(parent);
     if (parentSnapshot !== undefined) {
-      const child = childSnapshotFor(parentSnapshot, parent.usage);
+      const child = subagentSnapshotFor(parentSnapshot, parent.usage);
       return createRunBudget(child.limits, child.explicitCost);
     }
     if (Reflect.get(parent, 'executionBudget') !== undefined) return failClosedBudget();
@@ -177,8 +177,8 @@ export async function persistBudgetSnapshot(ctx: RunContext, services: RunServic
 }
 
 /** Read the run's descendant spend durably, then check: a parent's cost cap covers its children's spend. */
-export async function checkWithChildren(ctx: RunContext, services: RunServices, runId: string, budget: RunBudget, key: string): Promise<BudgetCheck> {
-  budget.inheritChildren(await ctx.run(budget.nextSpendStep(key), () => descendantUsage(services.store, runId, emptyUsage())));
+export async function checkWithSubagents(ctx: RunContext, services: RunServices, runId: string, budget: RunBudget, key: string): Promise<BudgetCheck> {
+  budget.inheritSubagents(await ctx.run(budget.nextSpendStep(key), () => descendantUsage(services.store, runId, emptyUsage())));
   return budget.check();
 }
 
@@ -188,7 +188,7 @@ export async function preflightBudget(
   runId: string,
   budget: RunBudget,
 ): Promise<BudgetCheck> {
-  const within = await checkWithChildren(ctx, services, runId, budget, 'preflight');
+  const within = await checkWithSubagents(ctx, services, runId, budget, 'preflight');
   if (!within.ok) {
     await ctx.run('budget-preflight', async () => {
       await markRunBlocked(services.store, runId, 'limit', 'run blocked: ' + within.reason);

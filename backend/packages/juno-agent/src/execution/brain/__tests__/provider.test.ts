@@ -176,6 +176,23 @@ describe('OpenAI provider protocol aliasing', () => {
     }
   });
 
+  it('returns a content_filter finish as a refusal turn (history stays a plain stop), not a failed request', async () => {
+    const server = await startServer((_count, res) => sse(res, [
+      chunk({ role: 'assistant', content: 'I can' }),
+      chunk({}, { finish_reason: 'content_filter' }),
+    ]));
+    try {
+      const turn = await createOpenAIProvider(configFor(server.url)).call({
+        signal: AbortSignal.timeout(10_000), tools: [], messages: [{ role: 'user', content: 'go', timestamp: Date.now() }],
+      });
+      expect(turn).toMatchObject({ stopReason: 'refusal', text: 'I can', toolCalls: [] });
+      expect(turn.message?.stopReason).toBe('stop');
+      expect(turn.message?.errorMessage).toBeUndefined();
+    } finally {
+      await server.close();
+    }
+  });
+
   it('refuses a tool screenshot for a text-only model instead of silently stripping it', async () => {
     const server = await startServer((_count, res) => sse(res, [chunk({}, { finish_reason: 'stop' })]));
     try {

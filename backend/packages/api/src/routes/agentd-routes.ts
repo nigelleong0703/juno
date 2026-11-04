@@ -67,8 +67,12 @@ export const AGENTD_ROUTES: readonly AgentdRoute[] = [
   { method: 'GET', path: '/v1/conversations/:id/items' },
   // Standard AG-UI run entry: RunAgentInput starts a turn or carries resume entries for interrupts.
   { method: 'POST', path: '/v1/conversations/:id/runs' },
+  { method: 'POST', path: '/v1/conversations/:id/voice-calls' },
   { method: 'POST', path: '/v1/conversations/:id/typing' },
   { method: 'POST', path: '/v1/conversations/:id/mark-read' },
+  // The owner's settings for the platform group a conversation belongs to (listening, delegated categories; BACKEND 6.8).
+  { method: 'GET', path: '/v1/conversations/:id/group' },
+  { method: 'PUT', path: '/v1/conversations/:id/group' },
   { method: 'GET', path: '/v1/items' },
   { method: 'GET', path: '/v1/items/:id' },
 
@@ -92,6 +96,13 @@ export const AGENTD_ROUTES: readonly AgentdRoute[] = [
   { method: 'POST', path: '/v1/documents/:id/draft/approve' },
   { method: 'POST', path: '/v1/documents/:id/draft/decline' },
   { method: 'POST', path: '/v1/documents/:id/conversations' },
+  // Undo for an agent's file writes (BACKEND 5.2d): the kept versions of a path, and putting one back.
+  { method: 'GET', path: '/v1/files/history' },
+  { method: 'POST', path: '/v1/files/restore' },
+  // The outbox (BACKEND 5.7.11): what waits to leave or was given up on, a retry, and the owner's freeze switch.
+  { method: 'GET', path: '/v1/outbox' },
+  { method: 'POST', path: '/v1/outbox/freeze' },
+  { method: 'POST', path: '/v1/outbox/:id/retry' },
   // Names of the owner's vault fields (never values), so the agent can map form fields to them.
   { method: 'GET', path: '/v1/secure-vault/keys' },
   { method: 'PUT', path: '/v1/secure-vault/keys' },

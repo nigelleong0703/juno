@@ -113,6 +113,8 @@ function workApp(deps: AppsViewDeps, facts: Facts, row: AppCatalogRow, entry: Ca
   const installations = found.length < 2 ? found : found.map((installation, index) => (found.some((other) => other !== installation && other.label === installation.label) ? { ...installation, label: installation.label + ' (' + String(index + 1) + ')' } : installation));
   // A hidden app is not offered any more; the owners who added it still see it.
   if (row.status === 'hidden' && installations.length === 0) return undefined;
+  // An app that needs an OAuth client this deployment lacks is not listed (Connect would be dead); one already added stays, so it can be removed.
+  if (installations.length === 0 && !entryClientAvailable(entry, deps.env ?? process.env)) return undefined;
   return {
     id: entry.id,
     name: entry.name,

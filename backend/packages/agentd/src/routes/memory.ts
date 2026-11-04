@@ -10,7 +10,7 @@ import {
   forgetMemoryInputSchema, memoryClaimStatusSchema, memoryItemStatusSchema, memoryItemTopicSchema, reviewMemoryItemInputSchema, updateMemoryItemInputSchema,
   type MemoryClaim, type MemoryItemStatus, type MemoryItemTopic, type MemoryTopicView,
 } from '@agent-desktop/public-contracts';
-import { jobAgent } from 'juno-agent/modules/memory/jobs/agent';
+import { jobAgent, ownerAgents } from 'juno-agent/modules/memory/jobs/agent';
 import type { MemoryPort } from 'juno-agent/modules/memory/port';
 import { listAll } from 'juno-agent/modules/memory/util';
 import { getOwnerId } from '../auth.js';
@@ -21,7 +21,8 @@ import { memoryItemViewsOf, owned } from './owner-shared.js';
 const SEARCH_HITS = 20;
 const claimsQuery = z.object({ status: memoryClaimStatusSchema.optional() });
 const searchQuery = z.object({ q: z.string().trim().min(1) });
-const itemsQuery = z.object({ about: z.string().min(1).optional(), status: memoryItemStatusSchema.optional(), topic: memoryItemTopicSchema.optional() });
+/** `agentId`: that agent's own items and the shared ones (what the agent can read); without it the owner's whole memory. */
+const itemsQuery = z.object({ about: z.string().min(1).optional(), status: memoryItemStatusSchema.optional(), topic: memoryItemTopicSchema.optional(), agentId: z.string().min(1).optional() });
 
 /** The section titles of the Memory page, in the app's language (English), like the other labels of the memory views. */
 const TOPIC_LABELS: Readonly<Record<MemoryItemTopic, string>> = {
@@ -32,10 +33,11 @@ const TOPIC_LABELS: Readonly<Record<MemoryItemTopic, string>> = {
  * One page of the owner's items, newest first. Without a status the retracted items (taken out of the views) stay out of the list.
  * The cursor and limit are the usual ones (`paginateFiltered`).
  */
-async function itemPage(c: Context, deps: AgentdDeps, memory: MemoryPort, filter: { aboutPersonId?: string; status?: MemoryItemStatus; topic?: MemoryItemTopic }): Promise<Response> {
+async function itemPage(c: Context, deps: AgentdDeps, memory: MemoryPort, filter: { aboutPersonId?: string; status?: MemoryItemStatus; topic?: MemoryItemTopic }, agentId?: string): Promise<Response> {
   const ownerId = getOwnerId(c);
   const visible = (await memory.owner.items(ownerId, filter))
     .filter((item) => filter.status !== undefined || item.status !== 'retracted')
+    .filter((item) => agentId === undefined || item.agentId === null || item.agentId === agentId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
   const page = paginateFiltered(visible, c.req.query('limit'), c.req.query('cursor'));
   return c.json({ items: await memoryItemViewsOf(deps, memory, ownerId, page.items), nextCursor: page.nextCursor ?? null });
@@ -70,8 +72,8 @@ export function registerMemory(app: Hono, deps: AgentdDeps) {
 
   // The Memory segment (BACKEND §10.17): the items with their labels, the owner's edits of an item, and the review queue.
   app.get('/v1/memory/items', zValidator('query', itemsQuery), (c) => owned(c, deps, (memory) => {
-    const { about, status, topic } = c.req.valid('query');
-    return itemPage(c, deps, memory, { aboutPersonId: about, status, topic });
+    const { about, status, topic, agentId } = c.req.valid('query');
+    return itemPage(c, deps, memory, { aboutPersonId: about, status, topic }, agentId);
   }));
 
   // The sections of the Memory page: the topics that have items, each with its second-person summary and its count.
@@ -83,7 +85,11 @@ export function registerMemory(app: Hono, deps: AgentdDeps) {
   app.patch('/v1/memory/items/:id', zValidator('json', updateMemoryItemInputSchema), (c) => owned(c, deps, async (memory) => {
     const ownerId = getOwnerId(c);
     const body = c.req.valid('json');
-    const item = await memory.owner.updateItem(ownerId, c.req.param('id'), { text: body.text, audience: body.audience, sensitive: body.sensitive });
+    // Sharing is the owner's alone (BACKEND 5.4a): null = all their agents, an id = that one agent, which must be theirs.
+    if (typeof body.agentId === 'string' && !(await ownerAgents(deps.store, ownerId)).some((agent) => agent.id === body.agentId)) {
+      return c.json({ error: { code: 'INVALID_INPUT', message: 'agentId is not one of your agents' } }, 400);
+    }
+    const item = await memory.owner.updateItem(ownerId, c.req.param('id'), { text: body.text, audience: body.audience, sensitive: body.sensitive, agentId: body.agentId });
     return c.json((await memoryItemViewsOf(deps, memory, ownerId, [item]))[0]);
   }));
 

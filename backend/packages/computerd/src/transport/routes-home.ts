@@ -4,7 +4,7 @@
  * is resumed first. Everything runs as root: `/juno` is not any agent user's to write. The owner comes from the owner-scoped app, not from a header the caller could choose.
  */
 import type { Hono } from 'hono';
-import { createSandboxHome, type SandboxHome } from '@agent-desktop/sandbox-adapters';
+import { ComputerAsleepError, PASSIVE_HEADER, StaleComputerError, createSandboxHome, type SandboxHome, type SandboxRuntime } from '@agent-desktop/sandbox-adapters';
 import { handle } from './http.js';
 import type { ComputerdDeps } from './deps.js';
 import { homeDeleteSchema, homeExtractTextSchema, homePathSchema, homePutFileSchema, homeSnapshotRequestSchema, homeWriteSchema } from './schema.js';
@@ -14,10 +14,26 @@ export function registerHomeRoutes(app: Hono, deps: ComputerdDeps): void {
     app.post(path, (c) =>
       handle(c, async (signal) => {
         const raw = await c.req.json().catch(() => undefined);
+        if (c.req.header(PASSIVE_HEADER) === '1') return passive(signal, (runtime) => run(createSandboxHome(runtime), raw));
         const binding = await deps.lifecycle.ensureComputer(signal);
         return Response.json(await deps.provider.withRuntime(binding, signal, (runtime) => run(createSandboxHome(runtime), raw), { user: 'root' }));
       }),
     );
+
+  /**
+   * A context build only syncs a computer that is already running (BACKEND 7.3a): no computer yet, a suspended or stopped one, or
+   * one that is lost all answer asleep (503 `unavailable`) without creating, resuming, replacing or renewing anything.
+   */
+  async function passive(signal: AbortSignal, fn: (runtime: SandboxRuntime) => Promise<unknown>): Promise<Response> {
+    const binding = deps.lifecycle.currentBinding();
+    if (!binding) throw new ComputerAsleepError('this owner has no computer yet');
+    try {
+      return Response.json(await deps.provider.withRuntime(binding, signal, fn, { user: 'root', passive: true }));
+    } catch (error) {
+      if (error instanceof StaleComputerError) throw new ComputerAsleepError(error.message);
+      throw error;
+    }
+  }
 
   post('/v1/home/snapshot', (home, raw) => home.snapshot(homeSnapshotRequestSchema.parse(raw).agentId));
   post('/v1/home/read', async (home, raw) => (await home.read(homePathSchema.parse(raw).path)) ?? { missing: true });

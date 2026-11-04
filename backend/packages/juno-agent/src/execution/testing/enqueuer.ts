@@ -2,10 +2,10 @@
  * Host-equivalent recording enqueuer for runtime tests.
  *
  * Unlike the db-semantics Noop in testing/store.ts, this records call arguments and supports
- * startChildRun, matching the host RestateEnqueuer's test double. Tests that only need a silent
+ * startChildRun, matching the host RunnerEnqueuer's test double. Tests that only need a silent
  * enqueuer keep using the store fixture; tests asserting dispatch use this one.
  */
-import type { ChildRunStart, Enqueuer, Store, WakeEvent } from '../../contracts/index.js';
+import type { SubagentRunStart, Enqueuer, Store, WakeEvent } from '../../contracts/index.js';
 
 export class RecordingEnqueuer implements Enqueuer {
   calls: Array<{ method: string; args: unknown[] }> = [];
@@ -33,7 +33,7 @@ export class RecordingEnqueuer implements Enqueuer {
     this.calls.push({ method: 'routineResultsRead', args: [receipt] });
   }
 
-  async startChildRun(input: ChildRunStart): Promise<void> {
+  async startSubagentRun(input: SubagentRunStart): Promise<void> {
     this.calls.push({ method: 'startChildRun', args: [input.runId] });
   }
 }

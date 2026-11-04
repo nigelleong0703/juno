@@ -12,6 +12,7 @@ import type {
   Conversation,
   DocumentDraft,
   FeedPost,
+  FileSnapshot,
   Goal,
   Idea,
   AgentCalendarItem,
@@ -34,6 +35,7 @@ import type { OwnerPresenceRow, PhoneCallRow, VoiceCallRow } from './cross-proce
 import type { BackgroundTask, EventReceipt, Subscription, TranscriptEntry } from './execution.js';
 import type { Compaction, MemoryClaimDoc, MemoryEntry } from './memory.js';
 import type { OutputArtifact } from './artifacts.js';
+import type { OutboxControl, OutboxRow } from './outbox.js';
 import type { ModelProviderLogin, ModelProviderRecord } from './model-providers.js';
 
 /** Why a run ended `blocked`, written where the run is blocked (BACKEND 6.5); the task list reads it instead of the error text. */
@@ -43,23 +45,47 @@ export type RunBlockCause = 'needs_input' | 'limit' | 'no_progress' | 'verificat
  * A run row: the public Run plus what only the backend keeps. `rootRunId`/`depth` are written once when a child
  * is spawned (a run without them is its own root, depth 0); `blockCause` where the run is blocked; `effectReview`
  * is `open` while an uncertain outside action of this run awaits the owner's report and `resolved` once every one is.
- * `quietReason` is set when the run ended through `finish_quietly` (BACKEND §3.3a): the one line why there was nothing to tell; internal,
- * it becomes the task's `resultLine` ("Nothing to report: ...").
+ * `record` is the final text of a run that speaks only through send_message (BACKEND §3.3b), as one line: it is never delivered, the
+ * task's `resultLine` shows it. Internal; absent when the run ended with no text.
  */
 export type StoredRun = Run & {
-  quietReason?: string;
-  /** Written once when the run starts: its starting wake is one where nobody waits (`isQuietStartWake`, BACKEND §3.3b), or it continues a run that was. Gates `finish_quietly`. */
-  quietEligible?: boolean;
+  record?: string;
+  /** Written once when the run starts: it belongs to a routine still on trial (or continues a run that did), so its speaking tools and outside writes are recorded, not run (BACKEND §3.6.4). */
+  preview?: true;
+  /** What a preview run would have said or done instead, in order; a child run's go to the run that started the work. */
+  wouldHave?: WouldHave[];
+  /** Written once when the run starts: its starting wake is one where nobody waits (`isUnattendedStartWake`, BACKEND §3.3b), or it continues a run that was. Read through `speaksOnlyBySend`. */
+  nobodyWaiting?: boolean;
   harnessVersion?: string;
   rootRunId?: string;
   depth?: number;
   blockCause?: RunBlockCause;
+  /** Per call (tool + canonical arguments hash): the attempts in a row that ended in an error, and the last error as one line (harness/services/repeat-failures.ts). */
+  callFailures?: Record<string, { n: number; error: string }>;
+  /** Fenced steps whose outcome is uncertain and the agent was told about in this run, oldest first (harness/services/uncertain-action.ts). */
+  uncertainSteps?: string[];
   effectReview?: 'open' | 'resolved';
   /** Who asked for the stop, written where the stop is requested (BACKEND 6.5); the task list reads it for a `stopped` run. */
   stoppedBy?: StopActor;
 };
 
-/** Who stopped something: the owner (the app), the agent itself (`child_cancel`, `task_stop`), or the platform (a parent run ending, a run cleaned up). */
+/**
+ * One thing a preview run did not do (BACKEND §3.6.4): the tool that was called (raw name, for the log), whether it would have spoken to
+ * someone or changed something outside, and one plain line saying what.
+ */
+export interface WouldHave {
+  tool: string;
+  kind: 'say' | 'do';
+  summary: string;
+  at: string;
+}
+
+/** A routine the agent started on its own is on trial until the person answers: `requestId` is the open "turn it on?" card, if there is one. */
+export interface RoutinePreview {
+  requestId?: string;
+}
+
+/** Who stopped something: the owner (the app), the agent itself (`subagent_cancel`, `task_stop`), or the platform (a parent run ending, a run cleaned up). */
 export type StopActor = 'owner' | 'agent' | 'system';
 
 /**
@@ -125,6 +151,16 @@ export interface DocumentDraftRow extends DocumentDraft {
   agentId?: string;
   /** Agent drafts: `runId:stepId:sha256`. A person's draft has none. */
   idempotencyKey?: string;
+}
+
+/**
+ * An earlier version of a file an agent overwrote (BACKEND 5.2d): the public snapshot plus where the bytes are (the blob store; the row never
+ * holds them) and the key of its path. The extra fields are stripped by `fileSnapshotSchema`.
+ */
+export interface FileSnapshotRow extends FileSnapshot {
+  blobKey: string;
+  /** The indexed `parent_id`: sha256 of agent, computer and path, so the history of one path is one indexed read. */
+  parentId: string;
 }
 
 /**
@@ -268,8 +304,33 @@ export interface ChannelRow {
   accountName?: string;
   /** Optional platform permissions the app was granted (Feishu: `im:message.group_msg`, `im:message.reactions:write_only`); they widen the chat's capability row. */
   grantedScopes?: string[];
+  /** The owner's settings per group chat of this channel, by the platform's chat id (BACKEND 6.8). */
+  groups?: Record<string, GroupSetting>;
+  /** The platform chat id of the owner's private chat with this agent: where an approval someone else's ask raised is sent (BACKEND 6.8). */
+  ownerChatId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * What the owner decided for one group chat of an agent (BACKEND 6.8), kept on the channel row under the platform's chat id.
+ * The agent observes every message of a group it is in; it is woken only when addressed. `speak`: the chat digest may also wake it in a
+ * thread, for a follow-up or an answer only it has (default off). `delegated`: the kinds of decision (the delegated-authority
+ * categories) a teammate's ask may use without asking the owner first. `backfill`: the earlier messages read when the agent joined.
+ */
+export interface GroupSetting {
+  speak?: boolean;
+  delegated?: string[];
+  backfill?: GroupBackfill;
+}
+
+export interface GroupBackfill {
+  /** `unavailable`: the platform cannot read earlier messages (Telegram, a Feishu app without the group-message permission). */
+  status: 'running' | 'done' | 'unavailable' | 'failed';
+  /** Earlier messages stored as observed items. */
+  count?: number;
+  /** When it started (`running`) or ended. */
+  at: string;
 }
 
 /** A channel the platform is still creating (Telegram managed bot, Feishu registerApp, Slack manifest). Short-lived. */
@@ -620,8 +681,11 @@ export interface CollectionMap {
   steps: Step & { runId: string };
   /** Public request plus the runtime-only fields (awakeableId, ...); never serialize it as-is, use toPublicRequest. */
   requests: StoredRequest;
-  /** `webhookSecretHash` is the sha256 of the webhook secret (api-owned; the secret itself is never stored). */
-  routines: Routine & { webhookSecretHash?: string };
+  /**
+   * `webhookSecretHash` is the sha256 of the webhook secret (api-owned; the secret itself is never stored). `preview` is present while a
+   * routine the agent started on its own is still on trial (BACKEND §3.6.4); the owner never sets it.
+   */
+  routines: Routine & { webhookSecretHash?: string; preview?: RoutinePreview };
   rules: Rule;
   audit: AuditEntry;
   /** Seen-set and failure counters of the agent-created monitors (routines with a `check` trigger). */
@@ -667,6 +731,8 @@ export interface CollectionMap {
   artifactFiles: ArtifactFile;
   /** Proposed changes to documents (BACKEND 5.11a): metadata only, the body is in the blob store; `parent_id` is the document. */
   documentDrafts: DocumentDraftRow;
+  /** Earlier versions of files agents overwrote (BACKEND 5.2d): metadata only, the bytes are in the blob store; `parent_id` is the path's key. */
+  fileSnapshots: FileSnapshotRow;
   /** Apps agents built (space_publish); owner-scoped. */
   spaces: SpaceRecord;
   /** Share links of Spaces on long-lived hosting (BACKEND 5.12, option B); owner-scoped, metadata only. */
@@ -697,6 +763,10 @@ export interface CollectionMap {
   backgroundTasks: BackgroundTask;
   /** Private, owner/agent-scoped tool-output artifacts (PH9). */
   artifacts: OutputArtifact;
+  /** Every delivery to a platform chat or a phone, durable and retried (BACKEND 5.7.11); `conversation_id` / `status` / `kind` are the indexed columns. */
+  outbox: OutboxRow;
+  /** The owner's switch that stops all sending (id = the owner id). */
+  outboxControl: OutboxControl;
   /** Where each owner is now (open apps, watched screens, the iPhone's declaration); the coordinator writes, workers read (BACKEND 2.2c). */
   ownerPresence: OwnerPresenceRow;
   /** iPhone calls in flight: the worker that asked polls, the coordinator writes the app's answer. */

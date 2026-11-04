@@ -2,6 +2,7 @@
  * A throwaway embedded Postgres with every migration of packages/db applied, and the DurableDb adapter over it (the same mapping
  * packages/db uses; memory-graph does not depend on db, so it carries its own copy). Touches no running database.
  */
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -49,6 +50,37 @@ async function freePort(): Promise<number> {
       server.close(() => done(port));
     });
   });
+}
+
+/**
+ * A new migrated database on a REAL pgvector server (`adminUrl`, a superuser connection, e.g. PGVECTOR_TEST_URL), for the tests that
+ * need what the embedded stand-in cannot do: HNSW plans, iterative scans, dimension checks. Dropped on close.
+ */
+export async function startRealPgvectorDatabase(adminUrl: string): Promise<TestDatabase> {
+  const name = 'pgv_' + randomUUID().replaceAll('-', '').slice(0, 12);
+  const admin = postgres(adminUrl, { onnotice: () => undefined, max: 1 });
+  await admin.unsafe(`CREATE DATABASE ${name}`);
+  const url = new URL(adminUrl);
+  url.pathname = '/' + name;
+  const sql = postgres(url.toString(), { onnotice: () => undefined });
+  try {
+    for (const file of readdirSync(MIGRATIONS).filter((entry) => entry.endsWith('.sql')).sort()) {
+      await sql.unsafe(readFileSync(join(MIGRATIONS, file), 'utf8'));
+    }
+  } catch (error) {
+    await sql.end();
+    await admin.unsafe(`DROP DATABASE ${name}`);
+    await admin.end();
+    throw error;
+  }
+  return {
+    db: adapter(sql),
+    close: async () => {
+      await sql.end();
+      await admin.unsafe(`DROP DATABASE ${name} WITH (FORCE)`);
+      await admin.end();
+    },
+  };
 }
 
 export async function startTestDatabase(): Promise<TestDatabase> {

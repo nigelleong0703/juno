@@ -131,11 +131,11 @@ describe('environment endpoint', () => {
     expect((await store.list('screens', { limit: 10 })).items).toHaveLength(0);
   });
 
-  it('reports unavailable when no computer is bound, without starting one', async () => {
+  it('reports no_screen (not started) when no computer is bound, without starting one', async () => {
     const { app, store } = await build(null);
     const response = await get(app, '/v1/screens/self/environment', 'agent-a');
-    expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({ code: 'unavailable' });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ code: 'no_screen' });
     expect((await store.list('screens', { limit: 10 })).items).toHaveLength(0);
   });
 });

@@ -10,7 +10,7 @@ import { homedir } from 'node:os';
 import { posix } from 'node:path';
 import type { ToolContext, ToolResult } from '../../../contracts/index.js';
 import { evalReportsDir } from '../../evaluation/paths.js';
-import { ALIGNMENT_FILE, HOME_ROOT, MEMORY_FILE, PROACTIVE_FILE, USER_FILE, relativeToHome } from '../../home/paths.js';
+import { ALIGNMENT_FILE, HOME_ROOT, MEMORY_FILE, PROACTIVE_FILE, USER_FILE, isDailyLog, isOwnDailyLog, relativeToHome } from '../../home/paths.js';
 import { isSharedRun } from '../../profile/index.js';
 import type { ComputerClient } from '../../../ports/computer/index.js';
 import type { FileToolOptions } from './codingPath.js';
@@ -31,9 +31,15 @@ async function homeRelative(_opts: FileToolOptions, _ctx: ToolContext, path: str
 }
 
 function isOtherAgentPath(rel: string, agentId: string): boolean {
+  // Another agent's daily log (memory/<date>/<agentId>.md) is as foreign as its agents/<id>/ folder: memory is per agent (BACKEND 5.4a).
+  if (isDailyLog(rel)) return !isOwnDailyLog(rel, agentId);
   const match = /^agents(?:\/([^/]+))?(?:\/|$)/.exec(rel);
   return match !== null && match[1] !== agentId;
 }
+
+/** The views of memory are one file for all agents with a section per agent: a search would show the other agents' sections, so none may search them. */
+const isMemoryViewTree = (rel: string): boolean => rel === '' || rel === MEMORY_FILE || /^(?:memory|people)(?:\/|$)/.test(rel);
+const SEARCH_VIEWS = "Memory files can't be searched with grep or glob; use memory_search, or read a file by path.";
 
 /** What the memory pipeline owns in the home and keeps private to the owner: the sheet, the logs, the people and group pages, what the jobs write. */
 export const isMemoryOwnedPath = (rel: string): boolean =>
@@ -43,24 +49,25 @@ export const isMemoryOwnedPath = (rel: string): boolean =>
  * An error result when `path` (resolved to an absolute path) may not be read or searched, else undefined: another agent's
  * `/juno/agents/<id>/` always; the memory-owned paths and the home root when anyone besides the owner is in the run.
  */
-export async function refuseHomeRead(opts: FileToolOptions, ctx: ToolContext, path: string): Promise<ToolResult | undefined> {
+export async function refuseHomeRead(opts: FileToolOptions, ctx: ToolContext, path: string, options: { search?: boolean } = {}): Promise<ToolResult | undefined> {
   const rel = await homeRelative(opts, ctx, path);
   if (rel === undefined) return undefined;
   if (isOtherAgentPath(rel, ctx.agentId)) return refusal(path, FOREIGN, 'foreign_agent_path');
-  return (rel === '' || isMemoryOwnedPath(rel)) && (await isSharedRun(ctx)) ? refusal(path, PRIVATE, 'private_memory') : undefined;
+  if ((rel === '' || isMemoryOwnedPath(rel)) && (await isSharedRun(ctx))) return refusal(path, PRIVATE, 'private_memory');
+  return options.search === true && isMemoryViewTree(rel) && !isOwnDailyLog(rel, ctx.agentId) ? refusal(path, SEARCH_VIEWS, 'memory_search_only') : undefined;
 }
 
 /** A person page's section heading for an agent: `## <name>（<agent id>）` (memory/views.ts). */
 const AGENT_SECTION_HEADING = /^## .*（([^（）\n]+)）\s*$/;
 
 /**
- * The text of a file for `agentId` to read. A person page (people/<id>.md) is shared by the owner's agents, but a `## <name>（<id>）`
- * section holds that agent's own lines (items with agent_id, BACKEND 5.7.4): the sections of the other agents, heading included, are
- * left out. Any other file is returned as it is.
+ * The text of a file for `agentId` to read. A view of memory (MEMORY.md, a bank file, a person page) is shared by the owner's agents
+ * above its first section, but a `## <name>（<id>）` section holds that agent's own lines (items with agent_id, BACKEND 5.4a): the
+ * sections of the other agents, heading included, are left out. Any other file is returned as it is.
  */
 export function visibleFileText(path: string, content: string, agentId: string): string {
   const rel = relativeToHome(path);
-  if (rel === undefined || !rel.startsWith('people/')) return content;
+  if (rel === undefined || !(rel === MEMORY_FILE || rel.startsWith('memory/bank/') || rel.startsWith('people/'))) return content;
   let hidden = false;
   const kept: string[] = [];
   for (const line of content.split('\n')) {

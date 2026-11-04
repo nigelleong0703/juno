@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { childSessionKey, createAccount, listenEvents, listItems, listRuns, runReport, toolActivity, transcriptMessages, type Account } from '../harness/client';
 
 /**
- * Sub-tasks with a real model (product form A): the main agent dispatches helpers with child_spawn,
- * the results come back to the main agent, and a child can never reach the user. Assertions check
+ * Subagents with a real model (product form A): the main agent dispatches them with subagent_start,
+ * the results come back to the main agent by task_done wakes, and a subagent can never reach the user. Assertions check
  * run rows, events, items and tool calls, never wording.
  */
 /** Everything needed to see why a parent run did not complete: its own report plus each child's report and transcript. */
@@ -30,10 +30,10 @@ describe('real model: sub-tasks', () => {
       const sent = await account.api('POST', `/v1/conversations/${conversationId}/runs`, aguiInput(`/v1/conversations/${conversationId}/runs`, {
         text:
           'I need two independent lookups done in parallel by sub-tasks. Do exactly this and nothing else: ' +
-          '(1) call the child_spawn tool twice in your very first turn, before anything else: once with prompt "Reply with the single word ALPHA and nothing else." ' +
+          '(1) call the subagent_start tool twice in your very first turn, before anything else: once with prompt "Reply with the single word ALPHA and nothing else." ' +
           'and once with prompt "Reply with the single word BETA and nothing else."; ' +
-          '(2) call the child_wait tool to wait for both; ' +
-          '(3) when both are done, write me one short sentence that mentions both words. Do the work through the sub-tasks, do not answer them yourself.',
+          '(2) then end your turn: you do not wait, each result wakes you when it is ready; ' +
+          '(3) when both results have arrived, write me one short sentence that mentions both words. Do the work through the subagents, do not answer them yourself.',
       }));
       expect(sent.status).toBe(202);
 
@@ -42,25 +42,30 @@ describe('real model: sub-tasks', () => {
         60_000,
       );
       const parentRunId: string = parentStarted.data.metadata.juno.run.id;
-      const parentFinished = await events.waitFor((e) => e.data.type === 'RUN_FINISHED' && e.data.metadata.juno.run.id === parentRunId, 200_000);
-      expect(parentFinished.data.metadata.juno.run.status, await parentDiagnosis(account, agent.body.id, conversationId, parentRunId)).toBe('completed');
+      await events.waitFor((e) => e.data.type === 'RUN_FINISHED' && e.data.metadata.juno.run.id === parentRunId, 200_000);
 
-      const runs = await listRuns(account, conversationId);
-      const children = runs.filter((run) => run.parentRunId === parentRunId);
+      // Both subagents finish, then a later run of the main agent tells me both words.
+      let children = (await listRuns(account, conversationId)).filter((run) => run.parentRunId === parentRunId);
+      for (let i = 0; i < 400 && !(children.length >= 2 && children.every((run) => run.status === 'completed')); i += 1) {
+        await new Promise((r) => setTimeout(r, 500));
+        children = (await listRuns(account, conversationId)).filter((run) => run.parentRunId === parentRunId);
+      }
       expect(children.length).toBeGreaterThanOrEqual(2);
       for (const child of children) {
         expect(child.status, await runReport(account, child.id)).toBe('completed');
         expect(String(child.childResult ?? '').length).toBeGreaterThan(0);
       }
+      const told = async () => (await listItems(account, conversationId)).filter((item) => item.type === 'agent_message' && /ALPHA/i.test(item.markdown ?? '') && /BETA/i.test(item.markdown ?? ''));
+      for (let i = 0; i < 240 && (await told()).length === 0; i += 1) await new Promise((r) => setTimeout(r, 500));
 
-      // The results came back to the main agent: it spawned through the tool and then posted its own reply.
-      const calls = (await toolActivity(`${agent.body.id}:${conversationId}`)).calls.filter((call) => call.name === 'child_spawn');
+      // The results came back to the main agent: it started them through the tool and then posted its own reply.
+      const calls = (await toolActivity(`${agent.body.id}:${conversationId}`)).calls.filter((call) => call.name === 'subagent_start');
       expect(calls.length).toBeGreaterThanOrEqual(2);
       const items = await listItems(account, conversationId);
-      const childIds = new Set(children.map((c) => c.id));
+      const subagentIds = new Set(children.map((c) => c.id));
       const replies = items.filter((item) => item.type === 'agent_message');
-      expect(replies.some((item) => item.runId === parentRunId)).toBe(true);
-      expect(replies.some((item) => (item.runId !== undefined && childIds.has(item.runId)))).toBe(false);
+      expect((await told()).length, await parentDiagnosis(account, agent.body.id, conversationId, parentRunId)).toBeGreaterThan(0);
+      expect(replies.some((item) => (item.runId !== undefined && subagentIds.has(item.runId)))).toBe(false);
     } finally {
       events.close();
     }
@@ -82,8 +87,8 @@ describe('real model: sub-tasks', () => {
         `Find out which day of the week suits the user for the team lunch, and report the day. The only way to learn it is to ask: the user, the colleague agent ${other.body.id}, or the chat ${conversationId}.`;
       const sent = await account.api('POST', `/v1/conversations/${conversationId}/runs`, aguiInput(`/v1/conversations/${conversationId}/runs`, {
         text:
-          'Delegate this to a sub-task: call the child_spawn tool exactly once with this prompt (copy it verbatim between the triple quotes): """' + childPrompt + '""". ' +
-          'Then call child_wait to wait for it. After it finished, answer me with one short sentence about what it found.',
+          'Delegate this to a subagent: call the subagent_start tool exactly once with this prompt (copy it verbatim between the triple quotes): """' + childPrompt + '""". ' +
+          'Then end your turn; you are woken when it finished. After that, answer me with one short sentence about what it found.',
       }));
       expect(sent.status).toBe(202);
 
@@ -95,6 +100,8 @@ describe('real model: sub-tasks', () => {
       const parentFinished = await events.waitFor((e) => e.data.type === 'RUN_FINISHED' && e.data.metadata.juno.run.id === parentRunId, 200_000);
       // The child's job cannot be finished without asking someone, so it blocks; the parent then ends done or blocked on that child.
       expect(['completed', 'blocked'], await runReport(account, parentRunId)).toContain(parentFinished.data.metadata.juno.run.status);
+      // A subagent always runs in the background (BACKEND 3.3c): the parent's turn ends first, so wait for the subagent's own end.
+      await events.waitFor((e) => e.data.type === 'RUN_FINISHED' && e.data.metadata.juno.run.parentRunId === parentRunId, 200_000);
 
       const children = (await listRuns(account, conversationId)).filter((run) => run.parentRunId === parentRunId);
       expect(children.length, JSON.stringify([await toolActivity(`${agent.body.id}:${conversationId}`), await listItems(account, conversationId), await transcriptMessages(`${agent.body.id}:${conversationId}`)])).toBeGreaterThanOrEqual(1);
@@ -112,8 +119,8 @@ describe('real model: sub-tasks', () => {
       // Nothing the child tried reached anyone: no bubble from the child run, no question request,
       // no run for the other agent, no extra conversation.
       const items = await listItems(account, conversationId);
-      const childIds = new Set(children.map((c) => c.id));
-      expect(items.filter((item) => item.type === 'agent_message' && (item.runId !== undefined && childIds.has(item.runId)))).toHaveLength(0);
+      const subagentIds = new Set(children.map((c) => c.id));
+      expect(items.filter((item) => item.type === 'agent_message' && (item.runId !== undefined && subagentIds.has(item.runId)))).toHaveLength(0);
       expect(items.filter((item) => item.type === 'request')).toHaveLength(0);
       // (Creating an agent opens its own direct chat and it greets there, so the other agent ran only its greeting.)
       const otherRuns = await account.api('GET', `/v1/runs?agentId=${other.body.id}&limit=50`);

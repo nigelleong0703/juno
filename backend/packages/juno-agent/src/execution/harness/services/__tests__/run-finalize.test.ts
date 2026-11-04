@@ -4,7 +4,7 @@
  */
 import { createMemoryBlobStore } from '../../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore } from '../../../../testing/store.js';
 import { NoopEnqueuer } from '../../../../testing/store.js';
 import type { Brain } from '../../../../contracts/index.js';
@@ -57,7 +57,7 @@ describe('run terminal finalization', () => {
       await runningRun(store);
       const reported: ReportParams[] = [];
       const ctx = {
-        run: <T,>(name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
+        run: <T,>(name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()),
         completeRoutine: async (params: ReportParams) => {
           reported.push(params);
         },

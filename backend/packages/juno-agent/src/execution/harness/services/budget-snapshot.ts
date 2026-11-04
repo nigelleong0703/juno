@@ -38,7 +38,7 @@ export function parseBudgetSnapshot(value: unknown): BudgetSnapshot | undefined 
 }
 
 /** A child row's spawn-frozen budget: the snapshot plus the parent unknown-spend flags at spawn. */
-export interface ChildFrozenBudget {
+export interface SubagentFrozenBudget {
   snapshot: BudgetSnapshot;
   /** The parent's measured/cost flags frozen at spawn; absent on rows written before they existed. */
   parentMeasured?: boolean;
@@ -51,7 +51,7 @@ export interface ChildFrozenBudget {
  * parse — including any present flag that is not a boolean — so the caller can fail closed instead
  * of falling back to changed settings. Only a present flag is read; absent flags are not invented.
  */
-export function parseChildFrozenBudget(value: unknown): ChildFrozenBudget | 'malformed' | undefined {
+export function parseSubagentFrozenBudget(value: unknown): SubagentFrozenBudget | 'malformed' | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value) || !isRecord(value['limits'])) return 'malformed';
   const explicit: unknown = value['explicitCost'];
@@ -87,7 +87,7 @@ export function snapshotOfRun(run: unknown): BudgetSnapshot | undefined {
  * the corresponding inherited limit is granted as zero (fail closed) instead of propagating NaN
  * past the ceiling or presenting corrupt spend as free. Absent figures stay absent (zero spend).
  */
-export function childSnapshotFor(snapshot: BudgetSnapshot, usage: RunUsage): BudgetSnapshot {
+export function subagentSnapshotFor(snapshot: BudgetSnapshot, usage: RunUsage): BudgetSnapshot {
   const remaining = (limit: number | undefined, used: unknown): number | undefined => {
     if (limit === undefined) return undefined;
     if (used === undefined) return limit;

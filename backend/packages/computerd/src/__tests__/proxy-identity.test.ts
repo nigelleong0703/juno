@@ -140,35 +140,36 @@ describe('signed proxy identity', () => {
     expect(legacy.proxyUrl).toHaveBeenCalledTimes(1);
   });
 
-  it('renews the sandbox only while the user holds writable control, and stops on revocation', async () => {
+  it('holds the computer awake while a stream is open, renews the hold, and lets go when control is returned', async () => {
     const upstream = new WebSocketServer({ port: 0 });
     upstreams.push(upstream);
     await serverListening(upstream);
     const address = upstream.address();
     if (!address || typeof address === 'string') throw new Error('missing upstream port');
 
-    // The user holds control, so the stream is writable and an open session renews the sandbox.
+    // The user holds control, so the stream is writable.
     const held = await scope('held', `ws://127.0.0.1:${address.port}`, 'user');
-    const renewSpy = vi.spyOn(held.provider, 'connect');
+    const holdSpy = vi.spyOn(held.provider, 'hold');
     const writable = await listen({ lifecycle: held.lifecycle, provider: held.provider, secret: 'secret', keepAliveMs: 25 });
     const socket = new WebSocket(`ws://127.0.0.1:${writable.port}/v1/screens/same-screen/vnc?t=${signScreenTicket(claims('held'), 'secret')}`);
     sockets.push(socket);
     await socketOpen(socket);
 
-    await waitFor(() => renewSpy.mock.calls.length > 0);
-    expect(renewSpy).toHaveBeenCalledWith({ sandboxId: 'vm-held', template: 'test' }, expect.any(AbortSignal));
+    await waitFor(() => holdSpy.mock.calls.length > 2);
+    expect(held.provider.holds.size).toBe(1);
 
-    // Returning control closes the writable stream, so the heartbeat stops touching the VM.
+    // Returning control is the stored truth: it drops the stream, not a client unmount, and with it the hold and its renewals.
     const closed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
     await held.lifecycle.returnControl('agent-held', { via: 'api' });
     await closed;
-    await delay(250);
-    const settled = renewSpy.mock.calls.length;
-    await delay(250);
-    expect(renewSpy.mock.calls.length).toBe(settled);
+    expect(held.provider.holds.size).toBe(0);
+    await delay(100);
+    const settled = holdSpy.mock.calls.length;
+    await delay(150);
+    expect(holdSpy.mock.calls.length).toBe(settled);
   });
 
-  it('never renews the sandbox for a read-only watcher', async () => {
+  it('a read-only watcher holds the computer awake too, until it leaves', async () => {
     const upstream = new WebSocketServer({ port: 0 });
     upstreams.push(upstream);
     await serverListening(upstream);
@@ -177,40 +178,14 @@ describe('signed proxy identity', () => {
 
     // The screen stays under agent control, so the same ticket is a read-only watch.
     const watched = await scope('watched', `ws://127.0.0.1:${address.port}`, 'agent');
-    const renewSpy = vi.spyOn(watched.provider, 'connect');
     const watcher = await listen({ lifecycle: watched.lifecycle, provider: watched.provider, secret: 'secret', keepAliveMs: 25 });
     const socket = new WebSocket(`ws://127.0.0.1:${watcher.port}/v1/screens/same-screen/vnc?t=${signScreenTicket(claims('watched'), 'secret')}`);
     sockets.push(socket);
     await socketOpen(socket);
+    await waitFor(() => watched.provider.holds.size === 1);
 
-    await delay(150);
-    expect(renewSpy).not.toHaveBeenCalled();
-  });
-
-  it('returning control revokes the writable stream and stops its heartbeat', async () => {
-    const upstream = new WebSocketServer({ port: 0 });
-    upstreams.push(upstream);
-    await serverListening(upstream);
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('missing upstream port');
-
-    const held = await scope('held', `ws://127.0.0.1:${address.port}`, 'user');
-    const renewSpy = vi.spyOn(held.provider, 'connect');
-    const writable = await listen({ lifecycle: held.lifecycle, provider: held.provider, secret: 'secret', keepAliveMs: 25 });
-
-    const socket = new WebSocket(`ws://127.0.0.1:${writable.port}/v1/screens/same-screen/vnc?t=${signScreenTicket(claims('held'), 'secret')}`);
-    sockets.push(socket);
-    await socketOpen(socket);
-    await waitFor(() => renewSpy.mock.calls.length > 0);
-
-    // Returning control is the stored truth: it must drop the stream, not wait for a client unmount.
-    const closed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
-    await held.lifecycle.returnControl('agent-held', { via: 'api' });
-    await closed;
-    await delay(250);
-    const settled = renewSpy.mock.calls.length;
-    await delay(250);
-    expect(renewSpy.mock.calls.length).toBe(settled);
+    socket.close();
+    await waitFor(() => watched.provider.holds.size === 0);
   });
 
   it('re-ensures the persisted display before opening a stream after a provider restart', async () => {

@@ -20,7 +20,7 @@ import { PLATFORM_NAMES } from './messages.js';
 import { ownerSpeakerName } from './social-conversation.js';
 import { readVisibleConversation, type SocialContextInput } from './social-context.js';
 import { quoteLabel } from './social-format.js';
-import { readChannelKind, readString } from './social-read.js';
+import { readChannelKind, readString, readStringArray, safeGet } from './social-read.js';
 
 const MAX_APPS_SHOWN = 12;
 const MB = 1024 * 1024;
@@ -121,6 +121,19 @@ function capabilityLine(table: ChatCapabilities, opts: { history: boolean; react
     + (ui.fields ? '' : ' ' + harnessText('where.fields.plain'));
 }
 
+/**
+ * How a colleague behaves on this platform, picked from its capability row (the same for every platform): threads or a quoted reply,
+ * no broadcast mentions, long output as a file where files can be sent, reactions as "seen" / "done" where reactions exist.
+ */
+function etiquetteLines(table: ChatCapabilities, reactions: boolean): string[] {
+  return [
+    harnessText(table.threads ? 'where.etiquette.thread' : 'where.etiquette.reply'),
+    harnessText('where.etiquette.broadcast'),
+    ...(table.files.send ? [harnessText('where.etiquette.long')] : []),
+    ...(reactions && table.reactions.mode !== 'none' ? [harnessText('where.etiquette.react')] : []),
+  ];
+}
+
 /** What the agent does in any chat the owner shares with other people: their private texts stay out, their words are not the owner's. */
 function sharedRules(o: Owner, opts: { toOwner: boolean }): string[] {
   return [
@@ -145,10 +158,31 @@ export async function chatTakesReactions(store: Store, conversationId: string): 
   return chatCapabilities(platform ?? 'app').reactions.mode !== 'none';
 }
 
+/** Whether this is an app room with two or more agents: the agents talk to each other there, so `message_agent` is a core tool. Constant per conversation. */
+export async function chatHasRoomAgents(store: Store, conversationId: string): Promise<boolean> {
+  const conversation = await store.get('conversations', conversationId).catch(() => null);
+  return conversation !== null && readString(conversation, 'kind') === 'room' && readChannelKind(conversation) === undefined && (readStringArray(conversation, 'agentIds') ?? []).length >= 2;
+}
+
 /** The chat's name from its stored title ("#general · Discord"), without the platform suffix; undefined when the platform gave none. */
 function chatName(title: string | undefined, platform: string): string | undefined {
   const name = plain(title?.endsWith(' · ' + platform) ? title.slice(0, -(' · ' + platform).length) : title, 80);
   return name === undefined || name === 'Group chat' ? undefined : quoteLabel(name);
+}
+
+/**
+ * This room's members and nothing else: each agent by the name the room shows (with the id message_agent takes), the person by name.
+ * The owner's other agents are not here, so they cannot be addressed.
+ */
+async function roomMemberLines(store: Store, doc: object, selfId: string, audience: ProfileAudience, ownerName: string): Promise<string[]> {
+  const lines: string[] = [audience.ownerOnly ? `- ${quoteLabel(ownerName)} (the person you're helping): speak to them by writing your reply` : "- the person you're helping, and possibly other people: speak to them by writing your reply"];
+  for (const id of readStringArray(doc, 'agentIds') ?? []) {
+    const agent = await safeGet(store, 'agents', id);
+    if (agent.status !== 'ok' || readString(agent.doc, 'ownerId') !== audience.profileOwnerId) continue;
+    const name = quoteLabel(readString(agent.doc, 'name'));
+    lines.push(id === selfId ? `- ${name} (you)` : `- ${name} (agent): message_agent target '${id}'`);
+  }
+  return lines;
 }
 
 export interface WhereInput extends SocialContextInput {
@@ -161,7 +195,7 @@ export interface WhereInput extends SocialContextInput {
 
 /** The section's text, or '' when there is nothing to say (a helper run, a thread between agents, a conversation this run may not see). */
 export async function buildWhereSection(store: Store, input: WhereInput): Promise<string> {
-  if (input.wake.some((event) => event.kind === 'child_task')) return '';
+  if (input.wake.some((event) => event.kind === 'subagent_task')) return '';
   const doc = await readVisibleConversation(store, input);
   const kind = doc === undefined ? undefined : readString(doc, 'kind');
   if (doc === undefined || (kind !== 'direct' && kind !== 'room')) return '';
@@ -181,7 +215,8 @@ export async function buildWhereSection(store: Store, input: WhereInput): Promis
     const place = name === undefined ? harnessText('where.group.place_unnamed', { platform }) : harnessText('where.group.place_named', { name, platform });
     lines.push(harnessText('where.group.intro', { place, whoFullCap: o.whoFullCap }));
     lines.push(capabilityLine(caps, { history: true, reactions, readHistory: readsChatHistory(await store.get('agents', input.agentId).catch(() => null)) }));
-    lines.push(harnessText('where.group.speak'));
+    lines.push(harnessText('where.group.speak'), harnessText('where.group.think'), harnessText('where.group.follow'));
+    lines.push(...etiquetteLines(caps, reactions));
     lines.push(harnessText('where.group.note', { who: o.who }));
     lines.push(...sharedRules(o, { toOwner: true }));
   } else if (kind === 'room') {
@@ -189,7 +224,8 @@ export async function buildWhereSection(store: Store, input: WhereInput): Promis
     const lead = name === undefined ? harnessText('where.room.lead_unnamed') : harnessText('where.room.lead_named', { name: quoteLabel(name) });
     lines.push(harnessText('where.room.intro', { lead, who: o.who }));
     lines.push(capabilityLine(caps, { history: false, reactions }));
-    lines.push(harnessText('where.room.mention'));
+    lines.push(harnessText('where.room.members', { lines: (await roomMemberLines(store, doc, input.agentId, audience, o.who)).join('\n') }));
+    lines.push(harnessText('where.room.addressing'));
     if (!audience.ownerOnly) lines.push(...sharedRules(o, { toOwner: true }));
   } else if (audience.ownerOnly) {
     lines.push(harnessText('where.private.intro', { intro: o.intro, onPlatform: platform === undefined ? '' : harnessText('where.private.on_platform', { platform }), onlyReads: o.onlyReads }));

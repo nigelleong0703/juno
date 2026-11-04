@@ -394,7 +394,7 @@ describe.skipIf(!split)('execution workers: cross-process behaviour', () => {
       const parentText = 'please research and file an issue';
       scriptModel(`${sessionKey}::child:*`, [{ text: finishedText }]);
       scriptModel(sessionKey, [
-        { toolCalls: [toolCall('call-spawn', 'child_spawn', { prompt: 'research it', notify: true })] },
+        { toolCalls: [toolCall('call-spawn', 'subagent_start', { prompt: 'research it' })] },
         { toolCalls: [toolCall('call-issue', 'linear_create_issue', { repo: 'e2e/leases', title: 'child-parent' })] },
         { text: 'on it' }, { text: 'noted' }, { text: 'noted' }, { text: 'noted' },
       ]);
@@ -402,29 +402,29 @@ describe.skipIf(!split)('execution workers: cross-process behaviour', () => {
       expect((await account.api('POST', path, aguiInput(path, { text: parentText }))).status).toBe(202);
       await connector.firstSeen;
       const parentRun = String((await events.waitFor((e) => e.data.type === 'RUN_STARTED' && e.data.metadata.juno.run.conversationId === conversationId && e.data.metadata.juno.run.parentRunId === undefined, 30_000)).data.metadata.juno.run.id);
-      const childRun = await until('the child run row', async () => {
+      const subagentRun = await until('the child run row', async () => {
         const rows = await queryStack('SELECT id FROM runs WHERE conversation_id = ? AND id <> ?', [conversationId, parentRun]);
         return rows[0] === undefined ? undefined : String(rows[0]['id']);
       }, 40_000);
       // The child runs to the end on the other worker while the parent is still inside its tool call; only then the call returns,
       // and the parent's next turn picks the child's result up.
-      await until('the child run to finish', async () => (await runLease(childRun))?.status === 'done' ? true : undefined, 60_000);
+      await until('the child run to finish', async () => (await runLease(subagentRun))?.status === 'done' ? true : undefined, 60_000);
       connector.releaseFirst();
       await waitForTranscript(sessionKey, (rows) => rows.some((row) => row.includes('[background task finished')), 60_000);
       await until('the parent to answer', async () => ((await itemsSaying(conversationId, 'on it')) >= 1 ? true : undefined), 60_000);
 
       const parentClaims = claims('Run', parentRun);
-      const childClaims = claims('Run', childRun);
+      const subagentClaims = claims('Run', subagentRun);
       expect(parentClaims[1] + parentClaims[2], 'the parent run was claimed once').toBe(1);
-      expect(childClaims[1] + childClaims[2], 'the child run was claimed once').toBe(1);
+      expect(subagentClaims[1] + subagentClaims[2], 'the child run was claimed once').toBe(1);
       const parentOn = parentClaims[1] === 1 ? 1 : 2;
-      expect(childClaims[parentOn], 'the child did not run on the parent\'s worker').toBe(0);
+      expect(subagentClaims[parentOn], 'the child did not run on the parent\'s worker').toBe(0);
       const transcript = await waitForTranscript(sessionKey, (rows) => rows.some((row) => row.includes(finishedText)));
       const completions = transcript.filter((row) => row.includes('[background task finished'));
       expect(completions).toHaveLength(1);
       expect(completions[0]).toContain(finishedText);
       expect(connector.calls).toHaveLength(1);
-      expect(Number((await queryStack("SELECT count(*) AS n FROM invocations WHERE service = 'Run' AND key = ? AND handler = 'run'", [childRun]))[0]?.['n'])).toBe(1);
+      expect(Number((await queryStack("SELECT count(*) AS n FROM invocations WHERE service = 'Run' AND key = ? AND handler = 'run'", [subagentRun]))[0]?.['n'])).toBe(1);
     } finally {
       if (restored) for (const index of [1, 2]) { await killWorker(index); await startWorker(index); }
       events.close();
@@ -477,8 +477,12 @@ describe.skipIf(!split)('execution workers: cross-process behaviour', () => {
     return { account, agentId, title, reported, runId, stepId: step.id, ...chat };
   }
 
-  const recoveryRequests = async (account: Account, agentId: string): Promise<Array<{ id: string; title: string }>> =>
-    (((await account.api('GET', `/v1/requests?agentId=${encodeURIComponent(agentId)}&status=pending&kind=question`)).body.items ?? []) as Array<{ id: string; title: string }>).filter((r) => r.title === 'Check an uncertain action');
+  /** Questions waiting for the person: an uncertain action tells the agent, it does not ask anyone. */
+  const pendingQuestions = async (account: Account, agentId: string): Promise<Array<{ id: string; title: string }>> =>
+    ((await account.api('GET', `/v1/requests?agentId=${encodeURIComponent(agentId)}&status=pending&kind=question`)).body.items ?? []) as Array<{ id: string; title: string }>;
+  /** Set on the fenced step once the agent has been told its outcome is uncertain. */
+  const noticeOf = async (stepId: string): Promise<{ runId?: string } | undefined> =>
+    ((await queryStack('SELECT doc FROM steps WHERE id = ?', [stepId]))[0]?.['doc'] as { execution?: { notice?: { runId?: string } } } | undefined)?.execution?.notice;
 
   it('takes over a killed worker\'s run mid-tool without sending the fenced write again', async () => {
     const connector = await uncertainConnector(true);
@@ -490,7 +494,7 @@ describe.skipIf(!split)('execution workers: cross-process behaviour', () => {
       await killWorker(first.index);
 
       // After the database deadline the other worker takes the run over, replays its journal and finds the fence with no result.
-      const request = await until('the recovery request', async () => (await recoveryRequests(account, agentId))[0], 60_000);
+      await until('the notice to the agent', () => noticeOf(stepId), 60_000);
       expect(Date.now() - killedAt, 'no takeover before the lease deadline').toBeGreaterThanOrEqual(LEASE_TTL_MS - 2_000);
       const lease = await runLease(runId);
       expect(lease?.attempt).toBe(2);
@@ -498,15 +502,11 @@ describe.skipIf(!split)('execution workers: cross-process behaviour', () => {
       const mine = claims('Run', runId);
       expect(mine[first.index]).toBe(1);
       expect(mine[otherWorker(first.index)]).toBe(1);
-      // The write that may already have happened is not sent again, and the owner is asked instead of the system guessing.
+      // The write that may already have happened is not sent again; the agent is told and nobody is asked.
       expect(connector.calls).toHaveLength(1);
       expect(connector.effects).toHaveLength(1);
-      expect(await recoveryRequests(account, agentId)).toHaveLength(1);
-      const saved = await queryStack('SELECT doc FROM requests WHERE id = ?', [request.id]);
-      expect((saved[0]?.['doc'] as { reconciliation?: { state?: string; stepId?: string } }).reconciliation).toMatchObject({ state: 'pending', stepId });
-
-      expect((await account.api('POST', `/v1/requests/${request.id}/resolve`, { action: 'answer', answers: { recovery_outcome: 'still_unknown' } })).status).toBe(200);
-      await waitForTranscript(sessionKey, (rows) => rows.some((row) => row.includes('outcome is still unknown')));
+      expect(await pendingQuestions(account, agentId)).toEqual([]);
+      await waitForTranscript(sessionKey, (rows) => rows.some((row) => row.includes('may or may not have happened')));
       expect(connector.calls).toHaveLength(1);
       expect(connector.effects).toHaveLength(1);
     } finally {
@@ -523,7 +523,7 @@ describe.skipIf(!split)('execution workers: cross-process behaviour', () => {
       const firstClaim = workerLog(first.index).filter((l) => l['msg'] === 'durable: claimed' && l['key'] === runId && l['service'] === 'Run').map((l) => Number(l['epoch']))[0];
       await signalWorker(first.index, 'SIGSTOP');
       frozen = first.index;
-      const request = await until('the recovery request from the new owner', async () => (await recoveryRequests(account, agentId))[0], 60_000);
+      await until('the notice from the new owner', () => noticeOf(stepId), 60_000);
       const takenOver = await runLease(runId);
       expect(takenOver?.attempt).toBe(2);
       expect(takenOver?.epoch).toBeGreaterThan(firstClaim as number);
@@ -540,13 +540,12 @@ describe.skipIf(!split)('execution workers: cross-process behaviour', () => {
       const execution = (stepRow[0]?.['doc'] as { execution?: { fencedAt?: string; result?: unknown } }).execution;
       expect(execution?.fencedAt).toBeTruthy();
       expect(execution?.result, 'the stale worker must not store the tool result').toBeUndefined();
-      expect(await recoveryRequests(account, agentId)).toEqual([expect.objectContaining({ id: request.id })]);
+      expect(await pendingQuestions(account, agentId)).toEqual([]);
       expect(connector.calls).toHaveLength(1);
       expect(connector.effects).toHaveLength(1);
       expect((await runLease(runId))?.epoch).toBe(takenOver?.epoch);
 
-      expect((await account.api('POST', `/v1/requests/${request.id}/resolve`, { action: 'answer', answers: { recovery_outcome: 'still_unknown' } })).status).toBe(200);
-      await waitForTranscript(sessionKey, (rows) => rows.some((row) => row.includes('outcome is still unknown')));
+      await waitForTranscript(sessionKey, (rows) => rows.some((row) => row.includes('may or may not have happened')));
       expect(connector.calls).toHaveLength(1);
     } finally {
       if (frozen !== undefined) await signalWorker(frozen, 'SIGCONT');
@@ -572,7 +571,7 @@ describe.skipIf(!split)('execution workers: cross-process behaviour', () => {
       expect(totalClaims('Run', runId)).toBe(1);
       expect(connector.calls).toHaveLength(1);
       expect(connector.effects).toHaveLength(1);
-      expect(await recoveryRequests(account, agentId)).toEqual([]);
+      expect(await pendingQuestions(account, agentId)).toEqual([]);
       expect(workerLog(first.index).some((l) => l['msg'] === 'durable: lease lost; cancelling this execution' && l['id'] === first.lease.id)).toBe(false);
     } finally {
       await connector.close();

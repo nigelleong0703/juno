@@ -28,7 +28,7 @@ export function receiverRun(input: {
   ownerId: string;
   agentId: string;
   conversationId: string;
-  kind: 'room_mention' | 'child_task';
+  kind: 'room_mention' | 'subagent_task';
   senderAgentId: string;
   payload: Record<string, unknown>;
 }): RunOf {

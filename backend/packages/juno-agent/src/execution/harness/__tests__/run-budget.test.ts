@@ -9,13 +9,13 @@
  */
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import { LIMITS, type AssistantTurn, type Brain, type BrainContext, type Store, type Tool, type ToolRegistry, type WakeEvent } from '../../../contracts/index.js';
 import type { Run } from '@agent-desktop/public-contracts';
 import { requestScopedStore } from '../../../owner-context.js';
 import { NEVER_CANCELLED } from '../services/cancel.js';
-import { checkWithChildren, createRunBudget } from '../services/run-budget.js';
+import { checkWithSubagents, createRunBudget } from '../services/run-budget.js';
 import { runLoop } from '../services/run-loop.js';
 import type { RunContext, RunInput, RunServices } from '../services/run-types.js';
 
@@ -44,17 +44,17 @@ function context(): RunContext {
   let seq = 0;
   return {
     rand: { uuidv4: () => 'id-' + String(seq++) },
-    run: <T>(name: string, action: () => Promise<T>): RestatePromise<T> => {
+    run: <T>(name: string, action: () => Promise<T>): DurablePromise<T> => {
       if (used.has(name)) throw new Error('duplicate durable step: ' + name);
       used.add(name);
-      if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-      return RestatePromise.resolve(action().then((value) => {
+      if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+      return DurablePromise.resolve(action().then((value) => {
         journal.set(name, structuredClone(value));
         return value;
       }));
     },
-    awakeable: <T>() => ({ id: 'awake-' + String(seq++), promise: RestatePromise.resolve(new Promise<T>(() => {})) }),
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    awakeable: <T>() => ({ id: 'awake-' + String(seq++), promise: DurablePromise.resolve(new Promise<T>(() => {})) }),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
 }
 
@@ -107,11 +107,11 @@ function enforcingContext(): RunContext {
     date: {
       now: () => {
         if (insideAction) throw new Error('durable ctx.date.now() called inside a ctx.run action');
-        return RestatePromise.resolve(Date.now());
+        return DurablePromise.resolve(Date.now());
       },
     },
     localDate: { now: () => Date.now() },
-    run: <T>(name: string, action: () => Promise<T>): RestatePromise<T> =>
+    run: <T>(name: string, action: () => Promise<T>): DurablePromise<T> =>
       base.run(name, async () => {
         insideAction = true;
         try {
@@ -241,7 +241,7 @@ describe('PH11 budget integration', () => {
     await raw.put('runs', { ...runDoc(), id: 'child-1', parentRunId: 'run-1', usage: { ...runDoc().usage, costUsd: 6, steps: 1 } } as never, { conversationId: CONV });
     const budget = createRunBudget({ costUsd: 5, onUnknown: 'ignore' }, true);
 
-    const within = await checkWithChildren(context(), { store } as RunServices, 'run-1', budget, 'check');
+    const within = await checkWithSubagents(context(), { store } as RunServices, 'run-1', budget, 'check');
 
     expect(within.ok).toBe(false);
     expect(budget.totals().costUsd).toBe(0);
@@ -251,6 +251,6 @@ describe('PH11 budget integration', () => {
     await raw.put('runs', { ...runDoc(), id: 'child-2', parentRunId: 'run-1', usage: { ...runDoc().usage, costUsd: 0, steps: 500 } } as never, { conversationId: CONV });
     await raw.put('runs', { ...runDoc(), id: 'child-3', parentRunId: 'run-1', usage: { ...runDoc().usage, costUsd: 0, steps: 500 } } as never, { conversationId: CONV });
     const stepBudget = createRunBudget({ steps: 150, onUnknown: 'ignore' }, false);
-    expect((await checkWithChildren(context(), { store } as RunServices, 'run-1', stepBudget, 'steps')).ok).toBe(true);
+    expect((await checkWithSubagents(context(), { store } as RunServices, 'run-1', stepBudget, 'steps')).ok).toBe(true);
   });
 });

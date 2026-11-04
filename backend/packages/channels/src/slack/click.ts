@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import { NOT_OWNER_TEXT, STALE_TEXT, type ParsedClick } from '../click.js';
+import { slackApiBase } from './base.js';
 import { chosenBlocks } from './render.js';
 
 const interactionSchema = z.object({
@@ -38,7 +39,7 @@ export function parseSlackClick(payloadJson: unknown): ParsedClick | undefined {
         const ts = interaction.message?.ts ?? interaction.container?.message_ts;
         const channel = interaction.channel?.id ?? interaction.container?.channel_id;
         if (token !== undefined && ts !== undefined && channel !== undefined) {
-          await fetchFn('https://slack.com/api/chat.update', {
+          await fetchFn(slackApiBase() + 'chat.update', {
             method: 'POST',
             headers: { 'content-type': 'application/json; charset=utf-8', authorization: 'Bearer ' + token },
             body: JSON.stringify({ channel, ts, text: '✓ ' + outcome.label, blocks: chosenBlocks(interaction.message?.blocks ?? [], outcome.label) }),

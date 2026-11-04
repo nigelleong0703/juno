@@ -4,7 +4,8 @@ import { createAccount, listItems, listRuns, scriptModel, runNow as runTimerNow,
 /**
  * Goals that follow up on their own (BACKEND §5.10): a new goal gets one planning run that writes milestones and a first check time;
  * when the user's hourly tick finds the check due the agent advances one step and records it in the timeline without a word to the user,
- * and speaks only when something changed (the final reply is the one exit: an empty one says nothing); a paused goal is never checked.
+ * and speaks only when something changed (a scheduled check-in is a run nobody waits on: it speaks through send_message, its final text is
+ * only a record); a paused goal is never checked.
  * The check-ins land in the agent's own direct chat, which creating the agent opened (it greeted there first).
  */
 const HOUR = 3_600_000;
@@ -48,7 +49,8 @@ describe('goal check-ins', () => {
       { title: 'Pick a course', status: 'todo' }, { title: 'Learn 100 words', status: 'todo' }, { title: 'Hold a 5 minute chat', status: 'todo' },
     ];
     // Turns are used in order across the wakes of this chat (the first is the greeting's, already played): plan and a silent check-in end with a
-    // blank final reply (nothing is posted); the check-in with news says it as its final reply; "Check now" answers the user in a line.
+    // blank final text (nothing is posted); the check-in with news says it with send_message (its final text is only a record); "Check now"
+    // is a run the user waits on, so its final reply answers them in a line.
     const spoken = 'I found a course that fits: Lingoda. Want me to enrol you?';
     scriptModel(`${agent.body.id}:${conversationId}`, [
       { text: 'greeting already sent' },
@@ -57,7 +59,8 @@ describe('goal check-ins', () => {
       { toolCalls: [toolCall('step','goal_update', { title, summary: 'Comparing courses', milestones: [{ title: 'Pick a course', status: 'doing' }, ...milestones.slice(1)], note: 'Compared three courses' })] },
       { text: '' },
       { toolCalls: [toolCall('news','goal_update', { title, summary: 'A course is picked', milestones: [{ title: 'Pick a course', status: 'done' }, ...milestones.slice(1)], note: 'Found a course that fits', nextCheckAt: new Date(Date.now() + 40 * HOUR).toISOString() })] },
-      { text: spoken },
+      { toolCalls: [toolCall('say', 'send_message', { kind: 'text', purpose: 'result', text: spoken })] },
+      { text: 'recorded the news' },
       { text: 'still on track' },
     ]);
 

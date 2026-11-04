@@ -10,7 +10,7 @@ import { MAC_DESKTOP_TOOL_NAMES } from '../../../../modules/tools/tools/computer
 /** The tools that run a command: on the owner's Mac every one of them asks first. */
 export const MAC_COMMAND_TOOLS: ReadonlySet<string> = new Set(['shell.run', 'shell.start']);
 /** The tools that take a path: on the owner's Mac a path outside ~/Juno asks first (reading as much as writing). */
-export const MAC_PATH_TOOLS: ReadonlySet<string> = new Set(['files.read', 'files.write', 'files.edit', 'files.search']);
+export const MAC_PATH_TOOLS: ReadonlySet<string> = new Set(['files.read', 'files.write', 'files.edit', 'files.restore', 'files.search']);
 /** The tools that work an app on the owner's Mac through cua-driver: they are always on the Mac, and each names the `app`. */
 export const MAC_DESKTOP_TOOLS: ReadonlySet<string> = MAC_DESKTOP_TOOL_NAMES;
 /** The coordinate tools that used to reach the Mac's screen. On the Mac they are gone (use the three above); in the sandbox they are unchanged. */

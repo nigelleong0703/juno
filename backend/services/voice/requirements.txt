@@ -1,0 +1,2 @@
+livekit-agents[elevenlabs,fishaudio,silero]==1.8.10
+aiohttp==3.14.5

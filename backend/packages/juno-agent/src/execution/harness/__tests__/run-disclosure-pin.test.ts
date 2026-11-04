@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import type { Brain, ToolResult, WakeEvent } from '../../../contracts/index.js';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
@@ -34,10 +34,10 @@ describe('first model discovery preparation pin', () => {
     };
     const ctx: RunBodyContext = {
       key: 'run-disclosure', rand: { uuidv4: () => 'deterministic-id' },
-      run: (_name, action) => RestatePromise.resolve(action()),
-      awakeable: <T>() => ({ id: 'awake', promise: RestatePromise.resolve(new Promise<T>(() => {})) }),
-      drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
-      cancel: { peek: async () => false, get: () => RestatePromise.resolve(new Promise<boolean>(() => {})) },
+      run: (_name, action) => DurablePromise.resolve(action()),
+      awakeable: <T>() => ({ id: 'awake', promise: DurablePromise.resolve(new Promise<T>(() => {})) }),
+      drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
+      cancel: { peek: async () => false, get: () => DurablePromise.resolve(new Promise<boolean>(() => {})) },
       runFinished: async () => {},
     };
     const registry = { forAgent: async () => [], get: () => undefined, prepareForModel: prepare };

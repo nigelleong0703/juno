@@ -208,9 +208,11 @@ export function routeSharedDiscordMessage(
   const at = (row: ChannelRow): number => (row.roleId === undefined || !msg.mention_roles.includes(row.roleId) ? -1 : msg.content.indexOf('<@&' + row.roleId + '>'));
   const named = rows.filter((row) => at(row) >= 0).sort((a, b) => at(a) - at(b));
   const botAddressed = msg.mentions.some((user) => user.id === botUserId) || msg.referenced_message?.author.id === botUserId;
-  const row = isGuild ? (named[0] ?? (botAddressed ? mainRow : undefined)) : mainRow;
+  // A server message nobody addressed is observed by every agent of the server (BACKEND 6.8): it is stored, never a run.
+  const heard = isGuild && named.length === 0 && !botAddressed;
+  const row = heard ? rows[0] : isGuild ? (named[0] ?? (botAddressed ? mainRow : undefined)) : mainRow;
   if (row === undefined) return null;
-  const others = isGuild ? named.slice(1) : [];
+  const others = heard ? rows.slice(1) : isGuild ? named.slice(1) : [];
   let text = namedRoles(msg.content, msg.mention_roles, rows, others.length === 0 ? row.roleId : undefined);
   text = text.split('<@' + botUserId + '>').join('').split('<@!' + botUserId + '>').join('');
   const rewritten = rewriteDiscordMentions(text, msg.mentions, botUserId);
@@ -227,6 +229,7 @@ export function routeSharedDiscordMessage(
       from: { id: msg.author.id, name: msg.author.global_name ?? msg.author.username ?? '', ...(msg.author.username === undefined ? {} : { handle: msg.author.username }) },
       text,
       ...(rewritten.mentions.length === 0 ? {} : { mentions: rewritten.mentions }),
+      ...(heard ? { addressed: false } : {}),
     },
   };
 }

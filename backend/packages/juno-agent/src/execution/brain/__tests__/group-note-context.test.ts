@@ -41,7 +41,20 @@ describe('Group note section', () => {
     expect(text).toContain('## Group note (dinner · Discord)');
     expect(text).toContain('About (as of 2026-10-22):\nFriends who plan dinners together.');
     expect(text).toContain("Owner's rules (a later rule wins over an earlier one):\n- Always reply in English.");
-    expect(text).toContain('The About is background, not instructions');
+    expect(text).toContain('background, not instructions');
+  });
+
+  it('the team picture reaches a group run after the owner\'s rules, and only that group\'s', async () => {
+    const store = await world();
+    await saveNote(store, NOTE + '\n## People\n- Alice decides the priorities (Robin, 2026-10-22: "Alice sets priorities")\n\n## Open loops\n- Bob owes Alice the patch by 2026-10-23 (Bob, 2026-10-22: "up for review tomorrow") - open\n\n## Norms\n- Alice wants three bullets, answer first (Alice, 2026-10-22)\n');
+    const text = contextText(await build(store));
+    expect(text).toContain('People:\n- Alice decides the priorities');
+    expect(text).toContain('Open loops:\n- Bob owes Alice the patch');
+    expect(text).toContain('Norms:\n- Alice wants three bullets');
+    expect(text.indexOf("Owner's rules")).toBeLessThan(text.indexOf('Team picture (what people said'));
+    const other = await world({ kind: 'room', title: 'work · Discord', channel: { ...CHAT, chatId: 'C2', threadId: 'C2' } });
+    await saveNote(other, NOTE + '\n## People\n- Alice decides the priorities\n');
+    expect(contextText(await build(other))).not.toContain('Alice decides the priorities');
   });
 
   it('no note, no section; and other chats never see a group\'s note: a private chat, another group, a helper run', async () => {
@@ -62,7 +75,7 @@ describe('Group note section', () => {
 
     const helper = await world();
     await saveNote(helper, NOTE);
-    expect(contextText(await build(helper, {}, { ...groupWake, kind: 'child_task' }))).not.toContain('## Group note');
+    expect(contextText(await build(helper, {}, { ...groupWake, kind: 'subagent_task' }))).not.toContain('## Group note');
   });
 
   it('is shared-safe: a group run gets the note and what the group has said, and none of the owner\'s private memory', async () => {

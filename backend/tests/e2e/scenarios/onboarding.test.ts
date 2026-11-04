@@ -24,8 +24,8 @@ async function askedName(label: string, newName: string) {
   for (let i = 0; i < 60 && !(await listRuns(account, conversationId)).every((run) => run.status === 'completed'); i += 1) await new Promise((r) => setTimeout(r, 500));
   scriptModel(sessionKey, [
     { text: 'greeting already sent' },
-    { toolCalls: [{ id: 'ask', name: 'send_message', arguments: { kind: 'question', text: 'What would you like to call me?', ui: NAME_CARD } }] },
-    { text: 'Pick a name above.' },
+    // The lead-in is the turn's text; the card ends the run, so no second model call follows it.
+    { text: 'Quick one before we start.', toolCalls: [{ id: 'ask', name: 'send_message', arguments: { kind: 'question', purpose: 'decision', ui: NAME_CARD } }] },
     { toolCalls: [
       toolCall('rename', 'agent_update', { id: agentId, name: newName }),
       toolCall('connect', 'connect_request', { connectors: ['gmail'], label: 'Gmail' }),
@@ -34,7 +34,11 @@ async function askedName(label: string, newName: string) {
   ]);
   expect((await account.api('POST', `/v1/conversations/${conversationId}/runs`, aguiInput(`/v1/conversations/${conversationId}/runs`, { text: 'hi' }))).status).toBe(202);
   const asked = await events.waitFor((e) => e.data.type === 'request.created' && e.data.request.kind === 'question' && e.data.request.conversationId === conversationId, 45_000);
-  await events.waitFor((e) => e.data.type === 'item.added' && e.data.conversationId === conversationId && String(e.data.item.markdown).includes('Pick a name above'), 45_000);
+  await events.waitFor((e) => e.data.type === 'item.added' && e.data.conversationId === conversationId && String(e.data.item.markdown).includes('Quick one before we start'), 45_000);
+  for (let i = 0; i < 60 && !(await listRuns(account, conversationId)).every((run) => run.status === 'completed'); i += 1) await new Promise((r) => setTimeout(r, 500));
+  // The lead-in bubble came first and the card is the last thing in the run: nothing was said after it.
+  const items = (await account.api('GET', `/v1/conversations/${conversationId}/items`)).body.items as Array<{ type: string; markdown?: string }>;
+  expect(items.filter((item) => item.type === 'agent_message').map((item) => item.markdown).at(-1)).toBe('Quick one before we start.');
   return { account, events, agentId, conversationId, requestId: asked.data.request.id as string };
 }
 
@@ -80,12 +84,10 @@ describe('first-run onboarding', () => {
       expect(await listRuns(account, conversationId)).toHaveLength(1);
       scriptModel(sessionKey, [
         { text: 'greeting already sent' },
-        { toolCalls: [
-          { id: 'ask', name: 'send_message', arguments: { kind: 'question', text: 'What would you like to call me?', ui: NAME_CARD } },
+        { text: 'Quick one before we start.', toolCalls: [
+          { id: 'ask', name: 'send_message', arguments: { kind: 'question', purpose: 'decision', ui: NAME_CARD } },
         ] },
-        // However fast the run is, the rename turn is chosen by the tapped answer, not by its position; the plain
-        // turns before it answer a run that got ahead of the tap, and the ones at 3 and 4 close the run either way.
-        { text: 'Pick a name above.' },
+        // The card ends the asking run, so the next run is the tapped answer's; its rename turn is chosen by the tapped answer.
         { text: 'Muse it is. Want to start by connecting Gmail?' },
         { text: 'Muse it is. Want to start by connecting Gmail?' },
         { matchLastText: 'Muse', step: 0, toolCalls: [

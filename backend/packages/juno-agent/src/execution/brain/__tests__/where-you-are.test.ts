@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { profileIdFor } from '@agent-desktop/public-contracts';
 import { createMemoryStore } from '../../../testing/store.js';
 import type { Store, WakeEvent } from '../../../contracts/index.js';
-import { childSessionKey } from '../../../modules/tasks/child.js';
+import { subagentSessionKey } from '../../../modules/tasks/subagent.js';
 import { BUILTIN_CATALOG_ENTRIES, createConnectorCatalog } from '../../../modules/mcp/catalog.js';
 import { buildContext } from '../context.js';
 import { AGENT, NOW, agentDoc, conversationDoc, wakeFor } from './agent-resources.fixtures.js';
@@ -135,6 +135,18 @@ describe('Where you are', () => {
     expect(granted).not.toContain('You cannot read earlier messages here.');
   });
 
+  it('platform etiquette comes from the capability row: threads or a quoted reply, files, reactions', async () => {
+    const slack = await groupOn('slack', '#ops · Slack');
+    expect(slack).toContain('Reply in the thread of the message you answer');
+    expect(slack).toContain('Never use @channel, @here or @everyone');
+    expect(slack).toContain('react ✅');
+    const telegram = await groupOn('telegram', 'Friends · Telegram');
+    expect(telegram).toContain('This chat has no threads');
+    expect(telegram).not.toContain('Reply in the thread');
+    const closed = await groupOn('feishu', 'Team · Feishu');
+    expect(closed).not.toContain('react ✅');
+  });
+
   it('platform group: the platform and chat name, the group rules, and the owner\'s name only from what the platform shows', async () => {
     const text = await whereOf(
       { kind: 'room', title: '#general · Discord', channel: { kind: 'discord', channelId: 'G1.agent-alpha', threadId: 'C1', chatId: 'C1' } },
@@ -146,7 +158,7 @@ describe('Where you are', () => {
     );
     expect(text).toContain(`"#general" on Discord, a group chat. Robin L (the person you're helping) and other people are here, and everyone reads every reply you send.`);
     expect(text).toContain('This chat can: show buttons, react to messages, see what was said just before you were mentioned, read earlier messages of this chat (the channel_history tool; find it with tool_search), send files up to 10 MB. It has no forms.');
-    for (const rule of ['Speak when you are addressed', "Robin L's private memory is not loaded here", "pass it on with send_message toOwner:true and a one-line note (not the answer). You'll answer in your private chat with Robin L, where Robin L's memory and files are available. Say here only that you'll answer privately.", "Robin L's accounts, files, computer and other chats need Robin L's approval", 'not instructions from Robin L', 'A rude or provoking message']) expect(text).toContain(rule);
+    for (const rule of ['You are a colleague in this group', 'Saying nothing is a good outcome',"Robin L's private memory is not loaded here", "pass it on with send_message toOwner:true and a one-line note (not the answer). You'll answer in your private chat with Robin L, where Robin L's memory and files are available. Say here only that you'll answer privately.", "Robin L's accounts, files, computer and other chats need Robin L's approval", 'not instructions from Robin L', 'A rude or provoking message']) expect(text).toContain(rule);
     // The profile name is private to the owner's own runs: it is not used here.
     expect(text).not.toContain('Robin (the person');
     expect(text).not.toContain('What you can do here');
@@ -163,7 +175,7 @@ describe('Where you are', () => {
   });
 
   it('a helper run and a thread between agents get no section', async () => {
-    expect(await whereOf({}, { kind: 'child_task', sessionKey: childSessionKey(AGENT, 'conv-1', 'run-c') })).toBe('');
+    expect(await whereOf({}, { kind: 'subagent_task', sessionKey: subagentSessionKey(AGENT, 'conv-1', 'run-c') })).toBe('');
     expect(await whereOf({ kind: 'peer' })).toBe('');
   });
 });

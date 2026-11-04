@@ -14,7 +14,7 @@
 import { z } from 'zod';
 import { secureInputFieldKindSchema, type ComputerPayload } from '@agent-desktop/public-contracts';
 import type { Store, Tool, ToolContext, ToolResult } from '../../../contracts/index.js';
-import { isChildRun } from '../../tasks/childDelivery.js';
+import { hasSubagentParent } from '../../tasks/subagentDelivery.js';
 import { ComputerError, isComputerError, type BrowserResult } from '../computer/contract.js';
 import type { ComputerClientProvider } from '../computer/client.js';
 import { computerFailure, ON_PROPERTY, ON_SCHEMA } from '../computer/shared.js';
@@ -23,7 +23,7 @@ import { classifyFieldClasses, classifySecureField } from './secureInputClassify
 import { runBrowser } from './computerBrowserActions.js';
 import { raiseUserRequest, userRequest } from './userRequest.js';
 
-const CHILD_REFUSAL = 'Error: a child task cannot ask the user for help. Record the missing input as a blocked todo and report it in your final result.';
+const SUBAGENT_REFUSAL = 'Error: a subagent cannot ask the user for help. Record the missing input as a blocked todo and report it in your final result.';
 
 const secureInputSchema = z.object({
   reason: z.string().trim().min(1).max(300),
@@ -66,9 +66,9 @@ function hostOf(url: string): string {
   }
 }
 
-async function refuseChild(store: Store, ctx: ToolContext): Promise<ToolResult | null> {
-  if (!isChildRun(await store.get('runs', ctx.runId))) return null;
-  return { content: [{ type: 'text', text: CHILD_REFUSAL }], isError: true };
+async function refuseSubagent(store: Store, ctx: ToolContext): Promise<ToolResult | null> {
+  if (!hasSubagentParent(await store.get('runs', ctx.runId))) return null;
+  return { content: [{ type: 'text', text: SUBAGENT_REFUSAL }], isError: true };
 }
 
 export function createRequestSecureInputTool(opts: { store: Store; computer?: ComputerClientProvider }): Tool {
@@ -104,7 +104,7 @@ export function createRequestSecureInputTool(opts: { store: Store; computer?: Co
     sideEffect: true,
     async execute(args: unknown, ctx: ToolContext): Promise<ToolResult> {
       const parsed = secureInputSchema.parse(args);
-      const refused = await refuseChild(opts.store, ctx);
+      const refused = await refuseSubagent(opts.store, ctx);
       if (refused) return refused;
       if (parsed.on === 'mac') {
         return {
@@ -180,7 +180,7 @@ export function createRequestTakeoverTool(opts: { store: Store; computer?: Compu
     sideEffect: true,
     async execute(args: unknown, ctx: ToolContext): Promise<ToolResult> {
       const parsed = takeoverSchema.parse(args);
-      const refused = await refuseChild(opts.store, ctx);
+      const refused = await refuseSubagent(opts.store, ctx);
       if (refused) return refused;
       if (parsed.on === 'mac') {
         return {

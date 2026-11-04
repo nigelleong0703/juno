@@ -1,6 +1,6 @@
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { AssistantTurn, Brain, BrainContext, ToolRegistry, WakeEvent } from '../../../contracts/index.js';
 import type { Run } from '@agent-desktop/public-contracts';
@@ -59,11 +59,11 @@ async function setup() {
   const sleeps: number[] = [];
   const ctx: RunContext = {
     rand: { uuidv4: () => 'id' },
-    date: { now: () => RestatePromise.resolve(1000) },
-    run: <T>(_name: string, action: () => Promise<T>) => RestatePromise.resolve(action()),
+    date: { now: () => DurablePromise.resolve(1000) },
+    run: <T>(_name: string, action: () => Promise<T>) => DurablePromise.resolve(action()),
     awakeable: () => { throw new Error('Time wait must not create a human awakeable'); },
-    sleep: (ms) => { sleeps.push(ms); return RestatePromise.resolve(undefined); },
-    drainInbox: () => RestatePromise.resolve([]),
+    sleep: (ms) => { sleeps.push(ms); return DurablePromise.resolve(undefined); },
+    drainInbox: () => DurablePromise.resolve([]),
   };
   const wait = (until: string, cancellation: RunCancellation = NEVER_CANCELLED) => handleSuspension({
     ctx, services, input, runId: 'run-1', stepIndex: 0, suspend: { reason: 'time', until }, cancellation,
@@ -92,7 +92,7 @@ describe('durable time suspension', () => {
     const services: RunServices = { store, blobs: createMemoryBlobStore(), enqueuer: new NoopEnqueuer(), brain: brain(), toolRegistry: registry() };
     const steer: WakeEvent = { id: 'steer-1', ownerId: 'owner', agentId: 'agent-1', sessionKey, conversationId: 'conv-1', kind: 'task_done', origin: { type: 'system' }, trusted: false, priority: 'background', payload: { text: 'done' }, at, status: 'accepted' };
     let drains = 0;
-    ctx.drainInbox = () => { drains += 1; return RestatePromise.resolve(drains < 2 ? [] : [steer]); };
+    ctx.drainInbox = () => { drains += 1; return DurablePromise.resolve(drains < 2 ? [] : [steer]); };
     const outcome = await handleSuspension({
       ctx, services, input, runId: 'run-1', stepIndex: 0, suspend: { reason: 'time', until: new Date(61_000).toISOString() },
       details: { steerable: true }, cancellation: NEVER_CANCELLED,

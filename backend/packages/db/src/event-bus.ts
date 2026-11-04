@@ -3,7 +3,7 @@
  * The events log grows in `documents.ts` (inside the same transaction as the doc writes); this
  * module only reads it and fans out to live subscribers.
  */
-import type { EventBus, StoredEvent } from '@agent-desktop/contracts';
+import type { EventBus, LiveRunEvent, StoredEvent } from '@agent-desktop/contracts';
 import type { Sql } from './connection.js';
 import { createLogger } from '@agent-desktop/log';
 import { isAgentEvent } from './guards.js';
@@ -78,6 +78,64 @@ async function listenNotified(
   };
 }
 
+/** One live run event off a NOTIFY batch, or undefined when it is not one (a foreign or malformed entry is never delivered). */
+function liveRunEventOf(fields: unknown): LiveRunEvent | undefined {
+  if (typeof fields !== 'object' || fields === null) return undefined;
+  const record = fields as Record<string, unknown>;
+  const scopeOk = ['ownerId', 'conversationId', 'agentId', 'runId', 'attempt'].every((key) => typeof record[key] === 'string');
+  if (!scopeOk) return undefined;
+  if (record.type === 'run.text.delta' && typeof record.text === 'string') return record as unknown as LiveRunEvent;
+  if (record.type === 'run.text.reset') return record as unknown as LiveRunEvent;
+  if (record.type === 'run.text.end' && typeof record.toolCalls === 'number') return record as unknown as LiveRunEvent;
+  return undefined;
+}
+
+/** Live tail of run text on its own channel, delivered in NOTIFY order (a payload is a batch, in order) to every owner's subscriber. */
+async function listenLive(pool: Sql, onEvent: (e: LiveRunEvent) => void): Promise<() => void> {
+  const meta = await pool.listen(LIVE_CHANNEL, (payload) => {
+    let batch: unknown;
+    try {
+      batch = JSON.parse(payload);
+    } catch {
+      return;
+    }
+    if (!Array.isArray(batch)) return;
+    for (const entry of batch) {
+      const event = liveRunEventOf(entry);
+      if (event !== undefined) onEvent(event);
+    }
+  });
+  return () => {
+    void meta.unlisten().catch((err: unknown) => log.error({ err }, 'live events unlisten failed'));
+  };
+}
+
+/** The channel of live run text between a split deployment's worker and coordinator (never used by a single-process deployment). */
+const LIVE_CHANNEL = 'live_run_events';
+/** Largest payload a NOTIFY carries is 8000 bytes; a batch is split below this, and one event that alone exceeds it is refused. */
+const LIVE_PAYLOAD_MAX_BYTES = 7900;
+
+/** Splits a batch into NOTIFY payloads below the limit, keeping order; an event too large for one payload throws before anything is sent. */
+export function liveNotifyPayloads(batch: LiveRunEvent[]): string[] {
+  const payloads: string[] = [];
+  let current: string[] = [];
+  let size = 2;
+  for (const event of batch) {
+    const json = JSON.stringify(event);
+    const bytes = Buffer.byteLength(json, 'utf8') + 1;
+    if (bytes + 2 > LIVE_PAYLOAD_MAX_BYTES) throw new Error('live run event exceeds the notify payload limit');
+    if (size + bytes > LIVE_PAYLOAD_MAX_BYTES) {
+      payloads.push('[' + current.join(',') + ']');
+      current = [];
+      size = 2;
+    }
+    current.push(json);
+    size += bytes;
+  }
+  if (current.length > 0) payloads.push('[' + current.join(',') + ']');
+  return payloads;
+}
+
 export function createEventBus({ sql, getListenerPool }: EventBusOptions): EventBus {
   /** Global max id (the sequence is shared by all owners). Only committed rows are visible to this read. */
   const readHead = async (): Promise<number> => {
@@ -136,6 +194,12 @@ export function createEventBus({ sql, getListenerPool }: EventBusOptions): Event
 
     subscribe(onEvent: (e: StoredEvent) => void): Promise<() => void> {
       return listenNotified(sql, getListenerPool(), undefined, onEvent);
+    },
+    async publishLive(batch: LiveRunEvent[]): Promise<void> {
+      for (const payload of liveNotifyPayloads(batch)) await sql`SELECT pg_notify(${LIVE_CHANNEL}, ${payload})`;
+    },
+    subscribeLive(onEvent: (e: LiveRunEvent) => void): Promise<() => void> {
+      return listenLive(getListenerPool(), onEvent);
     },
   };
 }

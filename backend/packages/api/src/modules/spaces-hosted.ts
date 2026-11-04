@@ -118,14 +118,15 @@ export async function hostedOpenUrl(scoped: Store, deps: HostedDeps, spaceId: st
 }
 
 /**
- * Before the owner's account is deleted: revoke every live share link of the owner (their pages and data sit on the hosting
- * service, out of the private service's reach). Returns the reason to refuse the deletion, or undefined when nothing is left live.
+ * Before the owner's account is deleted, or with `agentId` one of the owner's agents: revoke every live share link of the owner
+ * (of that agent). Their pages and data sit on the hosting service, out of the private service's reach. Returns the reason to
+ * refuse the deletion, or undefined when nothing is left live.
  */
-export async function revokeOwnerHosted(scoped: Store, hosted: HostedSetup | undefined): Promise<string | undefined> {
+export async function revokeOwnerHosted(scoped: Store, hosted: HostedSetup | undefined, agentId?: string): Promise<string | undefined> {
   const live: SpaceHostedRecord[] = [];
   let cursor: string | undefined;
   for (let page = 0; page < 20; page += 1) {
-    const result = await scoped.list('spaceHosted', { limit: 200, ...(cursor === undefined ? {} : { cursor }) });
+    const result = await scoped.list('spaceHosted', { limit: 200, ...(agentId === undefined ? {} : { where: { agentId } }), ...(cursor === undefined ? {} : { cursor }) });
     live.push(...result.items.filter((record) => record.revokedAt === undefined));
     cursor = result.nextCursor;
     if (cursor === undefined) break;

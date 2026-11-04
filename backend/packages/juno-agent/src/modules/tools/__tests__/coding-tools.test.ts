@@ -248,8 +248,12 @@ describe('the /juno home through the file tools (BACKEND §5.2, §5.7)', () => {
       expect(textOf(await read(ctx, '/juno/docs/memory.md'))).toContain('How memory works');
       expect(textOf(await read(ctx, '/juno/agents/agent-1/SOUL.md'))).toBe('principles');
     }
-    // The owner's own chat can still search the memory.
-    expect((await requireTool(registry, 'files.search').execute({ query: 'secret', path: '/juno/memory' }, owner)).details).not.toMatchObject({ code: 'private_memory' });
+    // The owner's own chat reads its own memory files, but a search over the views would show the other agents' sections: memory_search does that (BACKEND 5.4a).
+    expect((await requireTool(registry, 'files.search').execute({ query: 'secret', path: '/juno/memory' }, owner)).details).toMatchObject({ code: 'memory_search_only' });
+    expect((await requireTool(registry, 'files.search').execute({ query: 'secret', path: '/juno/memory/2026-10-14/agent-1.md' }, owner)).details).not.toMatchObject({ code: 'memory_search_only' });
+    // Another agent's daily log is as foreign as its folder.
+    client.files.set('/juno/memory/2026-10-14/agent-2.md', '- 09:00 [fact] user: agent two secret\n');
+    expect((await read(owner, '/juno/memory/2026-10-14/agent-2.md')).details).toMatchObject({ code: 'foreign_agent_path' });
   });
 
   it('keeps one agent out of another agent\'s files', async () => {

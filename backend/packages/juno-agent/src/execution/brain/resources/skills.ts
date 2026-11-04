@@ -5,7 +5,6 @@
 import type { Store } from '../../../contracts/index.js';
 import { MAX_AGENT_SKILL_SELECTIONS } from '@agent-desktop/public-contracts';
 import type { PlatformSkillsService, SkillsService } from '@agent-desktop/memory-graph/skills';
-import type { PlatformSkill } from '../../../ports/computer/index.js';
 import { docOwner } from '../../execution-owner.js';
 import { harnessText } from '../../../modules/harness/loader.js';
 import { listAll } from '../../../modules/memory/util.js';
@@ -142,7 +141,7 @@ export function renderSkillSection(resolved: ResolvedSkills, agentId: string): s
 }
 
 /** The platform skills every agent has (BACKEND 5.1): name and description; the body is read with skill_read. */
-export function renderPlatformSkillSection(skills: readonly Pick<PlatformSkill, 'name' | 'description'>[]): string {
+export function renderPlatformSkillSection(skills: readonly { name: string; description: string }[]): string {
   if (skills.length === 0) return '';
   const lines = [harnessText('skills.platform.heading'), harnessText('skills.platform.intro')];
   for (const skill of skills.slice(0, MAX_LISTED_SKILLS)) {
@@ -154,8 +153,8 @@ export function renderPlatformSkillSection(skills: readonly Pick<PlatformSkill, 
 }
 
 /** The skills section: the agent's selected skills, then the platform skills. '' when the agent has neither. */
-export async function buildSkillsSection(source: SkillSource, agentId: string, platform: readonly PlatformSkill[] = []): Promise<string> {
-  return [await buildSelectedSkillsSection(source, agentId), await buildPlatformSkillSection(source.platformSkills, platform)].filter((part) => part.length > 0).join('\n\n');
+export async function buildSkillsSection(source: SkillSource, agentId: string): Promise<string> {
+  return [await buildSelectedSkillsSection(source, agentId), await buildPlatformSkillSection(source.platformSkills)].filter((part) => part.length > 0).join('\n\n');
 }
 
 /** The `## Selected skills` section, or '' when the agent has no configured skills. */
@@ -171,22 +170,22 @@ async function buildSelectedSkillsSection(source: SkillSource, agentId: string):
   return renderSkillSection(resolved, agentId);
 }
 
-/** Database metadata wins case-insensitively; snapshot metadata supports legacy/offline services. */
-async function buildPlatformSkillSection(source: Pick<PlatformSkillsService, 'catalog'> | undefined, fallback: readonly PlatformSkill[]): Promise<string> {
-  let metadata: Array<Pick<PlatformSkill, 'name' | 'description'>> = [];
+/** The platform skills come from the server's catalog (the seeded rows), never from the computer; names are unique case-insensitively. */
+async function buildPlatformSkillSection(source: Pick<PlatformSkillsService, 'catalog'> | undefined): Promise<string> {
+  let metadata: Array<{ name: string; description: string }> = [];
   let unavailable = false;
   try {
     metadata = await source?.catalog?.() ?? [];
   } catch {
     unavailable = true;
   }
-  const merged = new Map<string, Pick<PlatformSkill, 'name' | 'description'>>();
-  for (const skill of [...metadata, ...fallback]) {
+  const merged = new Map<string, { name: string; description: string }>();
+  for (const skill of metadata) {
     const key = skill.name.trim().toLowerCase();
     if (key === '' || merged.has(key)) continue;
     merged.set(key, { name: skill.name, description: skill.description });
   }
   const section = renderPlatformSkillSection([...merged.values()]);
   if (!unavailable) return section;
-  return [section, 'Platform skill catalog unavailable; only snapshot metadata, if present, is listed.'].filter(Boolean).join('\n');
+  return [section, 'Platform skill catalog unavailable.'].filter(Boolean).join('\n');
 }

@@ -104,10 +104,9 @@ export async function explainMemory(
   const saidBy = person ?? (await agentName(item.saidByAgentId)) ?? 'someone';
   const placeWords = item.saidIn === 'app' ? 'the app' : item.saidIn.startsWith('dm:') ? 'a direct chat' : item.saidIn.startsWith('group:') ? 'a group chat' : item.saidIn === 'migrated' ? 'an earlier chat' : item.saidIn;
   const claim = item.claimId === null ? null : await ownClaim(store, ownerId, item.claimId);
-  const { vector: _vector, ...plain } = item;
   return {
     kind: 'item',
-    item: plain,
+    item,
     saidBy,
     place: placeWords,
     visibleTo: await visibleToOf(store, ownerId, item.audience),

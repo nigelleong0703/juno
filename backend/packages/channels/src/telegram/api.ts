@@ -82,10 +82,12 @@ export function parseTelegramUpdate(update: unknown, botUsername: string): Teleg
   const botMentions = chatType === 'group'
     ? entities.filter((entity) => entity.type === 'mention' && text.slice(entity.offset, entity.offset + entity.length).toLowerCase() === mention)
     : [];
+  let unaddressed = false;
   if (chatType === 'group') {
     const replier = message.reply_to_message?.from;
     const repliesToBot = replier?.is_bot === true && replier.username?.toLowerCase() === botUsername.toLowerCase();
-    if (botMentions.length === 0 && !repliesToBot) return null;
+    // Not for the bot: still delivered when the bot's privacy mode is off (Telegram only sends the bot the messages addressed to it while it is on); the agent only observes it.
+    unaddressed = botMentions.length === 0 && !repliesToBot;
   }
   // Strip the bot's own mention and read other people's `text_mention` as `@Name` (a plain `@username` already reads as itself),
   // from the end so earlier offsets stay valid.
@@ -113,6 +115,7 @@ export function parseTelegramUpdate(update: unknown, botUsername: string): Teleg
     ...(mentions.length === 0 ? {} : { mentions }),
     ...(files.length === 0 ? {} : { files }),
     ...(chatType === 'group' && message.chat.title ? { chatTitle: message.chat.title } : {}),
+    ...(unaddressed ? { addressed: false } : {}),
   };
 }
 

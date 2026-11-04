@@ -2,7 +2,7 @@
  * Independent agent runtime: brain, tools plus the Session, Run and
  * RoutineTimer services, composed from injected dependencies.
  *
- * No HTTP listener, no Restate registration and no routine bootstrap here: the
+ * No HTTP listener, no service registration and no routine bootstrap here: the
  * host owns the endpoint and scheduling. Everything the runtime needs (store,
  * config, enqueuer, and optionally the sandbox client, model provider and log
  * sink) is injected, so the same factory runs in production and in tests.
@@ -22,9 +22,11 @@ import type { MemoryPort } from './modules/memory/port.js';
 import type { PlatformSkillsService, SkillsService } from '@agent-desktop/memory-graph/skills';
 import type { VoicePort } from './modules/tools/tools/discordVoice.js';
 import type { ChannelPort } from './modules/tools/tools/channelHistory.js';
+import type { RunServices } from './execution/harness/services/run-types.js';
 import { createExecutionTools } from './execution/mcp-runtime.js';
 import type { ComputerClient } from './modules/tools/index.js';
 import { macUsable } from './modules/tools/tools/macApps.js';
+import { createComputerHolds } from './execution/harness/services/computer-holds.js';
 import type { PluginTool } from './modules/tools/plugin-tool.js';
 import type { ConnectorCatalog } from './modules/mcp/catalog.js';
 import {
@@ -35,6 +37,9 @@ import {
 import { platformModelConfigured, selectProvider } from './execution/provider.js';
 import { createWebSearchProvider } from './modules/tools/web/searchProvider.js';
 import { requestScopedStore } from './owner-context.js';
+import type { LiveRunSink } from './execution/live-runs.js';
+import { prepareConversation } from './execution/harness/services/prepare.js';
+import { warmConversation, type WarmOutcome, type WarmTarget } from './execution/harness/services/warm.js';
 
 export type VomuLog = (fields: Record<string, unknown>, message: string) => void;
 
@@ -67,6 +72,8 @@ export interface VomuAgentOptions {
   connectorCatalog: ConnectorCatalog;
   /** The harness versions in the database (migration 0053); absent (the in-memory store) every session reads the repository seed. */
   harnessVersions?: HarnessVersionStore;
+  /** Where live model text goes (execution/live-runs.ts). Absent: this process keeps none (a worker of a split deployment passes its cross-process sink). */
+  live?: LiveRunSink;
   log?: VomuLog;
 }
 
@@ -90,6 +97,10 @@ export interface VomuAgent {
   calendarTimer: ReturnType<typeof createCalendarTimerService>;
   /** Runs the chat digest (memory, goal progress, group note) of a conversation once it has been quiet (BACKEND §5.4). */
   chatDigest: ReturnType<typeof createChatDigestService>;
+  /** Warms the provider prompt cache for a conversation's next run (one tiny call, nothing durable; must run in the owner's scope). */
+  warm(target: WarmTarget, signal: AbortSignal): Promise<WarmOutcome>;
+  /** Warms the connector tool discovery a conversation's next run starts with (owner scope). */
+  prepare(target: WarmTarget, signal: AbortSignal): Promise<'prepared' | 'failed'>;
 }
 
 export async function createVomuAgent(opts: VomuAgentOptions): Promise<VomuAgent> {
@@ -125,7 +136,7 @@ export async function createVomuAgent(opts: VomuAgentOptions): Promise<VomuAgent
     ...(opts.platformSkills === undefined ? {} : { platformSkills: opts.platformSkills }),
     store,
     blobs,
-    harness: new HarnessPins(opts.harnessVersions),
+    harness: new HarnessPins(opts.harnessVersions, log),
     ...(systemOne === undefined ? {} : { systemOne }),
     ...(opts.promptSections === undefined ? {} : { promptSections: opts.promptSections }),
     connectorCatalog: opts.connectorCatalog,
@@ -138,7 +149,9 @@ export async function createVomuAgent(opts: VomuAgentOptions): Promise<VomuAgent
   const webSearch = createWebSearchProvider(config);
   const tools = await createExecutionTools({ store, enqueuer, ...(opts.memory === undefined ? {} : { memory: opts.memory }), ...(opts.skills === undefined ? {} : { skills: opts.skills }), ...(opts.platformSkills === undefined ? {} : { platformSkills: opts.platformSkills }), ...(env['BROWSER_GOAL_INTERFACE'] === '1' ? { nativeBrowserAvailable: async () => { const owner = currentOwnerId(); return owner ? (await resolveSystemOne(store, owner, systemOne)) !== undefined : systemOne !== undefined; } } : {}), jev: { config }, ...(computer ? { computer } : {}), ...(webSearch ? { webSearch } : {}), ...(opts.voice ? { voice: opts.voice } : {}), ...(opts.pluginTools ? { pluginTools: opts.pluginTools } : {}), ...(opts.channels ? { channels: opts.channels } : {}), connectorCatalog: opts.connectorCatalog });
   const session = createSessionService({ store, brain, toolRegistry: tools });
-  const run = createRunWorkflow({ store, blobs, enqueuer, brain, toolRegistry: tools, log, ...(computer?.home === undefined ? {} : { home: computer.home }) });
+  const computerHolds = createComputerHolds(computer, log);
+  const services: RunServices = { store, blobs, enqueuer, brain, toolRegistry: tools, log, ...(opts.live === undefined ? {} : { live: opts.live }), ...(computer?.home === undefined ? {} : { home: computer.home }), ...(computerHolds === undefined ? {} : { computerHolds }) };
+  const run = createRunWorkflow(services);
   // The run context tells a scheduled routine what it can use: web search and a computer exist only when registered.
   const timer = createRoutineTimerService({ store, enqueuer, tools, blobs, ...(opts.monitorChecks === undefined ? {} : { monitorChecks: opts.monitorChecks }), capabilities: { webSearch: tools.get('web_search') !== undefined, computer: tools.get('computer.screenshot') !== undefined }, ...(computer ? { macUsable: (agentId: string) => macUsable(store, () => computer, agentId) } : {}) });
   const memoryTimer = createMemoryTimerService({
@@ -150,15 +163,21 @@ export async function createVomuAgent(opts: VomuAgentOptions): Promise<VomuAgent
   const calendarTimer = createCalendarTimerService({ store });
   // How long a chat must be quiet before its digest runs; e2e shortens it, real runs call runNow.
   const quietMs = Number(env['CHAT_DIGEST_QUIET_MS']);
+  // Observed group messages: the digest runs at N unread or after this long (BACKEND 6.8); e2e shortens both.
+  const observeEvery = Number(env['CHAT_DIGEST_OBSERVE_MS']);
+  const observeMax = Number(env['CHAT_DIGEST_OBSERVE_MAX']);
   const chatDigest = createChatDigestService({
     store, brain, log, quietMs: Number.isFinite(quietMs) && quietMs > 0 ? quietMs : 10 * 60_000,
+    ...(Number.isFinite(observeEvery) && observeEvery > 0 ? { observeEveryMs: observeEvery } : {}),
+    ...(Number.isFinite(observeMax) && observeMax > 0 ? { observeUnreadMax: observeMax } : {}),
+    ...(enqueuer.scheduleCalendarItem === undefined ? {} : { scheduleCalendarItem: (itemId: string) => enqueuer.scheduleCalendarItem?.(itemId) ?? Promise.resolve() }),
     ...(opts.memory === undefined ? {} : { memory: opts.memory }),
     ...(opts.channels === undefined ? {} : { channels: opts.channels }),
     ...(computer?.home === undefined ? {} : { home: computer.home }),
   });
   const watcher = createTaskWatcherService(computer === undefined ? { store } : { computer, store });
   const backgroundCall = createBackgroundCallService({ store, blobs, enqueuer, toolRegistry: tools });
-  return { store, config, enqueuer, brain, tools, session, run, timer, memoryTimer, ideasTimer, calendarTimer, chatDigest, watcher, backgroundCall };
+  return { store, config, enqueuer, brain, tools, session, run, timer, memoryTimer, ideasTimer, calendarTimer, chatDigest, watcher, backgroundCall, warm: (target, signal) => warmConversation(services, target, signal), prepare: (target, signal) => prepareConversation(services, target, signal) };
 }
 
 /**

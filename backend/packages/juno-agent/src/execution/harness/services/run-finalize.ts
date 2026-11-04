@@ -4,17 +4,18 @@
  * Pure orchestration over the journaled context; the loop in run.ts only decides the outcome.
  */
 import { blockRunTasks } from './task-hooks.js';
-import { cancelChildrenOfRun } from '../../../modules/tasks/childTools.js';
-import { expirePendingRequests } from '../../child-run-input.js';
+import { cancelSubagentsOfRun } from '../../../modules/tasks/subagentTools.js';
+import { expirePendingRequests } from '../../subagent-run-input';
 import { emitAgentStatus } from '../../agent-status.js';
 import { closeRunTasks } from '../../../modules/tasks/agent-tasks.js';
 import { reportRoutineCompletion, type ReportContext } from './routine-completion.js';
-import { startStepSummaries } from './run-aux.js';
+import { startRoleSuggestion, startStepSummaries } from './run-aux.js';
 import { runTerminalEvent } from './agui-events.js';
 import type { RunInput, RunServices } from './run-types.js';
 
 export type TerminalOutcome =
-  | { kind: 'failed'; message: string }
+  /** `providerOutage`: the model provider was unavailable (rate limit or transient errors, with the announced wait): a routine run is then tried again instead of counted. */
+  | { kind: 'failed'; message: string; providerOutage?: { retryAfterMs?: number } }
   | { kind: 'stopped' }
   | { kind: 'blocked' }
   | { kind: 'completed' };
@@ -31,21 +32,21 @@ export async function finalizeTerminalRun(
     await ctx.run('fail', async () => {
       await expirePendingRequests(services.store, runId);
       // CT-boundary: descendants are stopped for real; transient retries rethrow above, never here.
-      await cancelChildrenOfRun(services.store, (childRunId) => services.enqueuer.stopRun(childRunId), runId);
+      await cancelSubagentsOfRun(services.store, (childRunId) => services.enqueuer.stopRun(childRunId), runId);
       const failed = await services.store.patch('runs', runId, { status: 'failed', finishedAt: new Date().toISOString(), error: outcome.message });
       await services.store.emit(runTerminalEvent(failed));
       await closeRunTasks(services.store, failed);
       await emitAgentStatus(services.store, failed.agentId);
       startStepSummaries(services, runId);
     });
-    await reportRoutineCompletion(ctx, services, input, runId, { succeeded: false, summary: outcome.message });
+    await reportRoutineCompletion(ctx, services, input, runId, { succeeded: false, summary: outcome.message, ...(outcome.providerOutage === undefined ? {} : { providerOutage: outcome.providerOutage }) });
     return;
   }
   if (outcome.kind === 'stopped') {
     await ctx.run('stop', async () => {
       await expirePendingRequests(services.store, runId);
       // A real stop also stops this parent's children; the enqueuer call is a plain RPC.
-      await cancelChildrenOfRun(services.store, (childRunId) => services.enqueuer.stopRun(childRunId), runId);
+      await cancelSubagentsOfRun(services.store, (childRunId) => services.enqueuer.stopRun(childRunId), runId);
       const current = await services.store.get('runs', runId);
       if (current?.status !== 'stopped') {
         const stopped = await services.store.patch('runs', runId, {
@@ -65,7 +66,7 @@ export async function finalizeTerminalRun(
     await ctx.run('blocked', async () => {
       await expirePendingRequests(services.store, runId);
       // CT-boundary: a blocked parent stops the descendants it can no longer collect.
-      await cancelChildrenOfRun(services.store, (childRunId) => services.enqueuer.stopRun(childRunId), runId);
+      await cancelSubagentsOfRun(services.store, (childRunId) => services.enqueuer.stopRun(childRunId), runId);
       const current = await services.store.get('runs', runId);
       const reason = current?.error ?? 'run blocked: outstanding tasks need input';
       await blockRunTasks(services.store, input.agentId, input.conversationId, reason, runId);
@@ -93,6 +94,8 @@ export async function finalizeTerminalRun(
     await closeRunTasks(services.store, finished);
     await emitAgentStatus(services.store, finished.agentId);
     startStepSummaries(services, runId);
+    // After the reply: the role card never lands in the middle of the person's task (BACKEND §10.11).
+    startRoleSuggestion(services, input);
   });
   await reportRoutineCompletion(ctx, services, input, runId, { succeeded: true });
 }

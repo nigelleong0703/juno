@@ -14,7 +14,7 @@ import { MAX_UPLOAD_BYTES } from './conversation.js';
 export type WorkObject = 'doc' | 'calendar' | 'task' | 'canvas' | 'sheet';
 
 export interface ChatCapabilities {
-  /** What reaches the agent: only messages addressed to it (mentions, replies, DMs), or every message. */
+  /** What reaches the agent: only messages addressed to it (mentions, replies, DMs), or every message of the groups it is in (which it then only observes; BACKEND 6.8). */
   hears: 'addressed' | 'all';
   history: {
     /** The messages just before a mention arrive with the wake. */
@@ -55,6 +55,8 @@ export interface Cannot {
   reactions?: ChatCapabilities['reactions'];
   ui?: Partial<ChatCapabilities['ui']>;
   externalGroups?: ChatCapabilities['externalGroups'];
+  /** `false`: replies cannot go in a thread (a Telegram group answers by quoting the message). */
+  threads?: boolean;
 }
 
 export function declareCapabilities(cannot: Cannot): ChatCapabilities {
@@ -64,7 +66,7 @@ export function declareCapabilities(cannot: Cannot): ChatCapabilities {
     files: { read: true, send: true, maxReadMb: MAX_UPLOAD_MB, maxSendMb: MAX_UPLOAD_MB, ...cannot.files },
     reactions: cannot.reactions ?? { mode: 'any' },
     ui: { cards: true, choices: true, fields: true, ...cannot.ui },
-    threads: true,
+    threads: cannot.threads ?? true,
     workObjects: [],
     externalGroups: cannot.externalGroups ?? 'quiet',
   };

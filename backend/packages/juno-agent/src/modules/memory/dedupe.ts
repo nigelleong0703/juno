@@ -6,30 +6,24 @@
  */
 import type { ItemTopic, MemoryItem, NewItem } from '@agent-desktop/memory-graph/memory';
 import type { MemoryGraph } from './graph.js';
-import { cosine } from './rank.js';
-import { usableVector } from './search.js';
 import { normalizeText } from './wording.js';
 
 /** Vectors at least this similar are the same statement. */
 export const SAME_COSINE = 0.95;
 
-/** The active item that already says `input`, or undefined. Looks only at items of the same person, audience and agent. */
+/** The active item that already says `input`, or undefined. Looks only at items of the same person and audience that the writing agent may read: its own and the shared ones. */
 export async function findNearDuplicate(memory: MemoryGraph, ownerId: string, input: Pick<NewItem, 'text' | 'aboutPersonId' | 'audience' | 'agentId'>): Promise<MemoryItem | undefined> {
   const embedder = memory.embedder;
-  const same = (await memory.items.memoryFor(ownerId, { kind: 'owner' }, undefined, { vectors: embedder !== undefined }))
-    .filter((item) => item.audience === input.audience && item.aboutPersonId === (input.aboutPersonId ?? null) && item.agentId === (input.agentId ?? null));
+  const same = (await memory.items.memoryFor(ownerId, { kind: 'owner' }, undefined))
+    .filter((item) => item.audience === input.audience && item.aboutPersonId === (input.aboutPersonId ?? null) && (item.agentId === (input.agentId ?? null) || item.agentId === null));
   const wanted = normalizeText(input.text);
   const equal = same.find((item) => normalizeText(item.text) === wanted);
   if (equal !== undefined || embedder === undefined) return equal;
-  const vectors = same.flatMap((item) => {
-    const vector = usableVector(item, embedder);
-    return vector === undefined ? [] : [{ item, vector }];
-  });
-  if (vectors.length === 0) return undefined;
+  if (same.length === 0) return undefined;
   const asked = (await embedder.embed([input.text]))?.[0];
   if (asked === undefined) return undefined;
-  const best = vectors.map(({ item, vector }) => ({ item, score: cosine(asked, vector) })).sort((a, b) => b.score - a.score)[0];
-  return best !== undefined && best.score >= SAME_COSINE ? best.item : undefined;
+  const [best] = await memory.items.nearest(ownerId, { kind: 'owner' }, undefined, { embedding: asked, embedModel: embedder.model }, { limit: 1, ids: same.map((item) => item.id) });
+  return best !== undefined && best.cosine >= SAME_COSINE ? same.find((item) => item.id === best.id) : undefined;
 }
 
 export interface NoteOutcome {
@@ -48,6 +42,8 @@ export async function addOrUpdateNote(memory: MemoryGraph, ownerId: string, inpu
     const item = await memory.items.addItem(ownerId, input);
     return item === null ? null : { item, updated: false };
   }
+  // A shared item is the owner's to word (BACKEND 5.4a): an agent that says the same already has it, and changes nothing.
+  if (existing.agentId === null && input.agentId != null) return { item: existing, updated: true };
   const topic: ItemTopic | undefined = existing.topic === null ? input.topic ?? undefined : undefined;
   // Said again: the item is touched (so it is not taken for stale), and its wording is replaced only when it differs (a new text is embedded again).
   const item = await memory.items.updateItem(ownerId, existing.id, {

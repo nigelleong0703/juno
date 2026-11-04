@@ -19,6 +19,8 @@ export function feishuCapabilities(grants: readonly string[]) {
   const base = declareCapabilities({ history: NO_HISTORY, ui: { fields: false }, reactions: { mode: 'none' } });
   return {
     ...base,
+    // Without `im:message.group_msg` Feishu delivers only the group messages that mention the bot.
+    hears: grants.includes(FEISHU_SCOPE_GROUP_MESSAGES) ? ('all' as const) : base.hears,
     history: grants.includes(FEISHU_SCOPE_GROUP_MESSAGES) ? { ...base.history, onDemand: true } : base.history,
     reactions: grants.includes(FEISHU_SCOPE_REACTIONS) ? { mode: 'limited' as const, allowed: Object.keys(FEISHU_REACTIONS) } : base.reactions,
   };

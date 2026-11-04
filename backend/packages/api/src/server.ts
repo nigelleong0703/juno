@@ -18,11 +18,8 @@ import type { BlobStore, Store } from '@agent-desktop/contracts';
 import { createMcpManager, guardedFetch } from '@agent-desktop/contracts/mcp';
 import { createAgentdCatalog, resolveCatalog, validateCatalog, type CatalogEntry } from './modules/connector-catalog.js';
 import type { GoogleMcpDeps } from './modules/google-mcp.js';
-import type { HevyMcpDeps } from './modules/hevy-mcp.js';
 import { registerGoogleMcp } from './routes/google-mcp.js';
-import { registerSgMcp } from './routes/sg-mcp.js';
 import { registerAdminApps } from './routes/admin.js';
-import type { SgMcpDeps } from './modules/sg-mcp.js';
 import type { ConnectorsDeps } from './modules/connectors.js';
 import { createComposioClient, type ComposioClient } from './modules/composio.js';
 import { registerComposioCallback } from './routes/composio.js';
@@ -65,6 +62,8 @@ export interface ApiAppDeps {
   internalToken: string;
   /** Bearer for the operator's admin path (`/admin/v1/apps`, BACKEND 10.18); empty or absent switches that path off. */
   adminToken?: string;
+  /** HOSTED_MCP_TOKEN: the credential agentd's MCP client presents to the connectors hosted here (BACKEND 10.18). Empty or absent: they answer nobody (401). */
+  hostedMcpToken?: string;
   /** Injectable for tests; defaults to the global fetch with no retries. */
   fetch?: typeof fetch;
   /** Public base URL of this gateway (BETTER_AUTH_URL); absolute webhook URLs are built from it. Absent uses the request origin. */
@@ -96,10 +95,6 @@ export interface ApiAppDeps {
   composio?: ComposioClient;
   /** The Google MCP servers hosted here (Gmail, Calendar, Drive, YouTube, Tasks): tests point the issuer and the Google APIs at a fixture. */
   googleMcp?: Omit<GoogleMcpDeps, 'publicUrl'>;
-  /** Singapore data servers (tests inject fetch, env and the clock). */
-  sgMcp?: SgMcpDeps;
-  /** The Hevy MCP server hosted here: tests point it at a fake Hevy. */
-  hevyMcp?: HevyMcpDeps;
   /** Origin that serves HTML artifacts and the HMAC key for their URLs (ARTIFACT_HOST, ARTIFACT_URL_SECRET); absent: no render URLs. */
   artifactOrigin?: { origin: string; secret: string };
   /** Spaces (BACKEND 5.12): the preview domain, the key that signs open links and the session cookie, and computerd for status; absent: no space routes. */
@@ -208,13 +203,12 @@ export function createApiApp(deps: ApiAppDeps): Hono {
       }
     : undefined;
   if (mcpAuthorization) registerMcpCallback(app, mcpAuthorization);
-  // Hosted Google MCP servers (BACKEND 10.15): public like the callback; the caller's Google token is the credential.
+  // Hosted MCP servers (BACKEND 10.18): on the public origin but internal; each answers only the service credential HOSTED_MCP_TOKEN (401 otherwise).
   const oauthEnv = deps.mcpOAuth?.env ?? process.env;
   const googleMcp: GoogleMcpDeps | undefined = deps.publicUrl === undefined
     ? undefined
-    : { publicUrl: deps.publicUrl, internalToken: deps.internalToken, ...deps.googleMcp };
-  if (googleMcp) registerSgMcp(app, { internalToken: deps.internalToken, ...deps.sgMcp });
-  if (googleMcp) registerGoogleMcp(app, googleMcp, deps.hevyMcp);
+    : { publicUrl: deps.publicUrl, hostedToken: deps.hostedMcpToken, ...deps.googleMcp };
+  if (googleMcp) registerGoogleMcp(app, googleMcp);
   // The catalog is agentd's (its loaded plugins'); tests may pin a fixed one.
   if (deps.connectorCatalog !== undefined) validateCatalog(deps.connectorCatalog);
   const fixed = deps.connectorCatalog;
@@ -262,15 +256,18 @@ export function createApiApp(deps: ApiAppDeps): Hono {
   // Private-service surface: exact method+path pairs only; HEAD mirrors GET for the same routes.
   for (const route of AGENTD_ROUTES) {
     const forward = (c: Context): Promise<Response> => forwardToAgentd(c, requestOwner(c), forwardDeps, connectsChannel(c) ? requestOwnerEmail(c) : undefined);
-    // Deleting the account first revokes its hosted Spaces (BACKEND 5.12, option B): their pages and data sit on the hosting service,
-    // which the private service cannot reach. A refusal leaves the account as it was, so the deletion can be asked again.
-    const deleteAccount = async (c: Context): Promise<Response> => {
+    // Deleting the account, or one agent, first revokes the hosted Spaces it owns (BACKEND 5.12, option B): their pages and data sit on
+    // the hosting service, which the private service cannot reach. A refusal leaves everything as it was, so the deletion can be asked again.
+    const deleteWithHosted = (agentIdOf: (c: Context) => string | undefined) => async (c: Context): Promise<Response> => {
       const store = deps.store;
-      if (store?.forOwner === undefined) throw new Error('Store.forOwner is required: refusing unscoped account deletion');
-      const refused = await revokeOwnerHosted(store.forOwner(requestOwner(c)), deps.spaces?.hosted);
+      if (store?.forOwner === undefined) throw new Error('Store.forOwner is required: refusing unscoped deletion');
+      const refused = await revokeOwnerHosted(store.forOwner(requestOwner(c)), deps.spaces?.hosted, agentIdOf(c));
       return refused === undefined ? forward(c) : c.json({ error: { code: 'HOSTED_REVOKE_FAILED', message: refused } }, 503);
     };
-    const handler = route.method === 'DELETE' && route.path === '/v1/account' ? deleteAccount : forward;
+    const handler = route.method !== 'DELETE' ? forward
+      : route.path === '/v1/account' ? deleteWithHosted(() => undefined)
+      : route.path === '/v1/agents/:id' ? deleteWithHosted((c) => c.req.param('id'))
+      : forward;
     app.on(route.method, route.path, handler);
     if (route.method === 'GET') app.on('HEAD', route.path, forward);
   }

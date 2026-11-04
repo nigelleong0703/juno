@@ -68,11 +68,10 @@ describe('claim lines', () => {
 });
 
 describe('search ranking', () => {
-  const vec = (x: number, y: number): number[] => [x, y];
   const entries = [
-    { id: 'cat', text: 'Alice has a cat named Miso', embedding: vec(1, 0) },
-    { id: 'job', text: 'Alice works as a nurse in Leiden', embedding: vec(0, 1) },
-    { id: 'zh', text: '爱丽丝在莱顿做护士', embedding: vec(0.1, 0.9) },
+    { id: 'cat', text: 'Alice has a cat named Miso' },
+    { id: 'job', text: 'Alice works as a nurse in Leiden' },
+    { id: 'zh', text: '爱丽丝在莱顿做护士' },
   ];
 
   it('ranks by keywords alone without vectors, Chinese included', () => {
@@ -83,11 +82,12 @@ describe('search ranking', () => {
   });
 
   it('merges vector and keyword hits: a meaning-only match appears and a double match wins', () => {
-    const merged = rankEntries('nurse', entries, vec(0, 1), 5).map((hit) => hit.id);
+    // The vector order (from SQL) lists the closest first: job, then zh.
+    const merged = rankEntries('nurse', entries, ['job', 'zh'], 5).map((hit) => hit.id);
     expect(merged[0]).toBe('job');
     expect(merged).toContain('zh');
     expect(merged).not.toContain('cat');
-    expect(rankEntries('nurse', entries, vec(0, 1), 1)).toHaveLength(1);
+    expect(rankEntries('nurse', entries, ['job', 'zh'], 1)).toHaveLength(1);
   });
 });
 

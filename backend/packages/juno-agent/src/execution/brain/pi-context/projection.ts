@@ -3,18 +3,18 @@ import type { TranscriptEntry } from '../../../contracts/index.js';
 import { harnessText } from '../../../modules/harness/loader.js';
 import { parseMessage } from '../messages.js';
 import { serializeConversation } from './serialize.js';
-export function summaryMessage(summary: string): Message {
-  return { role: 'user', content: harnessText('compaction.recap_message', { recap: summary }), timestamp: Date.now() };
+export function summaryMessage(summary: string, timestamp?: number): Message {
+  return { role: 'user', content: harnessText('compaction.recap_message', { recap: summary }), timestamp: timestamp ?? Date.now() };
 }
 /** The user's own words before the cut, kept verbatim ahead of the summary (what the user asked is never paraphrased away). */
-export function recentUsersMessage(recentUsers: string[]): Message {
-  return { role: 'user', content: harnessText('compaction.recent_users', { messages: recentUsers.join('\n---\n') }), timestamp: Date.now() };
+export function recentUsersMessage(recentUsers: string[], timestamp?: number): Message {
+  return { role: 'user', content: harnessText('compaction.recent_users', { messages: recentUsers.join('\n---\n') }), timestamp: timestamp ?? Date.now() };
 }
-export function buildProjectedMessages(system: Message | undefined, summary: string | undefined, kept: TranscriptEntry[], recentUsers?: string[]): Message[] {
+export function buildProjectedMessages(system: Message | undefined, summary: string | undefined, kept: TranscriptEntry[], recentUsers?: string[], boundaryTimestamp?: number): Message[] {
   const out: Message[] = [];
   if (system !== undefined) out.push(system);
-  if (recentUsers !== undefined && recentUsers.length > 0) out.push(recentUsersMessage(recentUsers));
-  if (summary !== undefined) out.push(summaryMessage(summary));
+  if (recentUsers !== undefined && recentUsers.length > 0) out.push(recentUsersMessage(recentUsers, boundaryTimestamp));
+  if (summary !== undefined) out.push(summaryMessage(summary, boundaryTimestamp));
   for (const entry of kept) {
     out.push(parseMessage(entry.message));
   }

@@ -6,7 +6,8 @@ import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { createCalendarTools } from '../tools/calendarTools.js';
 import { createToolLoadTool, createToolSearchTool } from '../tools/toolSearch.js';
 import { createWebSearchTool } from '../tools/webSearch.js';
-import { checkArguments, normalizeOptionalStrings, publicParameters } from '../toolArguments.js';
+import { argumentErrorText, checkArguments, decodeJsonText, normalizeOptionalStrings, publicParameters, shownSchema } from '../toolArguments.js';
+import { computeRoutesSchema, lookupWeatherSchema } from './grounding-lite-schemas.js';
 
 const textOf = (result: ToolResult): string => result.content.map((part) => (part.type === 'text' ? part.text : '')).join('\n');
 
@@ -86,6 +87,56 @@ describe('validation errors teach', () => {
     expect(checkArguments(tool, { note: 'n' }).map((issue) => issue.path)).toEqual(['kind', 'count']);
     expect(checkArguments(tool, { kind: 'a', count: 2, note: null })).toEqual([]);
   });
+
+  it('follows local $ref to $defs (the shape Google Maps Grounding Lite sends), and stops on a schema that refers to itself', () => {
+    const tool = {
+      name: 'route',
+      parameters: {
+        type: 'object',
+        $defs: { Waypoint: { type: 'object', properties: { address: { type: 'string' } } } },
+        properties: { origin: { $ref: '#/$defs/Waypoint', description: 'Required. Origin.' }, stops: { type: 'array', items: { $ref: '#/$defs/Waypoint' } } },
+        required: ['origin'],
+      },
+    };
+    expect(checkArguments(tool, { origin: { address: 'A' }, stops: [{ address: 'B' }] })).toEqual([]);
+    const issues = checkArguments(tool, { origin: '{"address": "A"}', stops: ['B'] });
+    expect(issues.map((issue) => [issue.path, issue.expected])).toEqual([['origin', 'an object'], ['stops[0]', 'an object']]);
+    expect(issues[0]?.received).toContain('a string of JSON text');
+
+    const message = argumentErrorText({ name: 'maps_routes', parameters: computeRoutesSchema }, checkArguments({ parameters: computeRoutesSchema }, { origin: '{"address":"A"}', destination: { address: 'B' } }));
+    expect(message).toContain('- origin: received a string of JSON text');
+    expect(message).toContain('Corrected example: {"origin":{"address":"<address>"},"destination":{"address":"<address>"}}');
+    expect(message).toContain('Nothing was run. Correct the arguments and call maps_routes again.');
+
+    const either = { name: 'either', parameters: { type: 'object', properties: { place: { oneOf: [{ type: 'object', properties: { address: { type: 'string' } } }, { type: 'object', properties: { placeId: { type: 'string' } } }] }, loose: { anyOf: [{ type: 'string' }, { properties: {} }] } } } };
+    expect(checkArguments(either, { place: { placeId: 'p' }, loose: 5 })).toEqual([]);
+    expect(checkArguments(either, { place: '{"address":"A"}' }).map((issue) => [issue.path, issue.expected])).toEqual([['place', 'an object']]);
+
+    const tree = { type: 'object', $defs: { Node: { type: 'object', properties: { child: { $ref: '#/$defs/Node' } } } }, properties: { root: { $ref: '#/$defs/Node' } } };
+    expect(checkArguments({ parameters: tree }, { root: { child: { child: 'x' } } })).toEqual([{ path: 'root.child.child', received: 'a string of 1 characters', expected: 'an object' }]);
+  });
+});
+
+describe('the schema the model is shown for a server tool', () => {
+  it('writes the Grounding Lite references out: origin and destination are objects with address / latLng / placeId, and $defs is gone', () => {
+    const shown = shownSchema(computeRoutesSchema);
+    const origin = (shown['properties'] as Record<string, Record<string, unknown>>)['origin'];
+    expect(origin?.['type']).toBe('object');
+    expect(Object.keys(origin?.['properties'] as object)).toEqual(['address', 'latLng', 'placeId']);
+    expect((origin?.['properties'] as Record<string, Record<string, unknown>>)['latLng']?.['type']).toBe('object');
+    expect(JSON.stringify(shown)).not.toContain('$ref');
+    expect(shown['$defs']).toBeUndefined();
+    expect(shown['required']).toEqual(['origin', 'destination']);
+    // The server's own schema is not changed: checking and calling use it.
+    expect(computeRoutesSchema.properties.origin).toEqual({ $ref: '#/$defs/Waypoint' });
+    const weather = shownSchema(lookupWeatherSchema);
+    expect((weather['properties'] as Record<string, Record<string, unknown>>)['date']?.['type']).toBe('object');
+  });
+
+  it('keeps $defs when a reference could not be written out', () => {
+    const tree = { type: 'object', $defs: { Node: { type: 'object', properties: { child: { $ref: '#/$defs/Node' } } } }, properties: { root: { $ref: '#/$defs/Node' } } };
+    expect(shownSchema(tree)['$defs']).toBeDefined();
+  });
 });
 
 describe('tool_search and tool_load', () => {
@@ -115,5 +166,33 @@ describe('tool_search and tool_load', () => {
     expect(text).toContain('ghost');
     expect((await load.execute({ names: [] }, context())).isError).toBe(true);
     expect((await load.execute({}, context())).isError).toBe(true);
+  });
+});
+
+describe('objects and arrays sent as JSON text', () => {
+  const parameters = {
+    type: 'object',
+    $defs: { Waypoint: { type: 'object', properties: { address: { type: 'string' } } } },
+    properties: {
+      note: { type: 'string' },
+      origin: { $ref: '#/$defs/Waypoint' },
+      stops: { type: 'array', items: { type: 'object', properties: { at: { $ref: '#/$defs/Waypoint' } } } },
+      place: { oneOf: [{ type: 'object', properties: { address: { type: 'string' } } }, { type: 'object', properties: { placeId: { type: 'string' } } }] },
+      loose: { anyOf: [{ type: 'string' }, { type: 'object' }] },
+    },
+  };
+
+  it('decodes a field whose schema is an object or array, at any depth and through $ref/oneOf, and says which', () => {
+    const { args, normalized } = decodeJsonText(parameters, { origin: '{"address":"A"}', stops: '[{"at":"{\\"address\\":\\"B\\"}"}]', place: ' {"placeId":"p"} ' });
+    expect(args).toEqual({ origin: { address: 'A' }, stops: [{ at: { address: 'B' } }], place: { placeId: 'p' } });
+    expect(normalized.map((entry) => entry.field)).toEqual(['origin', 'stops', 'stops[0].at', 'place']);
+  });
+
+  it('leaves a string field holding JSON, text of the wrong shape and broken JSON for the check to name', () => {
+    const sent = { note: '{"a":1}', loose: '{"a":1}', origin: '["A"]', place: '{"address":' };
+    const { args, normalized } = decodeJsonText(parameters, sent);
+    expect(args).toBe(sent);
+    expect(normalized).toEqual([]);
+    expect(checkArguments({ parameters }, args).map((issue) => issue.path)).toEqual(['origin', 'place']);
   });
 });

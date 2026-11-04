@@ -16,7 +16,8 @@ import type { Agent } from '@agent-desktop/public-contracts';
 import { channelRowId, type ChannelInstallation, type ChannelRow, type Store } from '@agent-desktop/contracts';
 import { decryptSecret, encryptSecret } from '@agent-desktop/contracts/secrets';
 import { resolveSlackMentions, slackUserNamer } from '@agent-desktop/channels/slack/mentions';
-import { slackFiles } from '@agent-desktop/channels/slack/api';
+import { isChannelMessage, isReply, slackFiles } from '@agent-desktop/channels/slack/api';
+import { handleSlackNativeEvent, handleSlackShortcut, SLACK_ASK_SHORTCUT, SLACK_SUGGESTED_PROMPTS } from './native.js';
 import { withSlackExternal } from './external.js';
 import { jobAgent } from 'juno-agent/modules/memory/jobs/agent';
 import { admitChannelEvent, type AdmitDeps, type AdmitResult } from '../../routes/channels.js';
@@ -36,8 +37,12 @@ export const SLACK_SHARED_BOT_SCOPES = [
   'channels:history', 'groups:history', 'im:history', 'im:read', 'im:write',
   'channels:read', 'groups:read', 'reactions:write', 'files:read', 'files:write',
   'users:read', 'users:read.email', 'usergroups:read', 'usergroups:write',
+  // BACKEND 6.8: the `/juno` command and the "Ask <agent> about this" message shortcut, long results as a canvas, the AI-app surface.
+  'commands', 'canvases:write', 'assistant:write',
 ];
-export const SLACK_SHARED_BOT_EVENTS = ['app_mention', 'message.im', 'message.channels', 'message.groups'];
+export const SLACK_SHARED_BOT_EVENTS = ['app_mention', 'message.im', 'message.channels', 'message.groups', 'assistant_thread_started', 'app_home_opened', 'member_joined_channel'];
+/** What the owner of the shared app has to re-approve after BACKEND 6.8: the scopes and events added to an already installed app. */
+export const SLACK_SCOPES_ADDED_6_8 = ['commands', 'canvases:write', 'assistant:write'];
 
 const HANDLE_RETRY_MS = 24 * 60 * 60_000;
 const PLAN_ERRORS = new Set(['paid_teams_only', 'plan_upgrade_required', 'paid_only']);
@@ -57,8 +62,16 @@ export function slackSharedManifest(publicUrl: string): Record<string, unknown> 
   return {
     display_information: { name: 'Juno' },
     features: {
-      app_home: { home_tab_enabled: false, messages_tab_enabled: true, messages_tab_read_only_enabled: false },
+      // The Home tab lists the agent's open tasks and routines (native.ts); the Messages tab is where assistant threads live.
+      app_home: { home_tab_enabled: true, messages_tab_enabled: true, messages_tab_read_only_enabled: false },
       bot_user: { display_name: 'Juno', always_online: true },
+      // docs.slack.dev/reference/app-manifest: a new app can only use agent_view (assistant_view is the older surface); needs a description.
+      agent_view: {
+        agent_description: 'Your Juno agents: ask them for anything, in a DM, a thread or a channel.',
+        suggested_prompts: SLACK_SUGGESTED_PROMPTS,
+      },
+      slash_commands: [{ command: '/juno', url: publicUrl + '/v1/channels/slack/commands', description: 'Ask your Juno agent', usage_hint: '[agent] what you need', should_escape: false }],
+      shortcuts: [{ name: 'Ask Juno about this', type: 'message', callback_id: SLACK_ASK_SHORTCUT, description: 'Ask your Juno agent about this message' }],
     },
     oauth_config: { redirect_urls: [publicUrl + '/v1/channels/slack/oauth/callback'], scopes: { bot: SLACK_SHARED_BOT_SCOPES } },
     settings: {
@@ -287,21 +300,26 @@ function routeSharedEvent(rows: ChannelRow[], installation: ChannelInstallation,
   const groupIds = [...raw.matchAll(SUBTEAM)].map((match) => match[1]);
   const named = rows.find((row) => row.usergroupId !== undefined && groupIds.includes(row.usergroupId));
   const isDm = type === 'message' && event['channel_type'] === 'im';
-  let row: ChannelRow | undefined;
-  if (isDm) row = dmRow;
-  else if (type === 'message') row = named;
-  else if (type === 'app_mention') row = named === undefined ? dmRow : undefined;
-  if (row === undefined) return null;
+  let targets: ChannelRow[] = [];
+  // A channel message nobody addressed (no user group, no @-mention of the app): every agent of the workspace is offered it, and each one's
+  // ingress decides whether it is part of that thread or listens to that channel (channels/listening.ts).
+  const heard = !isDm && named === undefined && isChannelMessage({ type: type ?? '', channel_type: str(event['channel_type']), text: raw }, installation.botUserId);
+  if (isDm) targets = dmRow === undefined ? [] : [dmRow];
+  else if (type === 'message') targets = named !== undefined ? [named] : heard ? rows : [];
+  else if (type === 'app_mention') targets = named === undefined && dmRow !== undefined ? [dmRow] : [];
+  if (targets.length === 0) return null;
   const text = raw.replace(SUBTEAM, '').split('<@' + installation.botUserId + '>').join('').trim();
   const files = slackFiles(event['files']);
   if (text.length === 0 && files.length === 0) return null;
   const threadTs = str(event['thread_ts']) ?? (isDm ? undefined : ts);
   return {
-    row,
+    targets,
     message: {
+      ...(heard ? { addressed: false } : {}),
       chatId: channel,
       chatType: isDm ? ('private' as const) : ('group' as const),
-      threadId: threadTs === undefined ? channel : channel + ':' + threadTs,
+      // A message of the channel itself that nobody addressed is kept in the channel's own conversation; one in a thread, in that thread's.
+      threadId: threadTs === undefined || (heard && !isReply({ ts, thread_ts: str(event['thread_ts']) })) ? channel : channel + ':' + threadTs,
       externalMessageId: channel + ':' + ts,
       from: { id: user, name: '' },
       text,
@@ -325,16 +343,32 @@ export async function handleSharedSlackEvent(deps: AdmitDeps, ownerId: string, b
   // A DM or a plain @-mention of the app goes to the owner's main agent when it is enabled in this workspace, else to whichever agent is.
   const dmRow = rows.find((row) => row.agentId === main?.id) ?? rows[0];
   if (dmRow === undefined) return { status: 200, body: { received: false } };
+  const native = await handleSlackNativeEvent(deps, installation, rows, dmRow, event);
+  if (native) return { status: 200, body: { received: true, native: true } };
   const routed = routeSharedEvent(rows, installation, event, dmRow);
   if (routed === null) return { status: 200, body: { received: false } };
   const token = decryptSecret(installation.botToken);
-  const resolved = await resolveSlackMentions(slackUserNamer(deps.channelFetch ?? fetch, token), routed.message.text);
-  const message = { ...routed.message, text: resolved.text, ...(resolved.mentions.length === 0 ? {} : { mentions: resolved.mentions }) };
-  return admitChannelEvent(deps, ownerId, 'slack', routed.row.channelId, await withSlackExternal(deps.channelFetch ?? fetch, token, message));
+  const nameOf = slackUserNamer(deps.channelFetch ?? fetch, token);
+  const resolved = await resolveSlackMentions(nameOf, routed.message.text);
+  // The speaker's name as Slack has it (the event carries only the id).
+  const message = { ...routed.message, from: { ...routed.message.from, name: await nameOf(routed.message.from.id) }, text: resolved.text, ...(resolved.mentions.length === 0 ? {} : { mentions: resolved.mentions }) };
+  const external = await withSlackExternal(deps.channelFetch ?? fetch, token, message);
+  const results: AdmitResult[] = [];
+  for (const target of routed.targets) results.push(await admitChannelEvent(deps, ownerId, 'slack', target.channelId, external));
+  return results.find((result) => result.status === 202) ?? results[0] ?? { status: 200, body: { received: false } };
 }
 
 /** A button tap on the shared app: the workspace gives the installation, the tapped message gives the agent's row. */
 export async function handleSharedSlackInteraction(deps: AdmitDeps, ownerId: string, form: Record<string, unknown>): Promise<void> {
+  // A message shortcut ("Ask Juno about this") is not a button tap.
+  const raw = form['payload'];
+  if (typeof raw === 'string') {
+    const payload: unknown = (() => { try { return JSON.parse(raw); } catch { return null; } })();
+    if (typeof payload === 'object' && payload !== null && (payload as Record<string, unknown>)['type'] === 'message_action') {
+      await handleSlackShortcut(deps, ownerId, payload as Record<string, unknown>);
+      return;
+    }
+  }
   const click = slackAdapter.inbound.parseClick(form['payload']);
   if (click === undefined) return;
   const channelId = await channelIdOfToken(deps.store, click.token);

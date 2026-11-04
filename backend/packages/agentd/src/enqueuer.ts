@@ -3,12 +3,12 @@
  * Implements the Enqueuer interface from the contracts package.
  */
 
-import type { BackgroundCallStart, ChildRunStart, Enqueuer, TaskWatchStart, WakeEvent, Store } from '@agent-desktop/contracts';
-import { RESTATE } from '@agent-desktop/contracts';
+import type { BackgroundCallStart, SubagentRunStart, Enqueuer, TaskWatchStart, WakeEvent, Store } from '@agent-desktop/contracts';
+import { SERVICE } from '@agent-desktop/contracts';
 import { TimeoutError, type Runner } from '@agent-desktop/durable';
 import { createLogger } from '@agent-desktop/log';
-import { childRunInput, expirePendingRequests } from 'juno-agent/execution/child-run-input';
-export { childRunInput } from 'juno-agent/execution/child-run-input';
+import { subagentRunInput, expirePendingRequests } from 'juno-agent/execution/subagent-run-input';
+export { subagentRunInput } from 'juno-agent/execution/subagent-run-input';
 
 const log = createLogger({ service: 'agentd' });
 
@@ -44,7 +44,7 @@ export class RunnerEnqueuer implements Enqueuer {
     const delayed = opts?.delayMs !== undefined && opts.delayMs > 0;
     // A delayed delivery has no verdict to wait for, so it is always one-way.
     const awaiting = opts?.awaitDecision === true && !delayed;
-    const target = { service: RESTATE.session, key: event.sessionKey, handler: 'receive', input: event };
+    const target = { service: SERVICE.session, key: event.sessionKey, handler: 'receive', input: event };
     try {
       // The idempotency key is kept in both modes: a retry of the same event id is the same delivery, and a retried
       // request-response call returns the first call's verdict.
@@ -64,27 +64,27 @@ export class RunnerEnqueuer implements Enqueuer {
   }
 
   /** Start the reserved child run's Run workflow, keyed by the EXACT run id: a workflow runs once per key, so a retry never starts a second run. */
-  async startChildRun(input: ChildRunStart): Promise<void> {
-    await this.runner.sendTo({ service: RESTATE.run, key: input.runId, handler: 'run', input: childRunInput(input) });
+  async startSubagentRun(input: SubagentRunStart): Promise<void> {
+    await this.runner.sendTo({ service: SERVICE.run, key: input.runId, handler: 'run', input: subagentRunInput(input) });
   }
 
   /** H-72: start the durable watcher for a background process; the task id keys it, so a retry is a no-op. */
   async watchTask(input: TaskWatchStart): Promise<void> {
-    await this.runner.sendTo({ service: RESTATE.taskWatcher, key: input.taskId, handler: 'watch', input }, { idempotencyKey: 'watch-' + input.taskId });
+    await this.runner.sendTo({ service: SERVICE.taskWatcher, key: input.taskId, handler: 'watch', input }, { idempotencyKey: 'watch-' + input.taskId });
   }
 
   /** H-73: run an authorized tool call in the background; the task id keys it, so a retry never runs it twice. */
   async startBackgroundCall(input: BackgroundCallStart): Promise<void> {
-    await this.runner.sendTo({ service: RESTATE.backgroundCall, key: input.taskId, handler: 'call', input }, { idempotencyKey: 'bgcall-' + input.taskId });
+    await this.runner.sendTo({ service: SERVICE.backgroundCall, key: input.taskId, handler: 'call', input }, { idempotencyKey: 'bgcall-' + input.taskId });
   }
 
   /** H-79: whether this run's workflow invocation is still waiting or executing; 'none' marks an orphaned row. */
   async runState(runId: string): Promise<'running' | 'none'> {
-    return (await this.runner.isLive(RESTATE.run, runId, 'run')) ? 'running' : 'none';
+    return (await this.runner.isLive(SERVICE.run, runId, 'run')) ? 'running' : 'none';
   }
 
   async releaseSession(sessionKey: string, runId: string): Promise<void> {
-    await this.runner.sendTo({ service: RESTATE.session, key: sessionKey, handler: 'runFinished', input: runId });
+    await this.runner.sendTo({ service: SERVICE.session, key: sessionKey, handler: 'runFinished', input: runId });
   }
 
   async stopRun(runId: string): Promise<void> {
@@ -92,7 +92,7 @@ export class RunnerEnqueuer implements Enqueuer {
     // reporting success. Requests expire only after the cancel is accepted — never on a failed send
     // — and the run's own terminal state stays authoritative (no fabricated status patch here).
     try {
-      await this.runner.sendTo({ service: RESTATE.run, key: runId, handler: 'cancel', input: {} });
+      await this.runner.sendTo({ service: SERVICE.run, key: runId, handler: 'cancel', input: {} });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       log.error({ err: error, runId }, 'stopRun: cancel send failed');
@@ -127,7 +127,7 @@ export class RunnerEnqueuer implements Enqueuer {
       return;
     }
     try {
-      await this.runner.sendTo({ service: RESTATE.routineTimer, key: routineId, handler: 'arm', input: routine }, { idempotencyKey: `routine-arm-${routineId}-${Date.now()}` });
+      await this.runner.sendTo({ service: SERVICE.routineTimer, key: routineId, handler: 'arm', input: routine }, { idempotencyKey: `routine-arm-${routineId}-${Date.now()}` });
     } catch (error) {
       log.error({ err: error }, 'scheduleRoutine error');
     }
@@ -135,7 +135,7 @@ export class RunnerEnqueuer implements Enqueuer {
 
   /** A monitor's check, now, and what came of it (`woke`, `nothing_new`, `failed`, ...). */
   async checkRoutine(routineId: string): Promise<{ outcome: string }> {
-    const answer = await this.runner.invoke({ service: RESTATE.routineTimer, key: routineId, handler: 'checkNow', input: undefined }, { timeoutMs: 90_000 });
+    const answer = await this.runner.invoke({ service: SERVICE.routineTimer, key: routineId, handler: 'checkNow', input: undefined }, { timeoutMs: 90_000 });
     const outcome = typeof answer === 'object' && answer !== null ? Reflect.get(answer, 'outcome') : undefined;
     return { outcome: typeof outcome === 'string' ? outcome : 'unknown' };
   }
@@ -143,7 +143,7 @@ export class RunnerEnqueuer implements Enqueuer {
   /** Arms, moves or stops the timer of one item of an agent's own calendar, matching what is stored. */
   async scheduleCalendarItem(itemId: string): Promise<void> {
     try {
-      await this.runner.sendTo({ service: RESTATE.calendarTimer, key: itemId, handler: 'arm', input: undefined });
+      await this.runner.sendTo({ service: SERVICE.calendarTimer, key: itemId, handler: 'arm', input: undefined });
     } catch (error) {
       log.error({ err: error, itemId }, 'scheduleCalendarItem error');
     }
@@ -151,7 +151,7 @@ export class RunnerEnqueuer implements Enqueuer {
 
   /** Arms the user's hidden background schedules: the memory jobs and the daily ideas job (both idempotent). */
   async scheduleMemoryJobs(ownerId: string): Promise<void> {
-    for (const service of [RESTATE.memoryTimer, RESTATE.ideasTimer]) {
+    for (const service of [SERVICE.memoryTimer, SERVICE.ideasTimer]) {
       try {
         await this.runner.sendTo({ service, key: ownerId, handler: 'arm', input: undefined });
       } catch (error) {
@@ -163,7 +163,7 @@ export class RunnerEnqueuer implements Enqueuer {
   async routineResultsRead(receipt: { routineId: string; conversationId: string; readCutoff: string; resultIds: string[] }): Promise<void> {
     try {
       await this.runner.sendTo(
-        { service: RESTATE.routineTimer, key: receipt.routineId, handler: 'recordRead', input: receipt },
+        { service: SERVICE.routineTimer, key: receipt.routineId, handler: 'recordRead', input: receipt },
         { idempotencyKey: `routine-read-${receipt.routineId}-${receipt.readCutoff}` },
       );
     } catch (error) {
@@ -176,7 +176,7 @@ export class RunnerEnqueuer implements Enqueuer {
  * Noop enqueuer for testing (records calls without side effects).
  */
 export class NoopEnqueuer implements Enqueuer {
-  async startChildRun(input: ChildRunStart): Promise<void> {
+  async startSubagentRun(input: SubagentRunStart): Promise<void> {
     this.calls.push({ method: 'startChildRun', args: [input.runId] });
   }
   calls: Array<{ method: string; args: unknown[] }> = [];

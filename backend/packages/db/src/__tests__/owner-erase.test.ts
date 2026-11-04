@@ -6,7 +6,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import type { DurableDb } from '@agent-desktop/durable';
 import { createStore, type DbStore } from '../index.js';
-import { blobKeysUsedByOthers, closeAuthAccount, deleteAuthUser, deleteOwnerEvents, deleteOwnerRows } from '../owner-erase.js';
+import { blobKeysStillNamed,closeAuthAccount, deleteAuthUser, deleteOwnerEvents, deleteOwnerRows } from '../owner-erase.js';
 import { closeScratchPostgres, scratchPostgresUrl } from './store-backends.js';
 
 afterAll(closeScratchPostgres);
@@ -106,10 +106,12 @@ describe.each(backends)('account deletion SQL ($name)', (backend) => {
     // Alice's own rows naming her keys never count as "other".
     await scoped(store, alice).put('library', { id: uid('lib'), blobKey: keys.unique } as never);
     await scoped(store, alice).put('library', { id: uid('lib'), blobKey: keys.sharedUpload } as never);
-    const used = await blobKeysUsedByOthers(db, alice, Object.values(keys));
+    const used = await blobKeysStillNamed(db, Object.values(keys), alice);
     expect([...used].sort()).toEqual([keys.sharedArtifact, keys.sharedTranscript, keys.sharedUpload].sort());
-    expect((await blobKeysUsedByOthers(db, bob, [keys.unique])).has(keys.unique)).toBe(true);
-    expect((await blobKeysUsedByOthers(db, alice, [])).size).toBe(0);
+    expect((await blobKeysStillNamed(db, [keys.unique], bob)).has(keys.unique)).toBe(true);
+    expect((await blobKeysStillNamed(db, [], alice)).size).toBe(0);
+    // Without an owner to leave out, Alice's own rows count too: her other agent's rows may still name the bytes.
+    expect([...(await blobKeysStillNamed(db, Object.values(keys)))].sort()).toEqual(Object.values(keys).sort());
   });
 
   it('finds keys in more than one scan (more than 50 keys at once)', async () => {
@@ -117,6 +119,6 @@ describe.each(backends)('account deletion SQL ($name)', (backend) => {
     const [alice, bob] = [uid('alice'), uid('bob')];
     const keys = Array.from({ length: 120 }, blobKey);
     await scoped(store, bob).put('library', { id: uid('lib'), blobKey: keys[119] } as never);
-    expect([...(await blobKeysUsedByOthers(db, alice, keys))]).toEqual([keys[119]]);
+    expect([...(await blobKeysStillNamed(db, keys, alice))]).toEqual([keys[119]]);
   });
 });

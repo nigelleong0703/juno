@@ -21,7 +21,7 @@ export function parseSupportsImages(raw: string | undefined): boolean {
 }
 
 /**
- * Pick the model provider from the raw env before touching Postgres or Restate, so a misconfigured
+ * Pick the model provider from the raw env before touching Postgres or the runner, so a misconfigured
  * runner fails fast and names the missing setting. The scripted test double is opt-in only
  * (MODEL_PROVIDER=scripted).
  *

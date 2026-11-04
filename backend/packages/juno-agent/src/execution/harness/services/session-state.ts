@@ -3,7 +3,7 @@ import type { QueuedEvent } from '../logic/busy.js';
 import type { RunInput } from './run-types.js';
 
 /**
- * Stored in Restate state. Objects written by older builds may still carry `busyMode`, `agentBusyMode`,
+ * Stored in the Session's object state. Objects written by older builds may still carry `busyMode`, `agentBusyMode`,
  * `compactionEpoch`, `lastEventWakeAt` (no longer used) or status 'waiting'/'error'; nothing validates the shape on read,
  * so those keys are simply carried along untouched.
  */
@@ -38,7 +38,7 @@ export interface Services {
 }
 
 /**
- * Narrow handler surface the Session body needs: its own Restate state, the durable clock/id and the
+ * Narrow handler surface the Session body needs: its own object state, the durable clock/id and the
  * three internal sends it makes. Kept narrow so the owner-scoped body runs under a plain fake in tests;
  * a real ObjectContext is structurally assignable.
  */

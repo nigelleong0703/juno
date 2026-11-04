@@ -93,8 +93,47 @@ export async function uncertainConnector(firstCallExecutes: boolean, options: { 
   };
 }
 
+/** What a stub connector tool answers: an MCP result, a plain HTTP status with a body (the server refusing the request), or nothing at all (`hang`: the request is taken and never answered). */
+export type StubAnswer = { result: { content: Array<{ type: 'text'; text: string }> } } | { status: number; body: string } | { hang: true };
+export interface StubTool { name: string; description: string; inputSchema: Record<string, unknown>; annotations?: Record<string, unknown>; answer: (args: Record<string, unknown>) => StubAnswer }
+
+/** An isolated HTTP MCP server with the given tools; every `tools/call` is recorded and answered by the tool's own `answer`. */
+export async function stubConnector(tools: StubTool[]) {
+  const calls: ToolCall[] = [];
+  const server: Server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on('data', (chunk: Buffer) => chunks.push(chunk));
+    request.on('end', () => {
+      if (request.method !== 'POST') { response.statusCode = 204; response.end(); return; }
+      const message = JSON.parse(Buffer.concat(chunks).toString('utf8')) as McpMessage;
+      const reply = (result: unknown): void => {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }));
+      };
+      if (message.method === 'initialize') return reply({ protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'stub-fixture', version: '1' } });
+      if (message.method === 'tools/list') return reply({ tools: tools.map(({ answer: _answer, ...tool }) => tool) });
+      if (message.method !== 'tools/call') { response.statusCode = 202; response.end(); return; }
+      const call = { name: message.params?.name ?? '', args: message.params?.arguments ?? {} };
+      calls.push(call);
+      const answer = tools.find((tool) => tool.name === call.name)?.answer(call.args) ?? { status: 404, body: 'no such tool' };
+      if ('hang' in answer) return;
+      if ('status' in answer) { response.statusCode = answer.status; response.end(answer.body); return; }
+      reply(answer.result);
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return {
+    url: `http://127.0.0.1:${String((server.address() as AddressInfo).port)}/mcp`,
+    calls,
+    async close(): Promise<void> {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
 /** A new account whose default agent can use the connector as its "Tracker" app (`linear_create_issue`). */
-export async function setupConnector(prefix: string, connector: Awaited<ReturnType<typeof uncertainConnector>>) {
+export async function setupConnector(prefix: string, connector: { url: string }) {
   const account = await createAccount(prefix);
   const agent = await defaultAgent(account);
   await insertDocRow('connections', account.userId, {

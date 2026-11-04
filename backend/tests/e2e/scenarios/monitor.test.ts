@@ -58,7 +58,8 @@ describe('monitor', () => {
           name: 'New issues in acme/app', prompt: 'Tell me about any new issue', tool: 'tracker_list_issues', args: { repo: 'acme/app' }, items: 'issues', id: 'id',
         })] },
         { text: 'I am watching acme/app and will only message you when a new issue appears.' },
-        { text: alert },
+        { toolCalls: [toolCall('call-alert', 'send_message', { kind: 'text', purpose: 'result', text: alert })] },
+        { text: 'told them about the new issue' },
       ], 'tell me when a new issue appears in acme/app');
 
       // Creation: one proving check, nothing fired, a monitor routine that points back at this chat.
@@ -89,7 +90,7 @@ describe('monitor', () => {
       expect(quiet.body.outcome).toBe('nothing_new');
       expect(calls.list).toBe(2);
 
-      // A new issue appears: one wake into this chat, and the agent's reply is the one message.
+      // A new issue appears: one wake into this chat, and the agent's send_message is the one message (a monitor run is one nobody waits on).
       issues.unshift({ id: 3, title: `Login page crashes ${alert}` });
       const found = await account.api('POST', `/v1/routines/${id}/check`);
       expect(found.body.outcome).toBe('woke');

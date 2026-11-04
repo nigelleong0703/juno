@@ -89,7 +89,7 @@ export async function listPage<C extends Collection>(
   if (where?.hasRoutine !== undefined) add(where.hasRoutine ? currentSql`routine_id IS NOT NULL` : currentSql`routine_id IS NULL`);
   if (where?.routineId !== undefined) add(currentSql`routine_id = ${where.routineId}`);
   // A keyset position is compared (and ordered) with ids as plain bytes, so a merge of several sources sorts the same way everywhere.
-  const idKey = query?.keyset ? currentSql`id COLLATE "C"` : currentSql`id`;
+  const idKey = byTime ? currentSql`id COLLATE "C"` : currentSql`id`;
   if (query?.keyset && byTime) {
     const comparison = ascending ? currentSql`>` : currentSql`<`;
     add(currentSql`(${sortKey}, ${idKey}) ${comparison} (${query.keyset.at}::timestamptz, ${query.keyset.id}::text COLLATE "C")`);
@@ -97,7 +97,7 @@ export async function listPage<C extends Collection>(
   if (query?.cursor) {
     const cursor = cursorSchema.parse(JSON.parse(Buffer.from(query.cursor, 'base64url').toString('utf8')));
     const comparison = ascending ? currentSql`>` : currentSql`<`;
-    if (byTime) add(currentSql`(${sortKey}, id) ${comparison} (${cursor.at}::timestamptz, ${cursor.id})`);
+    if (byTime) add(currentSql`(${sortKey}, ${idKey}) ${comparison} (${cursor.at}::timestamptz, ${cursor.id}::text COLLATE "C")`);
     else add(currentSql`id ${comparison} ${cursor.id}`);
   }
   const result = await currentSql<Array<DocRow<Doc<C>>>>`

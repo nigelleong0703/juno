@@ -34,8 +34,12 @@ export interface ContainerInfo {
   nanoCpus: number;
   /** Memory limit in bytes (HostConfig.Memory); 0 means unlimited. */
   memoryBytes: number;
+  /** Capabilities added at creation (HostConfig.CapAdd), without the `CAP_` prefix and upper-case. */
+  capAdd: string[];
   /** Container start time (State.StartedAt); changes on every (re)start, never on pause. */
   startedAt: string;
+  /** When the container was created (top-level `Created`, ISO); '' when docker did not say. */
+  created: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -70,6 +74,8 @@ function parseInspect(id: string, stdout: string): ContainerInfo {
   const nanoCpus = typeof nano === 'number' && Number.isFinite(nano) ? nano : 0;
   const mem = isRecord(hostConfig) ? hostConfig['Memory'] : undefined;
   const memoryBytes = typeof mem === 'number' && Number.isFinite(mem) ? mem : 0;
+  const rawCaps = isRecord(hostConfig) ? hostConfig['CapAdd'] : undefined;
+  const capAdd = Array.isArray(rawCaps) ? rawCaps.filter((cap): cap is string => typeof cap === 'string').map((cap) => cap.toUpperCase().replace(/^CAP_/, '')) : [];
   const labels: Record<string, string> = {};
   const rawLabels = isRecord(config) ? config['Labels'] : undefined;
   if (isRecord(rawLabels)) {
@@ -80,7 +86,8 @@ function parseInspect(id: string, stdout: string): ContainerInfo {
   if (!status) throw failed(`could not read container ${shortId(id)}: docker inspect has no state`);
   const startedAt = isRecord(state) && typeof state['StartedAt'] === 'string' ? state['StartedAt'] : '';
   const imageName = isRecord(config) && typeof config['Image'] === 'string' ? config['Image'] : '';
-  return { id, status, image, imageName, labels, nanoCpus, memoryBytes, startedAt };
+  const created = typeof entry['Created'] === 'string' ? entry['Created'] : '';
+  return { id, status, image, imageName, labels, nanoCpus, memoryBytes, capAdd, startedAt, created };
 }
 
 function missingContainer(id: string, result: DockerResult): Error {

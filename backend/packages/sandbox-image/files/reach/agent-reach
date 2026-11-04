@@ -78,8 +78,8 @@ def browser_not_open():
 
 def own_chromium_port():
     """The debugging port of this agent's own browser. The shell gets JUNO_CDP_PORT with its screen (9222 + the display); a shell
-    without it (DISPLAY only) derives the port from DISPLAY the same way. The firewall lets this agent's user reach that port and
-    no other agent's (isolation.ts ownAgentCdpRules)."""
+    without it (DISPLAY only) derives the port from DISPLAY the same way. The port is on the loopback of this agent's own network
+    namespace, so it is this agent's and no other agent's (netns.ts)."""
     value = os.environ.get("JUNO_CDP_PORT", "")
     if value.isdigit():
         port = int(value)

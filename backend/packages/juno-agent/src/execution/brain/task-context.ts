@@ -10,7 +10,7 @@ import type { Store } from '../../contracts/index.js';
 import type { Todo } from '@agent-desktop/public-contracts';
 import { harnessText } from '../../modules/harness/loader.js';
 import { readTaskPlan, type TaskPlan } from '../../modules/tasks/state.js';
-import { childPlanFor, readRunBinding } from '../../modules/tasks/plan-binding.js';
+import { subagentPlanFor, readRunBinding } from '../../modules/tasks/plan-binding.js';
 
 function renderTodo(todo: Todo): string {
   const note = todo.status === 'blocked' && todo.note ? ' — ' + todo.note : '';
@@ -33,7 +33,7 @@ function renderPlan(plan: TaskPlan): string {
 
 /** The `## Current tasks` section, or an empty string when the run has no plan. */
 export async function buildTaskSection(store: Store, agentId: string, conversationId: string, sessionKey?: string): Promise<string> {
-  const childRunId = parseChildRunId(agentId, conversationId, sessionKey);
+  const childRunId = parseSubagentRunId(agentId, conversationId, sessionKey);
   if (childRunId === undefined) {
     let plan: TaskPlan | null;
     try {
@@ -45,13 +45,13 @@ export async function buildTaskSection(store: Store, agentId: string, conversati
     if (plan === null) return '';
     return renderPlan(plan);
   }
-  if (childRunId.length === 0) return unreadable(harnessText('tasks.child_binding_malformed'));
+  if (childRunId.length === 0) return unreadable(harnessText('tasks.subagent_binding_malformed'));
   try {
     const binding = await readRunBinding(store, agentId, conversationId, childRunId);
     if (binding.scope !== 'child' || binding.parentRunId === undefined) {
-      return unreadable(harnessText('tasks.child_binding_unreadable', { runId: childRunId }));
+      return unreadable(harnessText('tasks.subagent_binding_unreadable', { runId: childRunId }));
     }
-    const plan = await childPlanFor(store, binding.planId, agentId, conversationId, childRunId, binding.parentRunId);
+    const plan = await subagentPlanFor(store, binding.planId, agentId, conversationId, childRunId, binding.parentRunId);
     if (plan === null) return '';
     return renderPlan(plan);
   } catch (error) {
@@ -64,7 +64,7 @@ export async function buildTaskSection(store: Store, agentId: string, conversati
  * The child run id when sessionKey claims child scope, undefined for root scope,
  * empty string for a malformed or foreign child binding (fail closed, never root fallback).
  */
-function parseChildRunId(agentId: string, conversationId: string, sessionKey: string | undefined): string | undefined {
+function parseSubagentRunId(agentId: string, conversationId: string, sessionKey: string | undefined): string | undefined {
   const root = agentId + ':' + conversationId;
   if (sessionKey === undefined || sessionKey === root) return undefined;
   if (!sessionKey.includes('::child:')) return undefined;

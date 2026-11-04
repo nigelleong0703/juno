@@ -1,13 +1,13 @@
 /**
  * Runs the home sync and the UI writes (BACKEND §5.2, §5.4). The mirror rows are what the context reads; a sync makes them
- * equal to the computer (or the computer equal to them, for protected files) first. Nothing here depends on Restate: a
- * context build calls `loadHomeView` inside its journaled step, so a replay reads the log and never reaches the computer.
+ * equal to the computer (or the computer equal to them, for protected files) first. Nothing here depends on the runner: a
+ * context build calls `loadHomeView` without a sync (the mirror as it stands), and the sync runs when a computer tool of the run has run (tool-sync.ts).
  */
 import type { Store } from '../../contracts/index.js';
 import { runWithOwner } from '../../owner-context.js';
 import { auditInitiatorFor } from '../../execution/harness/logic/run-origin.js';
 import type { AgentHomeRow } from '../../contracts/storage.js';
-import type { HomeComputer, HomeSnapshot, PlatformSkill } from '../../ports/computer/index.js';
+import type { HomeComputer, HomeSnapshot } from '../../ports/computer/index.js';
 import { joinAgentsFile, renderHomeView, type HomeView } from './render.js';
 import { deleteRow, getRow, newRow, putRow, readRows, rowId } from './mirror.js';
 import { SYNC_MARKER, agentFilePath, agentIdOfPath, agentDir, dailyLogPath, homeHash, isOwnDailyLog, localDate } from './paths.js';
@@ -80,14 +80,8 @@ interface SyncOptions {
   divert: boolean;
 }
 
-interface SyncResult {
-  diverted: Diverted[];
-  /** The platform skills the snapshot listed (read-only in the image; not mirrored). */
-  platformSkills: PlatformSkill[];
-}
-
 /** Run the sync rules against a fresh snapshot, mutating `rows` to the final mirror. Throws when the computer fails. */
-async function syncRows(deps: HomeDeps & { home: HomeComputer }, ownerId: string, agentId: string, rows: Map<string, AgentHomeRow>, signal: AbortSignal, options: SyncOptions): Promise<SyncResult> {
+async function syncRows(deps: HomeDeps & { home: HomeComputer }, ownerId: string, agentId: string, rows: Map<string, AgentHomeRow>, signal: AbortSignal, options: SyncOptions): Promise<Diverted[]> {
   const { store, home } = deps;
   const platform = await refreshPlatformRows(deps, ownerId, agentId, rows);
   const snapshot: HomeSnapshot = await home.snapshot(agentId, signal);
@@ -142,7 +136,7 @@ async function syncRows(deps: HomeDeps & { home: HomeComputer }, ownerId: string
     await home.ensure(agentId, options.dailyLog, signal);
     if (!rows.has(options.dailyLog)) rows.set(options.dailyLog, await putRow(store, newRow(ownerId, options.dailyLog, '', 'platform', nowIso())));
   }
-  return { diverted, platformSkills: snapshot.platformSkills ?? [] };
+  return diverted;
 }
 
 /** Append lines an agent wrote for this user to their daily-log row; it reaches their computer as a pending write on their next sync. */
@@ -155,14 +149,20 @@ async function keepDiverted(store: Store, ownerId: string, entries: Diverted[]):
   }
 }
 
+/** How long a context build waits for the computer before it uses the mirror as it stands. */
+export const HOME_SYNC_BUDGET_MS = 2_000;
+/** Homes whose sync is running right now (key creator:agent): a second build does not start another one. */
+const syncsInFlight = new Map<string, Promise<unknown>>();
+
 /**
- * The agent's home as the context needs it. With `sync` the computer is consulted first (§5.3: once per run, then only after
- * file-changing tools); without, or when the computer cannot be reached, the mirror is used as it stands, so the agent keeps
- * its identity and the run goes on.
+ * The agent's home as the context needs it. With `sync` the computer is consulted first (§5.3: after the first computer tool of a run,
+ * then after file-changing tools; the context build itself passes no sync); without, or when the computer cannot be reached, the mirror is
+ * used as it stands, so the agent keeps its identity and the run goes on. The sync never wakes anything (BACKEND 7.3a): a paused, stopped, lost or not yet created
+ * computer is skipped, so a chat costs no compute time while the owner is away.
  */
 export async function loadHomeView(
   deps: HomeDeps,
-  input: { ownerId: string; agentOwnerId?: string; agentId: string; seq: number; sync: boolean; timeZone?: string; now?: Date; signal?: AbortSignal },
+  input: { ownerId: string; agentOwnerId?: string; agentId: string; seq: number; sync: boolean; timeZone?: string; now?: Date; signal?: AbortSignal; syncBudgetMs?: number },
 ): Promise<HomeView> {
   const { store, home } = deps;
   // The identity layer is the agent creator's; the user layer is the talker's (BACKEND §5.7). They are the same person unless a
@@ -174,24 +174,54 @@ export async function loadHomeView(
   const today = localDate(input.now ?? new Date(), input.timeZone);
   const dailyLog = dailyLogPath(today, input.agentId);
   let reachable = false;
-  let platformSkills: PlatformSkill[] = [];
   if (home !== undefined && input.sync) {
-    try {
+    const syncKey = creator + ':' + input.agentId;
+    if (syncsInFlight.has(syncKey)) {
+      // A sync of this home is still running (an earlier build ran out of patience): the mirror stands, the running one will update it.
+      reachable = rows.has(dailyLog);
+    } else {
+      const started = Date.now();
       const options = { dailyLog, divert: creator !== input.ownerId };
-      const synced = await inScope(() => syncRows({ ...deps, home }, creator, input.agentId, rows, input.signal ?? AbortSignal.timeout(60_000), options));
-      await keepDiverted(store, input.ownerId, synced.diverted);
-      platformSkills = synced.platformSkills;
-      reachable = true;
-    } catch (error) {
-      deps.log?.({ agentId: input.agentId, error: error instanceof Error ? error.message : String(error) }, 'home sync skipped: computer unavailable');
+      // A context build never wakes the computer (BACKEND 7.3a): it syncs one that is running and reads the mirror otherwise.
+      const awake = home.whileRunning?.() ?? home;
+      const sync = (async (): Promise<'synced' | 'failed' | 'asleep'> => {
+        try {
+          const synced = await inScope(() => syncRows({ ...deps, home: awake }, creator, input.agentId, rows, input.signal ?? AbortSignal.timeout(60_000), options));
+          await keepDiverted(store, input.ownerId, synced);
+          reachable = true;
+          return 'synced';
+        } catch (error) {
+          // `computer_asleep` is what a passive call gets from a computer that is not running (or has none yet): the mirror stands.
+          const asleep = awake !== home && errorCode(error) === 'computer_asleep';
+          deps.log?.({ agentId: input.agentId, error: error instanceof Error ? error.message : String(error) }, asleep ? 'home sync skipped: the computer is not running, the mirror stands' : 'home sync skipped: computer unavailable');
+          return asleep ? 'asleep' : 'failed';
+        } finally {
+          syncsInFlight.delete(syncKey);
+        }
+      })();
+      syncsInFlight.set(syncKey, sync);
+      // The first model call must not wait for a computer that is waking up (a cold sandbox took 40 to 110 s): past the budget the
+      // mirror stands in for this build, and the sync finishes in the background so the next build reads what it found.
+      let timer: NodeJS.Timeout | undefined;
+      const slow = new Promise<'slow'>((resolve) => { timer = setTimeout(() => { resolve('slow'); }, input.syncBudgetMs ?? HOME_SYNC_BUDGET_MS); });
+      const outcome = await Promise.race([sync, slow]);
+      clearTimeout(timer);
+      if (outcome === 'slow' || outcome === 'asleep') {
+        reachable = rows.has(dailyLog);
+      }
+      if (outcome === 'slow') deps.log?.({ agentId: input.agentId, waitedMs: Date.now() - started }, 'home sync is slow: using the mirror, the sync continues in the background');
     }
   }
+  // Without a sync (a context build never contacts the computer) the mirror stands: today's log counts as there when a past sync created it.
+  if (!input.sync) reachable = rows.has(dailyLog);
+  // A sync that outlived its budget keeps writing into `rows`; the view is rendered from a copy taken now.
+  const viewRows = new Map(rows);
   if (creator !== input.ownerId) {
     const talker = await readRows(store, input.ownerId, input.agentId);
-    for (const path of [...rows.keys()]) if (!path.startsWith('agents/')) rows.delete(path);
-    for (const [path, row] of talker) if (!path.startsWith('agents/')) rows.set(path, row);
+    for (const path of [...viewRows.keys()]) if (!path.startsWith('agents/')) viewRows.delete(path);
+    for (const [path, row] of talker) if (!path.startsWith('agents/')) viewRows.set(path, row);
   }
-  return renderHomeView(rows, input.agentId, input.seq, reachable ? dailyLog : '', platformSkills);
+  return renderHomeView(viewRows, input.agentId, input.seq, reachable ? dailyLog : '');
 }
 
 /**

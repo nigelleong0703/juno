@@ -17,6 +17,8 @@ export interface ScriptedTurn {
   step?: number;
   text?: string;
   toolCalls?: Array<{ id: string; name: string; arguments: Record<string, unknown> }>;
+  /** The provider rate-limits this turn's first call (429, announcing this many seconds), once; the next call plays the turn. */
+  fail?: { retryAfterSeconds: number };
 }
 
 /**
@@ -42,6 +44,22 @@ export function macDevice(actions: DeviceAction[] = ['files', 'shell']): DeviceD
 export const SCRIPTED_DEFAULT_REPLY = 'I am operating with the scripted model for testing.';
 
 export const stackUrls = () => inject('e2e');
+
+/**
+ * Let scenario time pass: agentd's clock (harness/clock.mjs) moves forward by `ms`, so messages sent after this read as that much later,
+ * and a timer or schedule item due in between fires. Returns once agentd has had time to pick the new offset up.
+ */
+export async function advanceClock(ms: number): Promise<void> {
+  const { clockFile } = stackUrls();
+  writeFileSync(clockFile, String((Number(readFileSync(clockFile, 'utf8')) || 0) + ms));
+  await execStack('UPDATE public.e2e_clock SET ms = ms + ?', [ms]);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+}
+
+/** The stack's "now" in ms: real time plus what `advanceClock` has moved it by (the offset also survives between runs of the harness). */
+export function stackNow(): number {
+  return Date.now() + (Number(readFileSync(stackUrls().clockFile, 'utf8')) || 0);
+}
 
 /** Better Auth rejects cookie-bearing POSTs without a matching Origin, so every request sends it. */
 function baseHeaders(cookie?: string): Record<string, string> {
@@ -482,6 +500,16 @@ export function lastModelImages(sessionKey: string): string[] {
   return calls.at(-1)?.images ?? [];
 }
 
+/**
+ * Every request the scripted model got for one session, oldest first: the tools it was offered, and the request's shape the way a cache sees it
+ * (`hashes` = one short hash per message in order, `chars` = the whole prompt, `toolResultChars` = just the tool results).
+ */
+export function modelRequests(sessionKey: string): Array<{ tools: string[]; hashes: string[]; chars: number; toolResultChars: number }> {
+  return readFileSync(stackUrls().scriptFile + '.tools.jsonl', 'utf8').split('\n').filter(Boolean)
+    .map((line) => JSON.parse(line) as { sessionKey: string; tools: string[]; shape?: { hashes: string[]; chars: number; toolResultChars: number } })
+    .flatMap((call) => (call.sessionKey === sessionKey && call.shape !== undefined ? [{ tools: call.tools, ...call.shape }] : []));
+}
+
 /** The client's typing ping (the apps send `true` at most once a second while composing, `false` on send/clear/blur). */
 export function typingPing(account: Account, conversationId: string, active: boolean): Promise<ApiResult> {
   return account.api('POST', `/v1/conversations/${conversationId}/typing`, { active });
@@ -593,9 +621,10 @@ export async function execStack(text: string, params: Array<string | number> = [
 }
 
 /** Runs the chat digest of every conversation of the account now (in a live stack the quiet window does it); the outcomes, comma-separated. */
-export async function runChatDigests(account: Account, agentId: string): Promise<{ outcome: string }> {
+export async function runChatDigests(account: Account, agentId: string, alsoConversationIds: readonly string[] = []): Promise<{ outcome: string }> {
   const listed = await account.api('GET', '/v1/conversations?limit=100');
-  const ids = ((listed.body?.items ?? []) as Array<{ id: string }>).map((conversation) => conversation.id);
+  // A conversation made only by observing a channel is not in the list (BACKEND 6.8): the case names it.
+  const ids = [...new Set([...((listed.body?.items ?? []) as Array<{ id: string }>).map((conversation) => conversation.id), ...alsoConversationIds])];
   const outcomes: string[] = [];
   for (const conversationId of ids) outcomes.push((await runNow('ChatDigest', conversationId, account.userId, { ownerId: account.userId, agentId, conversationId })).outcome);
   return { outcome: outcomes.join(',') };

@@ -43,6 +43,8 @@ export const appInstallationSchema = z.object({
   /** The account or workspace the owner recognises: the mailbox, the workspace name, the bot username. */
   label: z.string().min(1),
   status: appInstallationStatusSchema,
+  /** True when a tool was refused because the sign-in lacks a permission (403 insufficient_scope): the owner reconnects to grant it. A flag, not a status value, so older clients that decode `status` strictly keep working. */
+  needsScope: z.boolean().optional(),
   connectedAt: isoDateTimeSchema.optional(),
   /** Set for an agent's own bot (own Telegram, Slack or Discord bot): the installation belongs to this agent alone. */
   agentId: idSchema.optional(),

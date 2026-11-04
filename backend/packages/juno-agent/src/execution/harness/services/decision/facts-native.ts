@@ -2,6 +2,8 @@ import type { DecisionCategory, DecisionFacts, DecisionPlatform } from '@agent-d
 import { sentenceOf } from './approval-arg.js';
 import { DELETE, DELETE_SENTENCE, INSTALL, PURCHASE } from './patterns.js';
 import { MAC_DESKTOP_TOOLS } from './mac.js';
+import { phoneDecision } from '../../../../modules/tools/tools/phoneTools.js';
+import { reminderLabels } from '../../../../modules/tools/tools/phone/reminders.js';
 
 /** What the server can tell about a call of the agent's own tools (browser, screen, shell, Juno tools): the table below plus the real arguments. */
 export interface NativeDerivation {
@@ -76,22 +78,26 @@ function removalTargets(command: string): NonNullable<DecisionFacts['targets']> 
 const PHONE: DecisionPlatform = { kind: 'none', name: 'Your iPhone' };
 
 /**
- * Calendar and Reminders on the owner's iPhone: reads decide nothing, creating or changing is a "committing" decision, and a
- * delete or a change to a whole repeating series (span `future`) is "irreversible".
+ * Things on the owner's iPhone: reads decide nothing. The kind of decision a change is comes from the tool's own list
+ * (`phoneDecision`): "committing" for adding or changing, "irreversible" for a delete or a whole repeating series, "sensitive" for
+ * a private photo leaving the phone.
  */
 function derivePhone(toolName: string, input: Args): NativeDerivation {
   const facts: DecisionFacts = {};
-  const label = (str(input, 'title') || str(input, 'id')).slice(0, 160);
-  if (label !== '') facts.targets = [{ kind: 'record', label }];
+  const name = [str(input, 'givenName'), str(input, 'familyName')].filter((part) => part !== '').join(' ');
+  const label = (str(input, 'title') || name || str(input, 'accessory') || str(input, 'id')).slice(0, 160);
+  const reminders = reminderLabels(input);
+  if (reminders.length > 0) facts.targets = reminders.map((item) => ({ kind: 'record' as const, label: item }));
+  else if (label !== '') facts.targets = [{ kind: 'record', label }];
   const categories: DecisionCategory[] = [];
-  const removes = toolName === 'phone_calendar_delete_event' || toolName === 'phone_reminders_delete';
-  if (removes || str(input, 'span') === 'future') {
-    categories.push('irreversible');
-    facts.reversible = { value: 'no', source: 'verified' };
-  } else if (/_(create|update)/.test(toolName)) {
-    categories.push('committing');
+  const decision = phoneDecision(toolName, input);
+  if (decision !== undefined) categories.push(decision);
+  if (decision === 'irreversible') facts.reversible = { value: 'no', source: 'verified' };
+  if (decision === 'sensitive') {
+    facts.sensitive = [{ kind: 'private_files', label: 'A photo from your library', source: 'verified' }];
+    facts.reversible = { value: 'hard', how: 'The picture is copied into your files; delete it there', source: 'verified' };
   }
-  return { platform: PHONE, verb: categories.length === 0 ? 'read' : 'change', categories, facts, content: [str(input, 'title'), str(input, 'start'), str(input, 'due')].filter((part) => part !== '') };
+  return { platform: PHONE, verb: decision === undefined ? 'read' : 'change', categories, facts, content: [str(input, 'title'), name, str(input, 'start'), str(input, 'due'), ...reminders].filter((part) => part !== '') };
 }
 
 /** Tools of the agent's computer and of Juno itself. */

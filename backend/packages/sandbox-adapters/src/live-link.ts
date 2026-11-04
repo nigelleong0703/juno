@@ -17,7 +17,8 @@ import { join } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { createLinkHub, type LinkHub } from './link-hub.js';
 
-export const LIVE_BASE_IMAGE = 'juno-desktop:local';
+/** The desktop image the tests build on; `LIVE_BASE_IMAGE=<tag>` picks another (it must have iproute2 and nftables, as the next local image build does). */
+export const LIVE_BASE_IMAGE = process.env['LIVE_BASE_IMAGE'] || 'juno-desktop:local';
 const LINK_PACKAGE = join(import.meta.dirname, '..', '..', 'juno-link');
 
 export interface LiveLink {
@@ -65,7 +66,7 @@ export function liveImage(): string {
       env: { ...process.env, OUT: binary, TARGET: arch === 'aarch64' || arch === 'arm64' ? 'bun-linux-arm64' : 'bun-linux-x64' },
       stdio: ['ignore', 'ignore', 'inherit'],
     });
-    const tag = 'juno-live-desktop:' + createHash('sha256').update(readFileSync(binary)).digest('hex').slice(0, 12);
+    const tag = 'juno-live-desktop:' + createHash('sha256').update(readFileSync(binary)).update(LIVE_BASE_IMAGE).digest('hex').slice(0, 12);
     const have = execFileSync('docker', ['images', '-q', tag], { encoding: 'utf8' }).trim();
     if (have === '') {
       writeFileSync(
@@ -82,8 +83,8 @@ export function liveImage(): string {
 }
 
 /**
- * `liveImage()` plus what the next image build brings for Spaces (BACKEND 5.12): `unzip`, `iptables` and `acl` (template apt
- * lines), the spaces skill and gateway at the paths prepare_assets.py uses, and the pinned Bun from the SAME install-runtime.sh the
+ * `liveImage()` plus what the next image build brings for Spaces (BACKEND 5.12): `unzip` and `acl` (template apt
+ * line), the spaces skill and gateway at the paths prepare_assets.py uses, and the pinned Bun from the SAME install-runtime.sh the
  * build runs. Needs network (apt, GitHub). Cached by the tag it is built on.
  */
 export function liveSpacesImage(): string {
@@ -99,7 +100,7 @@ export function liveSpacesImage(): string {
         join(context, 'Dockerfile'),
         [
           `FROM ${base}`,
-          'RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends unzip iptables acl >/dev/null && rm -rf /var/lib/apt/lists/*',
+          'RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends unzip acl >/dev/null && rm -rf /var/lib/apt/lists/*',
           'COPY skills-spaces /opt/juno/skills/spaces',
           'COPY spaces /opt/juno/spaces',
           'RUN chown -R root:root /opt/juno && chmod -R a+rX /opt/juno && chmod 0755 /opt/juno/skills/spaces/spaces_tool.py /opt/juno/spaces/install-runtime.sh && sh /opt/juno/spaces/install-runtime.sh',

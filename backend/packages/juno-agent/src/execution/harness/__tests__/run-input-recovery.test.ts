@@ -5,12 +5,12 @@
  */
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { AssistantTurn, Brain, BrainContext, ToolRegistry, WakeEvent } from '../../../contracts/index.js';
 import type { StoredRequest } from '../../../contracts/requests.js';
 import type { Run } from '@agent-desktop/public-contracts';
-import { createRunCancellation, NEVER_CANCELLED } from '../services/cancel.js';
+import { NEVER_CANCELLED } from '../services/cancel.js';
 import { awaitUser, INTERRUPTED_BY_MESSAGE } from '../services/run-input.js';
 import type { RunContext, RunInput, RunServices } from '../services/run-types.js';
 
@@ -56,12 +56,12 @@ function registry(): ToolRegistry {
 function runContext(): RunContext {
   return {
     rand: { uuidv4: () => 'id-1' },
-    run: <T>(_name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
-    awakeable: <T>(): { id: string; promise: RestatePromise<T> } => ({
+    run: <T>(_name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()),
+    awakeable: <T>(): { id: string; promise: DurablePromise<T> } => ({
       id: 'awake-1',
-      promise: RestatePromise.resolve(new Promise<T>(() => {})),
+      promise: DurablePromise.resolve(new Promise<T>(() => {})),
     }),
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
 }
 
@@ -131,9 +131,9 @@ describe('awaitUser race recovery', () => {
     const baseContext = runContext();
     const context: RunContext = {
       ...baseContext,
-      awakeable: <T>(): { id: string; promise: RestatePromise<T> } => ({
+      awakeable: <T>(): { id: string; promise: DurablePromise<T> } => ({
         id: 'awake-approval',
-        promise: RestatePromise.resolve({ action: 'approve', scope: 'once' } as T),
+        promise: DurablePromise.resolve({ action: 'approve', scope: 'once' } as T),
       }),
     };
     await awaitUser(context, services, input, 'run-1', 3, { reason: 'user', awakeableId: 'req_stp-1' }, NEVER_CANCELLED, { appendAnswer: false });
@@ -189,7 +189,7 @@ describe('awaitUser race recovery', () => {
 
   it('ends the wait as interrupted when a message resolves the awakeable, leaving the request pending', async () => {
     const { store, services } = await setup(question('req-5', { kind: 'approval' }));
-    const ctx: RunContext = { ...runContext(), awakeable: <T>() => ({ id: 'awake-5', promise: RestatePromise.resolve(INTERRUPTED_BY_MESSAGE as T) }) };
+    const ctx: RunContext = { ...runContext(), awakeable: <T>() => ({ id: 'awake-5', promise: DurablePromise.resolve(INTERRUPTED_BY_MESSAGE as T) }) };
 
     const outcome = await awaitUser(ctx, services, input, 'run-1', 0, { awakeableId: 'req-5' }, NEVER_CANCELLED);
 
@@ -214,22 +214,23 @@ describe('awaitUser race recovery', () => {
     expect((await store.get('runs', 'run-1'))?.status).toBe('running');
   });
 
-  it('ends a reconciliation wait on stop without changing unknown into a decision', async () => {
-    const pending = question('req-recovery-stop', {
-      reconciliation: { stepId: 'step-old', tool: 'send_message', fingerprint: 'a'.repeat(64), reason: 'missing result', state: 'pending' },
-    });
-    const { store, services } = await setup(pending);
-    const cancellation = createRunCancellation({
-      peek: async () => false,
-      get: () => RestatePromise.resolve(true),
-    });
-
-    const outcome = await awaitUser(runContext(), services, input, 'run-1', 0, { awakeableId: pending.id }, cancellation, { appendAnswer: false });
-
-    expect(outcome).toBe('cancelled');
-    expect((await store.get('requests', pending.id))).toMatchObject({
-      status: 'pending', interrupted: true, awakeableId: '', reconciliation: { state: 'pending' },
-    });
-    expect(await transcript(store)).toBe('[]');
+  it('tells the computer holds the run is parked on the person while it waits, and not parked once it is answered', async () => {
+    const { services } = await setup(approval('req_stp-2'));
+    const log: string[] = [];
+    const answer: { resolve: (value: unknown) => void } = { resolve: () => undefined };
+    const context: RunContext = {
+      ...runContext(),
+      awakeable: <T>(): { id: string; promise: DurablePromise<T> } => ({
+        id: 'awake-approval',
+        promise: DurablePromise.resolve(new Promise<T>((resolve) => { answer.resolve = resolve as (value: unknown) => void; })),
+      }),
+    };
+    const held: RunServices = { ...services, computerHolds: { begin: () => undefined, end: () => undefined, parked: (runId) => { log.push(`parked ${runId}`); return () => { log.push(`answered ${runId}`); }; } } };
+    const waiting = awaitUser(context, held, input, 'run-1', 3, { reason: 'user', awakeableId: 'req_stp-2' }, NEVER_CANCELLED, { appendAnswer: false });
+    await sleep(20);
+    expect(log).toEqual(['parked run-1']);
+    answer.resolve({ action: 'approve', scope: 'once' });
+    await waiting;
+    expect(log).toEqual(['parked run-1', 'answered run-1']);
   });
 });

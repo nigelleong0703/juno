@@ -158,6 +158,7 @@ export async function startApi(env: NodeJS.ProcessEnv = process.env): Promise<Ru
     auth,
     agentdUrl: config.AGENTD_URL,
     internalToken: config.INTERNAL_AGENTD_TOKEN,
+    hostedMcpToken: config.HOSTED_MCP_TOKEN,
     adminToken: config.ADMIN_TOKEN,
     store,
     blobs,

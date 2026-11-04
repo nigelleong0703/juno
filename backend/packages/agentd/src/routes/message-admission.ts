@@ -16,6 +16,7 @@ import { createLogger } from '@agent-desktop/log';
 import { createHash, randomUUID } from 'node:crypto';
 import { emitItemAdded } from 'juno-agent/execution/conversation-activity';
 import { emitAgentStatus } from 'juno-agent/execution/agent-status';
+import type { VOICE_CHANNEL } from 'juno-agent/execution/voice-channel';
 import { ownerStore } from '../owner-scope.js';
 import type { AgentdDeps } from './index.js';
 
@@ -71,6 +72,9 @@ export interface AdmissionFailure {
   code: string;
   message: string;
 }
+
+/** How the message arrived when it is not the app's text composer: an internal field of the wake (never of the public item), set only by a trusted caller. */
+export type AdmissionChannel = typeof VOICE_CHANNEL;
 
 /** An admitted message, with the run it is in when exactly one agent was woken and Session named it (null otherwise). */
 export type AdmissionResult = { ok: true; item: UserMessageItem; runId: string | null } | { ok: false; error: AdmissionFailure };
@@ -256,11 +260,12 @@ export async function admitUserMessage(
   conv: Conversation,
   ownerId: string,
   payload: ComposerPayload,
-  options?: { messageId?: string },
+  options?: { messageId?: string; channel?: AdmissionChannel },
 ): Promise<AdmissionResult> {
   const messageId = options?.messageId;
-  if (messageId === undefined) return admitUnlocked(deps, conv, ownerId, payload, undefined);
-  return withKeyLock('items:' + messageId, () => admitUnlocked(deps, conv, ownerId, payload, messageId));
+  const channel = options?.channel;
+  if (messageId === undefined) return admitUnlocked(deps, conv, ownerId, payload, undefined, channel);
+  return withKeyLock('items:' + messageId, () => admitUnlocked(deps, conv, ownerId, payload, messageId, channel));
 }
 
 async function admitUnlocked(
@@ -269,6 +274,7 @@ async function admitUnlocked(
   ownerId: string,
   payload: ComposerPayload,
   messageId: string | undefined,
+  channel: AdmissionChannel | undefined,
 ): Promise<AdmissionResult> {
   const mentions = payload.mentions || [];
   const resolvedAttachments = await resolveAttachments(deps, ownerId, payload.attachments || []);
@@ -305,6 +311,15 @@ async function admitUnlocked(
         ? 'everyone'
         : 'member';
   const runIds: Array<string | undefined> = [];
+  // An @all wakes everyone at once; each wake lists who else got it so the agents agree who opens when asked to talk to each other.
+  const roomPeers: Array<{ id: string; name: string }> = [];
+  if (addressed === 'everyone' && targets.length > 1) {
+    for (const agentId of targets) {
+      const agent = await deps.store.get('agents', agentId);
+      const name = agent !== null && typeof agent === 'object' && 'name' in agent && typeof agent.name === 'string' ? agent.name : '';
+      if (name !== '') roomPeers.push({ id: agentId, name });
+    }
+  }
   for (const agentId of targets) {
     const wake: Omit<WakeEvent, 'status'> = {
       id: 'wk-' + item.id + '-' + agentId,
@@ -316,7 +331,7 @@ async function admitUnlocked(
       origin: { type: 'user' },
       trusted: true,
       priority: 'user',
-      payload: { text: payload.text || '', itemId: item.id, addressed, ...(attachmentIds.length === 0 ? {} : { attachmentIds }) },
+      payload: { text: payload.text || '', itemId: item.id, addressed, ...(channel === undefined ? {} : { channel }), ...(roomPeers.length > 1 ? { roomPeers } : {}), ...(attachmentIds.length === 0 ? {} : { attachmentIds }) },
       at: now,
     };
     // Every authenticated user wake steers: a message sent while this conversation's run is busy is

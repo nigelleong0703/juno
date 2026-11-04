@@ -33,6 +33,20 @@ export type AudienceWake = Pick<WakeEvent, 'ownerId' | 'origin' | 'trusted'> & P
  */
 export const CHAIN_OWNER_ONLY = 'chainOwnerOnly';
 
+/** Whether the chain a wake continues (its parent run, its child run, the run that started the work) was started by a non-owner in a platform chat (BACKEND 6.8). */
+async function startedByOthers(store: Store, wakes: readonly AudienceWake[]): Promise<boolean> {
+  for (const wake of wakes) {
+    for (const key of ['parentRunId', 'childRunId', 'originRunId']) {
+      const id = wake.payload?.[key];
+      if (typeof id !== 'string' || id === '') continue;
+      const run = await store.get('runs', id).catch(() => null);
+      const root = run === null ? undefined : run.rootOrigin ?? run.origin;
+      if (root?.type === 'channel' && root.speaker !== 'owner') return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Who a run serves, the one rule for what the agent may see or save of the profile and of the memory (BACKEND 5.3). Owner-only
  * needs all of: every wake's requester is the agent's owner, and a user-origin wake names no one else; a peer wake (another
@@ -49,10 +63,12 @@ export async function profileAudience(store: Store, opts: { agentId: string; con
   const profileOwnerId = agent === null ? undefined : readString(agent, 'ownerId') ?? readString(agent, 'createdBy');
   const shared = { profileOwnerId, ownerOnly: false };
   if (profileOwnerId === undefined) return shared;
+  // A child task, or the run that wraps its work up, started by someone other than the owner is that person's run: shared, whatever chat it is in.
+  if (await startedByOthers(store, opts.wake)) return shared;
   for (const event of opts.wake) {
     if (event.ownerId !== profileOwnerId) return shared;
     if (event.origin.type === 'user' && event.origin.id !== undefined && event.origin.id !== profileOwnerId) return shared;
-    if (event.origin.type === 'agent' && event.kind !== 'child_task' && event.payload?.[CHAIN_OWNER_ONLY] !== true) return shared;
+    if (event.origin.type === 'agent' && event.kind !== 'subagent_task' && event.payload?.[CHAIN_OWNER_ONLY] !== true) return shared;
   }
   const conversation = await store.get('conversations', opts.conversationId).catch(() => null);
   if (conversation === null) {

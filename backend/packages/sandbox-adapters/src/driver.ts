@@ -6,7 +6,7 @@
  * A driver never runs a command in the computer after boot. The one allowed exception is writing the link config at create,
  * for a platform that can neither inject environment variables nor files into a new machine (E2B), and it says so.
  */
-import type { E2bBinding } from '@agent-desktop/contracts';
+import { DEFAULT_IDLE_PAUSE_MINUTES, type E2bBinding } from '@agent-desktop/contracts';
 import type { ComputerHostSpec, ComputerMetrics, ProviderKind } from './types.js';
 import type { SandboxRuntime } from './runtime.js';
 
@@ -35,6 +35,12 @@ export type MachineState = 'running' | 'suspended' | 'stopped' | 'gone';
 
 export interface LifecycleDriver {
   readonly kind: ProviderKind;
+  /**
+   * Called when computerd first looks at a running computer (and after a cold start), before anything else is done to it. A driver
+   * whose computers can be older than what the platform needs removes the computer and throws `StaleComputerError`, so the normal
+   * recovery creates a new one on the same durable storage.
+   */
+  assertCurrent?(binding: E2bBinding, signal: AbortSignal): Promise<void>;
   /** Create and start a computer from the image; it dials computerd by itself. */
   create(spec: CreateSpec, signal: AbortSignal): Promise<Pick<E2bBinding, 'sandboxId' | 'template'> & { linkId?: string }>;
   /** (`linkId`: set when an existing computer was adopted; it dials with ITS link id, not the one in `spec`.) */
@@ -67,7 +73,7 @@ export interface LifecycleDriver {
 export function idleWindowMs(idlePauseMinutes: number | undefined, lifetimeMs: number): number {
   const minute = 60_000;
   const ceiling = Math.max(lifetimeMs, minute);
-  const requested = (idlePauseMinutes ?? 30) * minute;
+  const requested = (idlePauseMinutes ?? DEFAULT_IDLE_PAUSE_MINUTES) * minute;
   if (!Number.isFinite(requested) || requested <= 0) return ceiling;
   return Math.min(Math.max(requested, minute), ceiling);
 }

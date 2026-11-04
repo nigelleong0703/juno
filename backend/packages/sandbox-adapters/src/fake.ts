@@ -11,7 +11,7 @@ import { mkdtempSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { BrowserDownError, failed, noScreen } from './errors.js';
+import { BrowserDownError, ComputerAsleepError, failed, noScreen } from './errors.js';
 import type { SandboxRuntime } from './runtime.js';
 import type { ComputerProvider } from './provider.js';
 import type { BrowserInput, BrowserResult } from './browser.js';
@@ -72,6 +72,8 @@ export interface FakeProvider extends ComputerProvider {
   homeDir(): Promise<string>;
   /** handle -> owning agent for the in-memory process double. */
   readonly processScopes: Map<string, string>;
+  /** The ids of the holds (BACKEND §7.3b) in place right now; the fake has no idle timer, tests read this. */
+  readonly holds: Set<string>;
   /** Presences set by a shell command or a file write, asserted by tests. */
   readonly state: {
     pauseCalls: number;
@@ -91,13 +93,14 @@ export function createFakeProvider(opts: FakeProviderOptions = {}): FakeProvider
   const files = opts.files ?? new Map<string, string>();
   const state: FakeProvider['state'] = { pauseCalls: 0, connectCalls: 0, browserOutages: 0, clipboard: { kind: 'empty' }, pasted: [] };
   const processes = createFakeProcesses();
+  const holds = new Set<string>();
   let allocation = 0;
   let tempDirs = 0;
   let paused = false;
   let homePath: string | undefined;
   /**
    * Spaces: the fake runs the REAL gateway script (under Node) on a loopback port with its own routes file. What it cannot do:
-   * the root-only file, iptables, and the uid check of the listener. `registerSpace` only checks that something on this host
+   * the root-only file, the agent's network namespace and its bridge, and the uid check of the listener. `registerSpace` only checks that something on this host
    * listens on the port (tests start a stub app there); the real check is covered by the LIVE_DOCKER test.
    */
   let gateway: { url: string; routesFile: string; child: ChildProcess } | undefined;
@@ -114,6 +117,12 @@ export function createFakeProvider(opts: FakeProviderOptions = {}): FakeProvider
     for (let attempt = 0; attempt < 50 && !(await hostPortListens(port)); attempt += 1) await new Promise((done) => setTimeout(done, 100));
     return gateway;
   }
+  /** An active use of a paused computer resumes it (counted in `state.connectCalls`, like `connect`). */
+  const wake = (): void => {
+    if (!paused) return;
+    state.connectCalls += 1;
+    paused = false;
+  };
   const homeSync = (): string => (homePath ??= mkdtempSync(join(tmpdir(), 'fake-computer-')));
   const homeDir = async (): Promise<string> => homeSync();
   /** A real shell and filesystem under a temp directory, so the home scripts are exercised for real. */
@@ -184,6 +193,15 @@ export function createFakeProvider(opts: FakeProviderOptions = {}): FakeProvider
     files,
     processScopes: processes.scopes,
     state,
+    holds,
+
+    hold(holdId) {
+      holds.add(holdId);
+    },
+
+    release(holdId) {
+      holds.delete(holdId);
+    },
 
     async create() {
       allocation += 1;
@@ -201,6 +219,7 @@ export function createFakeProvider(opts: FakeProviderOptions = {}): FakeProvider
     },
 
     async ensureScreen(_binding, request) {
+      wake();
       const existing = screens.get(request.displayNo);
       if (existing) return existing;
       if (screens.size >= MAX_LIVE_SCREENS) throw failed('too many live screens');
@@ -290,12 +309,16 @@ export function createFakeProvider(opts: FakeProviderOptions = {}): FakeProvider
       throw failed('the fake computer has no screen stream');
     },
 
-    async withRuntime(_binding, _signal, fn, _options) {
+    async withRuntime(_binding, _signal, fn, options) {
+      // Like the linked provider: an active call resumes a paused computer, a passive one leaves it asleep.
+      if (options?.passive === true && paused) throw new ComputerAsleepError('the fake computer is paused');
+      wake();
       return fn(runtime);
     },
 
     // The double's files are the in-memory map the file actions use, so a copy sees what files.write wrote.
     async withTransfer(_binding, _agentId, _signal, fn) {
+      wake();
       const unsupported = (): never => {
         throw failed('the fake computer copies files only');
       };

@@ -4,7 +4,7 @@ import { record, sendJson, str } from '../http.js';
 import { downloadFile, sizeProblem } from '../files.js';
 import { fetchSlackHistory } from './history.js';
 
-const BASE = 'https://slack.com/api/';
+import { slackApiBase } from './base.js';
 
 /** Slack-hosted file URLs; the bot token is only sent to these. */
 const FILE_HOSTS = ['files.slack.com'];
@@ -12,7 +12,7 @@ const FILE_HOSTS = ['files.slack.com'];
 /** One Web API call with form fields (the upload-URL calls take form-encoded bodies); never throws. */
 async function slackForm(fetchFn: typeof fetch, token: string, method: string, fields: Record<string, string>): Promise<Record<string, unknown>> {
   try {
-    const response = await fetchFn(BASE + method, { method: 'POST', headers: { authorization: 'Bearer ' + token }, body: new URLSearchParams(fields) });
+    const response = await fetchFn(slackApiBase() +method, { method: 'POST', headers: { authorization: 'Bearer ' + token }, body: new URLSearchParams(fields) });
     return record(await response.json().catch(() => null));
   } catch {
     return { ok: false, error: 'request_failed' };
@@ -23,7 +23,7 @@ async function slackForm(fetchFn: typeof fetch, token: string, method: string, f
  * Files out, the three-step upload: `files.getUploadURLExternal` (a URL and an id), the bytes POSTed to that URL, then
  * `files.completeUploadExternal` shares the file to the channel (in its thread when the thread names one). Scope files:write.
  */
-async function sendSlackFile(fetchFn: typeof fetch, auth: AdapterAuth, chat: { chatId: string; threadId: string }, file: LocalFile, caption?: string): Promise<AdapterResult<{ messageId?: string }>> {
+export async function sendSlackFile(fetchFn: typeof fetch, auth: AdapterAuth, chat: { chatId: string; threadId: string }, file: LocalFile, caption?: string): Promise<AdapterResult<{ messageId?: string }>> {
   const tooBig = sizeProblem(file.bytes);
   if (tooBig !== undefined) return tooBig;
   const ticket = await slackForm(fetchFn, auth.token, 'files.getUploadURLExternal', { filename: file.name, length: String(file.bytes.length) });
@@ -39,7 +39,7 @@ async function sendSlackFile(fetchFn: typeof fetch, auth: AdapterAuth, chat: { c
   if (!uploaded.ok) return { status: 'failed', error: 'Slack upload failed: HTTP ' + String(uploaded.status) };
   const sep = chat.threadId.indexOf(':');
   const threadTs = sep === -1 ? undefined : chat.threadId.slice(sep + 1);
-  const done = await sendJson(fetchFn, 'POST', BASE + 'files.completeUploadExternal', { authorization: 'Bearer ' + auth.token }, {
+  const done = await sendJson(fetchFn, 'POST', slackApiBase() +'files.completeUploadExternal', { authorization: 'Bearer ' + auth.token }, {
     files: [{ id: fileId, title: file.name }],
     channel_id: chat.chatId,
     ...(threadTs === undefined || threadTs === '' ? {} : { thread_ts: threadTs }),
@@ -52,7 +52,7 @@ async function sendSlackFile(fetchFn: typeof fetch, auth: AdapterAuth, chat: { c
 async function reaction(fetchFn: typeof fetch, auth: AdapterAuth, method: 'reactions.add' | 'reactions.remove', message: MessageRef, emoji: string): Promise<AdapterResult> {
   const name = platformEmoji(SLACK_REACTIONS, emoji);
   if (name === undefined) return emojiSkipped('Slack', emoji);
-  const res = await sendJson(fetchFn, 'POST', BASE + method, { authorization: 'Bearer ' + auth.token }, { channel: message.chatId, timestamp: message.messageId, name });
+  const res = await sendJson(fetchFn, 'POST', slackApiBase() +method, { authorization: 'Bearer ' + auth.token }, { channel: message.chatId, timestamp: message.messageId, name });
   const error = str(res.body['error']);
   if (res.ok && res.body['ok'] === true) return { status: 'ok', value: undefined };
   return error === 'already_reacted' || error === 'no_reaction' ? { status: 'ok', value: undefined } : { status: 'failed', error: 'Slack reaction failed: ' + (error ?? String(res.status)) };
@@ -78,7 +78,7 @@ export async function slackChannelExternal(fetchFn: typeof fetch, token: string,
   if (hit !== undefined && Date.now() - hit.at < EXTERNAL_TTL_MS) return { external: hit.external, missingScope: hit.missingScope };
   let body: Record<string, unknown>;
   try {
-    const response = await fetchFn(BASE + 'conversations.info?channel=' + encodeURIComponent(channelId), { headers: { authorization: 'Bearer ' + token } });
+    const response = await fetchFn(slackApiBase() +'conversations.info?channel=' + encodeURIComponent(channelId), { headers: { authorization: 'Bearer ' + token } });
     body = record(await response.json().catch(() => null));
   } catch {
     return { external: true, missingScope: false };
@@ -102,7 +102,7 @@ export const SLACK_REACTIONS: Readonly<Record<string, string>> = {
 };
 
 /** What a Slack chat can do: no input fields in cards, only the reactions above. */
-export const slackCapabilities = () => declareCapabilities({ ui: { fields: false }, reactions: { mode: 'limited', allowed: Object.keys(SLACK_REACTIONS) } });
+export const slackCapabilities = () => declareCapabilities({ ui: { fields: false }, hears: 'all', reactions: { mode: 'limited', allowed: Object.keys(SLACK_REACTIONS) } });
 
 /** Slack's capability layer. Its communication layer is `createSlackSender` and the Events API (agentd). */
 export const slackAbilities: ChannelAbilities = {

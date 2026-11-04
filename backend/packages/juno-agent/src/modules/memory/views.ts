@@ -61,7 +61,7 @@ interface Page {
   heading: string;
   /** Lines every agent sees. */
   shared: string[];
-  /** A person's page only: the lines one agent keeps for itself, under its own `## <name>（<id>）` section. */
+  /** The lines one agent keeps for itself, under its own `## <name>（<id>）` section (every view, BACKEND 5.4a). */
   sections: Map<string, string[]>;
 }
 
@@ -94,7 +94,7 @@ export async function renderViews(deps: HomeDeps & { memory: MemoryGraph }, inpu
     const author = item.saidByAgentId === null ? undefined : authors.get(item.saidByAgentId);
     const line = itemLine(item, author === undefined || item.saidByAgentId === null ? '' : noteAuthorSuffix(author, item.saidByAgentId));
     if (item.agentId === null) page.shared.push(line);
-    else if (PERSON_PAGE.test(path)) page.sections.set(item.agentId, [...(page.sections.get(item.agentId) ?? []), line]);
+    else page.sections.set(item.agentId, [...(page.sections.get(item.agentId) ?? []), line]);
   }
   for (const [path, page] of pages) {
     const out = [page.heading];

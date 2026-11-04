@@ -8,6 +8,7 @@ import type { Store } from 'juno-agent/contracts';
 import { MARKER as HOME_MARKER, migrateHomeFiles } from 'juno-agent/modules/home/migrate';
 import { MARKER as GROUP_MARKER, migrateGroupNotes } from 'juno-agent/modules/groups/migrate';
 import { MARKER as MEMORY_ITEMS_MARKER, migrateMemoryItems } from 'juno-agent/modules/memory/migrate';
+import { MARKER as MEMORY_PER_AGENT_MARKER, migrateAgentMemory } from 'juno-agent/modules/memory/agent-owner-migrate';
 import type { MemoryGraph } from 'juno-agent/modules/memory/graph';
 import { BACKFILL_MARKER as OWNER_MARKER, backfillOwnerPeople } from 'juno-agent/modules/memory/owner';
 import { MIGRATION_MARKER as PEOPLE_MARKER, migratePeoplePages } from 'juno-agent/modules/people/pages';
@@ -15,6 +16,12 @@ import { BACKFILL_MARKER as IDENTITY_MARKER, backfillPeople } from '../channels/
 import { MARKER as SELF_BOTS_MARKER, migrateSelfBots } from '../channels/self-bots.js';
 import { MARKER as APPS_MARKER, migrateApps } from '../apps/migrate.js';
 import { backfillLabels, LABELS_MARKER } from '../apps/labels.js';
+import { MARKER as KEYLESS_MARKER, migrateKeylessConnections } from '../apps/keyless-migrate.js';
+import { MARKER as HOSTED_MARKER, migrateHostedEndpoints } from '../apps/hosted-endpoints-migrate.js';
+import { MARKER as RECOVERY_MARKER, migrateRecoveryCards } from 'juno-agent/modules/tasks/recovery-migrate';
+import { MARKER as REMOVED_MARKER, UNCONNECTABLE_MARKER, migrateRemovedConnectors, migrateRemovedUnconnectable } from '../apps/removed-connectors-migrate.js';
+import { MARKER as ORPHAN_MARKER, migrateOrphanShellTasks } from 'juno-agent/modules/tasks/orphan-tasks-migrate';
+import type { ComputerClient } from 'juno-agent/computer';
 import type { Migration } from './runner.js';
 
 /** What the migrations read. The identity and memory parts exist only with Postgres; a migration that needs one is not applicable without it. */
@@ -23,6 +30,8 @@ export interface MigrationDeps {
   raw?: DurableDb;
   identity?: Identity;
   memory?: MemoryGraph;
+  /** The agents' sandbox client; absent without Postgres (no runner). */
+  computer?: ComputerClient;
 }
 
 export const migrations: readonly Migration<MigrationDeps>[] = [
@@ -109,6 +118,77 @@ export const migrations: readonly Migration<MigrationDeps>[] = [
     run: async ({ store }) => {
       const bots = await migrateSelfBots(store);
       return { skipped: bots.skipped, counts: { disabled: bots.disabled } };
+    },
+  },
+  {
+    // A keyless connector (public YouTube) made before the 2026-10-19 split still held a Google sign-in whose death made it "reconnect": the sign-in is dropped.
+    name: 'keyless-no-sign-in',
+    marker: KEYLESS_MARKER,
+    onFailure: 'continue',
+    run: async ({ store }) => {
+      const keyless = await migrateKeylessConnections(store);
+      return { skipped: keyless.skipped, counts: { cleaned: keyless.cleaned } };
+    },
+  },
+  {
+    // The "Check an uncertain action" cards end: waiting ones are withdrawn (their runs ended cleanly), answered ones keep a renamed link.
+    name: 'uncertain-action-cards',
+    marker: RECOVERY_MARKER,
+    onFailure: 'continue',
+    run: async ({ store }) => {
+      const cards = await migrateRecoveryCards(store);
+      return { skipped: cards.skipped, counts: { withdrawn: cards.withdrawn, renamed: cards.renamed, runsEnded: cards.runsEnded } };
+    },
+  },
+  {
+    // The connections to the MCP servers our own gateway hosts stored a full URL; only the path is kept, the origin (BETTER_AUTH_URL) is added at use (BACKEND 10.18.5).
+    name: 'hosted-endpoint-paths',
+    marker: HOSTED_MARKER,
+    onFailure: 'continue',
+    run: async ({ store }) => {
+      const hosted = await migrateHostedEndpoints(store);
+      return { skipped: hosted.skipped, counts: { rewritten: hosted.rewritten } };
+    },
+  },
+  {
+    // The Singapore transport and weather connectors are gone: their connections, per-agent toggles and catalog rows are deleted (2026-11-02).
+    name: 'removed-sg-connectors',
+    marker: REMOVED_MARKER,
+    onFailure: 'continue',
+    run: async ({ store }) => {
+      const removed = await migrateRemovedConnectors(store);
+      return { skipped: removed.skipped, counts: { connections: removed.connections, toggles: removed.toggles, catalog: removed.catalog } };
+    },
+  },
+  {
+    // Hevy, Strava, Salesforce, Spotify, Shopify and Dropbox left the catalog (an ordinary person cannot connect them with one tap): their rows are deleted (2026-11-02).
+    name: 'removed-unconnectable-connectors',
+    marker: UNCONNECTABLE_MARKER,
+    onFailure: 'continue',
+    run: async ({ store }) => {
+      const removed = await migrateRemovedUnconnectable(store);
+      return { skipped: removed.skipped, counts: { connections: removed.connections, toggles: removed.toggles, catalog: removed.catalog } };
+    },
+  },
+  {
+    // Shell tasks left `running` by a process that had exited, or whose computer was replaced (local Docker to the server's), end with a reason (2026-11-02).
+    name: 'orphan-shell-tasks',
+    marker: ORPHAN_MARKER,
+    onFailure: 'continue',
+    run: async ({ store, computer }) => {
+      const orphans = await migrateOrphanShellTasks(store, computer);
+      return { skipped: orphans.skipped, counts: { settled: orphans.settled, stillRunning: orphans.stillRunning, unreachable: orphans.unreachable } };
+    },
+  },
+  {
+    // Memory is per agent (BACKEND 5.4a): each item goes to the agent that learned it (note author, or the one agent of the chat a claim came from); the rest stays shared.
+    name: 'memory-per-agent',
+    marker: MEMORY_PER_AGENT_MARKER,
+    onFailure: 'continue',
+    run: async ({ store, memory }) => {
+      if (memory === undefined) return { skipped: true };
+      const moved = await migrateAgentMemory({ store, memory });
+      return { skipped: moved.skipped, counts: { owners: moved.owners, byNote: moved.byNote, byConversation: moved.byConversation, keptShared: moved.keptShared } };
     },
   },
 ];

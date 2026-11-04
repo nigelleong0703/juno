@@ -27,6 +27,8 @@ const CALLBACK = PUBLIC_URL + '/oauth/mcp/callback';
 /** The phone reaches the API on another origin (Tailscale serve), listed in PUBLIC_ORIGINS. */
 const PHONE_ORIGIN = 'https://phone.test:8443';
 const YOUTUBE_KEY = 'test-youtube-key';
+/** The credential of the hosted connectors: agentd's MCP client reads it from the environment, the api's handlers from their deps. */
+const HOSTED_TOKEN = 'hosted-token';
 
 interface Fixture { base: string; drafts: string[]; scopes: string[]; redirects: { authorize: string; token: string }[]; youtubeQueries: URLSearchParams[]; tasks: Record<string, unknown>[]; close(): Promise<void> }
 
@@ -171,14 +173,14 @@ describe('Google consumer connectors e2e (loopback Google)', () => {
   let routed: typeof fetch;
   const previousKey = process.env.SECRETS_KEY;
   const previousPrivateHosts = process.env.MCP_ALLOW_PRIVATE_HOSTS;
-  const previousYoutube = { key: process.env.YOUTUBE_API_KEY, url: process.env.BETTER_AUTH_URL, token: process.env.INTERNAL_AGENTD_TOKEN };
+  const previousYoutube = { key: process.env.YOUTUBE_API_KEY, url: process.env.BETTER_AUTH_URL, token: process.env.HOSTED_MCP_TOKEN };
 
   beforeAll(async () => {
     process.env.SECRETS_KEY = randomBytes(32).toString('base64');
     process.env.MCP_ALLOW_PRIVATE_HOSTS = '1';
     process.env.YOUTUBE_API_KEY = YOUTUBE_KEY;
     process.env.BETTER_AUTH_URL = PUBLIC_URL;
-    process.env.INTERNAL_AGENTD_TOKEN = 'service-token';
+    process.env.HOSTED_MCP_TOKEN = HOSTED_TOKEN;
     google = await startGoogle();
     store = createMemoryStore();
     await store.forOwner?.(OWNER)?.put('agents', { id: AGENT, name: 'Agent A', pluginIds: [], ownerId: OWNER } as never);
@@ -189,7 +191,7 @@ describe('Google consumer connectors e2e (loopback Google)', () => {
       return url.startsWith(PUBLIC_URL) ? Promise.resolve(app.request(url, init)) : fetch(input, init);
     };
     app = createApiApp({
-      auth, agentdUrl: 'http://127.0.0.1:1', internalToken: 'service-token',
+      auth, agentdUrl: 'http://127.0.0.1:1', internalToken: 'service-token', hostedMcpToken: HOSTED_TOKEN,
       fetch: async () => Response.json({ items: [] }),
       store, blobs: createMemoryBlobStore(), publicUrl: PUBLIC_URL, connectorCatalog: catalog,
       mcpOAuth: { returnUrl: 'http://web.test/connectors', env: { GOOGLE_OAUTH_CLIENT_ID: 'google-client', GOOGLE_OAUTH_CLIENT_SECRET: 'google-secret', PUBLIC_ORIGINS: PHONE_ORIGIN, YOUTUBE_API_KEY: YOUTUBE_KEY, BETTER_AUTH_URL: PUBLIC_URL }, fetch: routed },
@@ -203,7 +205,7 @@ describe('Google consumer connectors e2e (loopback Google)', () => {
     if (previousPrivateHosts === undefined) delete process.env.MCP_ALLOW_PRIVATE_HOSTS; else process.env.MCP_ALLOW_PRIVATE_HOSTS = previousPrivateHosts;
     if (previousYoutube.key === undefined) delete process.env.YOUTUBE_API_KEY; else process.env.YOUTUBE_API_KEY = previousYoutube.key;
     if (previousYoutube.url === undefined) delete process.env.BETTER_AUTH_URL; else process.env.BETTER_AUTH_URL = previousYoutube.url;
-    if (previousYoutube.token === undefined) delete process.env.INTERNAL_AGENTD_TOKEN; else process.env.INTERNAL_AGENTD_TOKEN = previousYoutube.token;
+    if (previousYoutube.token === undefined) delete process.env.HOSTED_MCP_TOKEN; else process.env.HOSTED_MCP_TOKEN = previousYoutube.token;
   });
 
   const call = (path: string, method = 'GET', body?: unknown, headers: Record<string, string> = {}): Promise<Response> => Promise.resolve(app.request(path, {
@@ -253,18 +255,46 @@ describe('Google consumer connectors e2e (loopback Google)', () => {
     return JSON.stringify(result);
   }
 
-  it('serves the public YouTube endpoint only with the internal service token (403, not 401, otherwise)', async () => {
-    const list = { jsonrpc: '2.0', id: 1, method: 'tools/list' };
-    const post = (headers: Record<string, string>) => Promise.resolve(app.request('/mcp/google/youtube', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(list) }));
-    const wrong: Array<Record<string, string>> = [{}, { authorization: 'Bearer wrong' }, { authorization: 'Bearer a' }];
-    for (const headers of wrong) {
-      const denied = await post(headers);
-      expect(denied.status).toBe(403);
-      expect(await denied.json()).toEqual({ error: { code: 'FORBIDDEN' } });
+  /** A request to a hosted endpoint as a caller from outside would make it (this app answers the public origin too). */
+  const hostedPost = (path: string, headers: Record<string, string>, method = 'tools/list', params?: unknown) =>
+    Promise.resolve(app.request(path, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) }));
+
+  it('every hosted endpoint is internal: no service credential is a bare 401, whatever bearer the caller brings', async () => {
+    const paths = ['/mcp/google/youtube', '/mcp/google/gmail', '/mcp/google/calendar', '/mcp/google/drive', '/mcp/google/tasks', '/mcp/google/youtube-account', '/mcp/google/outlook-mail','/mcp/google/no-such-service'];
+    // The last two are what the old open proxy took: the caller's own Google token as the bearer, or in the new header without the credential.
+    const outside: Array<Record<string, string>> = [{}, { authorization: 'Bearer wrong' }, { authorization: 'Bearer a' }, { authorization: 'Bearer ya29.callers-google-token' }, { 'x-upstream-authorization': 'Bearer ya29.callers-google-token' }];
+    for (const path of paths) {
+      for (const headers of outside) {
+        const denied = await hostedPost(path, headers);
+        expect(denied.status, path).toBe(401);
+        expect(await denied.text(), path).toBe('');
+        expect(denied.headers.get('www-authenticate'), path).toBeNull();
+      }
+      expect((await hostedPost(path, { authorization: 'Bearer ' + HOSTED_TOKEN.toUpperCase() })).status, path).toBe(401);
     }
-    const served = await post({ authorization: 'Bearer service-token' });
+    // GET and other methods from outside are refused the same way, not 405 (nothing to learn about the path).
+    expect((await app.request('/mcp/google/gmail', { method: 'GET' })).status).toBe(401);
+    // What is still open is the RFC 9728 metadata our own connect flow reads: the issuer and the scopes, no secret.
+    expect((await app.request('/.well-known/oauth-protected-resource/mcp/google/gmail')).status).toBe(200);
+  });
+
+  it('serves the public YouTube endpoint with the service credential alone', async () => {
+    const served = await hostedPost('/mcp/google/youtube', { authorization: 'Bearer ' + HOSTED_TOKEN });
     expect(served.status).toBe(200);
     expect(JSON.stringify(await served.json())).toContain('"name":"search"');
+  });
+
+  it('an OAuth-backed endpoint takes the service credential in Authorization and the owner token in its own header', async () => {
+    const asAgentd = { authorization: 'Bearer ' + HOSTED_TOKEN, 'x-upstream-authorization': 'Bearer ya29.owner' };
+    expect((await hostedPost('/mcp/google/gmail', asAgentd, 'tools/list')).status).toBe(200);
+    // The owner token in `Authorization` (the old contract) is not accepted any more.
+    const old = await hostedPost('/mcp/google/gmail', { authorization: 'Bearer ya29.owner' });
+    expect(old.status).toBe(401);
+    expect(old.headers.get('www-authenticate')).toBeNull();
+    // Credential without an owner token: the client is told where to sign in.
+    const unsigned = await hostedPost('/mcp/google/gmail', { authorization: 'Bearer ' + HOSTED_TOKEN });
+    expect(unsigned.status).toBe(401);
+    expect(unsigned.headers.get('www-authenticate')).toContain('/.well-known/oauth-protected-resource/mcp/google/gmail');
   });
 
   it('each app signs in with its scopes and serves a real tool call', async () => {
@@ -313,6 +343,13 @@ describe('Google consumer connectors e2e (loopback Google)', () => {
     for (const id of ['youtube', 'youtube-account', 'google-tasks', 'google-contacts']) {
       const rows = (await scopedOwner.list('connections', { limit: 200 })).items.filter((row) => row.catalogId === id);
       expect(rows.map((row) => row.status), id).toEqual(['connected']);
+      // Our own origin is never stored (BACKEND 10.18.5): a hosted row and its sealed sign-in hold the path alone.
+      if (id === 'google-contacts') continue;
+      for (const row of rows) {
+        expect(row.endpoint, id).toMatch(/^\/mcp\/google\//);
+        const auth: unknown = Reflect.get(row, 'auth');
+        if (auth !== null && auth !== undefined) expect((auth as { resource: string }).resource, id).toBe(row.endpoint);
+      }
     }
   });
 
@@ -353,14 +390,14 @@ describe('Google consumer connectors e2e (loopback Google)', () => {
     expect(await accountsOf('gmail')).toHaveLength(accountsBefore);
   });
 
-  it('the hosted server challenges a call without a token and points at Google', async () => {
-    const response = await app.request('/mcp/google/youtube-account', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) });
+  it('the hosted server challenges a call without an owner token and points at Google', async () => {
+    const response = await app.request('/mcp/google/youtube-account', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + HOSTED_TOKEN }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) });
     expect(response.status).toBe(401);
     expect(response.headers.get('www-authenticate')).toContain(PUBLIC_URL + '/.well-known/oauth-protected-resource/mcp/google/youtube-account');
     const metadata = (await (await app.request('/.well-known/oauth-protected-resource/mcp/google/youtube-account')).json()) as { resource: string; authorization_servers: string[] };
     expect(metadata).toMatchObject({ resource: PUBLIC_URL + '/mcp/google/youtube-account', authorization_servers: [google.base] });
     // A token Google rejects comes back as 401, so the client refreshes or asks to reconnect.
-    const rejected = await app.request('/mcp/google/youtube-account', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer revoked' }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_my_playlists', arguments: {} } }) });
+    const rejected = await app.request('/mcp/google/youtube-account', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + HOSTED_TOKEN, 'x-upstream-authorization': 'Bearer revoked' }, body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_my_playlists', arguments: {} } }) });
     expect(rejected.status).toBe(401);
   });
 });

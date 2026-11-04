@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { Doc, ToolContext, ToolResult } from '../../../contracts/index.js';
@@ -27,9 +27,9 @@ function runContext(): ToolRunContext {
   const journal = new Map<string, unknown>();
   return {
     rand: { uuidv4: () => 'recovery-test' },
-    run<T>(key: string, action: () => Promise<T>): RestatePromise<T> {
-      if (journal.has(key)) return RestatePromise.resolve(structuredClone(journal.get(key)) as T);
-      return RestatePromise.resolve(action().then((result) => { journal.set(key, structuredClone(result)); return result; }));
+    run<T>(key: string, action: () => Promise<T>): DurablePromise<T> {
+      if (journal.has(key)) return DurablePromise.resolve(structuredClone(journal.get(key)) as T);
+      return DurablePromise.resolve(action().then((result) => { journal.set(key, structuredClone(result)); return result; }));
     },
   };
 }
@@ -48,13 +48,13 @@ describe('fenced external action reconciliation', () => {
     await store.put('steps', row, { runId: RUN });
     const toolCtx = context(store, row.id);
     let sends = 0;
-    const action = async (): Promise<ToolResult> => { sends += 1; return tool.execute({ kind: 'text', text: 'hello' }, toolCtx); };
-    const first = await runFencedTool(runContext(), store, row, tool.name, action, NEVER_CANCELLED, () => tool.reconcile!({ kind: 'text', text: 'hello' }, toolCtx), intent);
+    const action = async (): Promise<ToolResult> => { sends += 1; return tool.execute({ kind: 'text', purpose: 'result', text: 'hello' }, toolCtx); };
+    const first = await runFencedTool(runContext(), store, row, tool.name, action, NEVER_CANCELLED, () => tool.reconcile!({ kind: 'text', purpose: 'result', text: 'hello' }, toolCtx), intent);
     expect(first.interrupted).toBe(false);
     expect(sends).toBe(1);
     await store.put('steps', Object.assign(row, { execution: { fencedAt: AT, intent } }), { runId: RUN });
 
-    const recovered = await runFencedTool(runContext(), store, row, tool.name, action, NEVER_CANCELLED, () => tool.reconcile!({ kind: 'text', text: 'hello' }, toolCtx), intent);
+    const recovered = await runFencedTool(runContext(), store, row, tool.name, action, NEVER_CANCELLED, () => tool.reconcile!({ kind: 'text', purpose: 'result', text: 'hello' }, toolCtx), intent);
     expect(recovered.interrupted).toBe(false);
     expect(recovered.reconciliation?.status).toBe('succeeded');
     expect(recovered.result.details).toMatchObject({ deliveredText: 'hello', deliveredConversationId: CONVERSATION });
@@ -70,8 +70,8 @@ describe('fenced external action reconciliation', () => {
     let sends = 0;
     const outcome = await runFencedTool(runContext(), store, row, tool.name, async () => {
       sends += 1;
-      return tool.execute({ kind: 'text', text: 'hello' }, toolCtx);
-    }, NEVER_CANCELLED, () => tool.reconcile!({ kind: 'text', text: 'hello' }, toolCtx), intent);
+      return tool.execute({ kind: 'text', purpose: 'result', text: 'hello' }, toolCtx);
+    }, NEVER_CANCELLED, () => tool.reconcile!({ kind: 'text', purpose: 'result', text: 'hello' }, toolCtx), intent);
     expect(outcome.interrupted).toBe(true);
     expect(outcome.reconciliation?.status).toBe('not_executed');
     expect(sends).toBe(0);
@@ -86,12 +86,12 @@ describe('fenced external action reconciliation', () => {
     await store.put('steps', Object.assign(row, { execution: { fencedAt: AT, intent: attemptIntent } }), { runId: RUN });
     const toolCtx = context(store, row.id);
     let sends = 0;
-    const action = async (): Promise<ToolResult> => { sends += 1; return tool.execute({ kind: 'text', text: 'hello' }, toolCtx); };
-    const resumed = await runFencedTool(runContext(), store, row, tool.name, action, NEVER_CANCELLED, () => tool.reconcile!({ kind: 'text', text: 'hello' }, toolCtx), attemptIntent);
+    const action = async (): Promise<ToolResult> => { sends += 1; return tool.execute({ kind: 'text', purpose: 'result', text: 'hello' }, toolCtx); };
+    const resumed = await runFencedTool(runContext(), store, row, tool.name, action, NEVER_CANCELLED, () => tool.reconcile!({ kind: 'text', purpose: 'result', text: 'hello' }, toolCtx), attemptIntent);
     expect(resumed.interrupted).toBe(false);
     expect(resumed.reconciliation?.status).toBe('not_executed');
     expect(sends).toBe(1);
-    expect((await tool.reconcile!({ kind: 'text', text: 'hello' }, toolCtx)).status).toBe('succeeded');
+    expect((await tool.reconcile!({ kind: 'text', purpose: 'result', text: 'hello' }, toolCtx)).status).toBe('succeeded');
   });
 
   it('keeps unsupported routes and changed owner/arguments unknown without invoking the effect', async () => {
@@ -104,7 +104,7 @@ describe('fenced external action reconciliation', () => {
     const changed = await runFencedTool(runContext(), store, row, tool.name, async () => {
       executions += 1;
       return { content: [{ type: 'text', text: 'should not run' }] };
-    }, NEVER_CANCELLED, () => tool.reconcile!({ kind: 'text', text: 'hello' }, wrongOwner), { ...intent, ownerId: 'other-owner' });
+    }, NEVER_CANCELLED, () => tool.reconcile!({ kind: 'text', purpose: 'result', text: 'hello' }, wrongOwner), { ...intent, ownerId: 'other-owner' });
     expect(changed.interrupted).toBe(true);
     expect(executions).toBe(0);
 

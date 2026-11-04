@@ -1,5 +1,5 @@
 import { toolsForModel } from '../../../modules/tools/tools/toolSearch.js';
-import { workflow, JournalMismatchError, RestatePromise, RETRIES_EXHAUSTED_MESSAGE, TerminalError, type WorkflowContext, type WorkflowSharedContext } from '@agent-desktop/durable';
+import { workflow, JournalMismatchError, DurablePromise, RETRIES_EXHAUSTED_MESSAGE, TerminalError, type WorkflowContext, type WorkflowSharedContext } from '@agent-desktop/durable';
 import type { WakeEvent } from '../../../contracts/index.js';
 import type { Agent } from '@agent-desktop/public-contracts';
 import { appendWakeEvents } from '../../brain/index.js';
@@ -13,19 +13,20 @@ import { CONVERSATION_GONE, inOwnerScope, resolveAdmittedOwner } from '../../exe
 import { defaultRegistry, startEngineForRun } from './run-engine.js';
 import type { RunStartContext } from './run-engine.js';
 import type { EngineOutcome } from '../engines/registry.js';
-import { notifyBackgroundParent } from './child-notify.js';
+import { notifyBackgroundParent } from './subagent-notify';
 import { recordChainCost } from './chain-cost.js';
-import { offersQuietExit } from '../logic/run-origin.js';
-import { scopeChildTools, scopeToolsFor } from './tool-policy.js';
+import { speaksOnlyBySend } from '../logic/run-origin.js';
+import { providerOutageOf } from '../logic/routine-refire.js';
+import { SOMETHING_WENT_WRONG } from '../logic/plain-errors.js';
+import { scopeSubagentTools, scopeToolsFor } from './tool-policy.js';
 import { offeredIn, presentToolScope, readToolScope } from '../../../modules/tools/scope.js';
 import { sendCompletionWake } from './completion-wake.js';
-import { startRunAuxiliaries } from './run-aux.js';
-import { prepareToolDisclosure } from './run-disclosure.js';
-import { expirePendingRequests } from '../../child-run-input.js';
+import { prepareToolDisclosure, startToolDisclosure } from './run-disclosure.js';
+import { expirePendingRequests } from '../../subagent-run-input';
 import { emitAgentStatus } from '../../agent-status.js';
 import { runTerminalEvent } from './agui-events.js';
 import { closeRunTasks } from '../../../modules/tasks/agent-tasks.js';
-import { isTerminal } from '../../../modules/tasks/childRead.js';
+import { isTerminal } from '../../../modules/tasks/subagentRead.js';
 
 export { startEngineForRun, type RunStartContext } from './run-engine.js';
 
@@ -87,22 +88,28 @@ export async function runWorkflowBody(ctx: RunBodyContext, services: RunServices
   if (admitted.ownerId === undefined) {
     // Refusal is side-effect free: the owner, target and session key are all untrusted here, so a
     // spoofed or malformed raw invocation must not write a Run, emit an event, or touch a Session.
-    throw new TerminalError(`run refused: ${admitted.reason ?? 'missing_owner'}`);
+    // The reason is an internal code (`missing_owner`, ...): it goes to the log, and what can reach a person is one plain sentence.
+    services.log?.({ runId, reason: admitted.reason ?? 'missing_owner' }, 'run refused');
+    throw new TerminalError(SOMETHING_WENT_WRONG);
   }
 
-  await inOwnerScope(admitted.ownerId, async () => {
+  const ownerId = admitted.ownerId;
+  await inOwnerScope(ownerId, async () => {
     const agent: Agent | null = await ctx.run('load-agent', async () =>
       services.store.get('agents', input.agentId),
     );
     if (agent === null) {
       // The row is not owner-stamped: writing a Run for it would reproduce the very 'unknown' rows this
       // change removes, so refuse without side effects. `receive` rejects this case before any run starts.
-      throw new TerminalError('run refused: agent is not visible to the wake owner');
+      services.log?.({ runId, agentId: input.agentId, reason: 'agent is not visible to the wake owner' }, 'run refused');
+      throw new TerminalError(SOMETHING_WENT_WRONG);
     }
 
-    // Detached auxiliary work (short title, role suggestion) starts inside the journaled init step (BACKEND §10.11).
-    const { adapter } = await startEngineForRun(starter, services.store, registry, agent, input, runId, cancellation, () => startRunAuxiliaries(services, input, runId)).catch(async (error: unknown) => {
-      // Only a permanent start failure ends the child; a transient one is retried by Restate and must not
+    // The computer is not paused while this run lives (BACKEND §7.3b); released below however the run ends.
+    services.computerHolds?.begin(input.agentId, runId);
+
+    const { adapter } = await startEngineForRun(starter, services.store, registry, agent, input, runId, cancellation).catch(async (error: unknown) => {
+      // Only a permanent start failure ends the child; a transient one is retried by the runner and must not
       // report 'failed' (its id would then shadow the real completion as a duplicate).
       if (error instanceof TerminalError) await notifyBackgroundParent(ctx, services.store, runId, 'failed');
       throw error;
@@ -110,16 +117,26 @@ export async function runWorkflowBody(ctx: RunBodyContext, services: RunServices
 
     let outcome: EngineOutcome;
     try {
+      const prepStarted = Date.now();
+      // The tool search and the tool list read the registry and write nothing, and neither needs the wake row: the first execution of
+      // persist-wake starts them beside the wake write, and the steps that follow join them (journal order is unchanged: persist-wake,
+      // tool-disclosure, load-context, awaited in turn, so the transcript rows keep their order). A replay with those steps journaled never starts them.
+      const disclosureStarted = startToolDisclosure(services, input, runId, cancellation);
+      let toolNamesStarted: Promise<string[] | undefined> | undefined;
+      const toolNames = (): Promise<string[] | undefined> => (toolNamesStarted ??= discoveredToolNames(services, input));
       // The wake that started this run is its first user turn: persist it exactly once (journaled) BEFORE
       // building the context, so every later run reads it back from the transcript in chronological order
       // and the current wake is never injected a second time.
       await ctx.run('persist-wake', async () => {
-        await appendWakeEvents(services.store, services.blobs, input.sessionKey, input.wakeEvents, attachmentPlacement(services, input), services.brain, offersQuietExit(await services.store.get('runs', runId)));
+        void disclosureStarted?.begin();
+        void toolNames();
+        await appendWakeEvents(services.store, services.blobs, input.sessionKey, input.wakeEvents, attachmentPlacement(services, input), services.brain, speaksOnlyBySend(await services.store.get('runs', runId)));
       });
 
       // Optional first-model tool preparation, once per run: journaled, raced with the
       // stop signal, and appended as a labelled user note before the first brain context.
-      const disclosure = await prepareToolDisclosure(ctx, services, input, runId, cancellation);
+      const disclosure = await prepareToolDisclosure(ctx, services, input, runId, cancellation, disclosureStarted);
+      const disclosureMs = Date.now() - prepStarted;
       if (disclosure === 'stopped') {
         await finalizeTerminalRun(ctx, services, input, runId, { kind: 'stopped' });
         await ctx.run('chain-cost', () => recordChainCost(services.store, input, runId));
@@ -133,6 +150,10 @@ export async function runWorkflowBody(ctx: RunBodyContext, services: RunServices
         // to terminal here so the run finalizes as failed and releases the Session instead
         // of retrying a load-context that will never succeed.
         await guardModelContext(async () => {
+          const startedAt = Date.now();
+          const discovered = await toolNames();
+          const toolsMs = Date.now() - startedAt;
+          const timings: { homeMs?: number } = {};
           const built = await services.brain.buildContext({
             agentId: input.agentId,
             conversationId: input.conversationId,
@@ -140,8 +161,11 @@ export async function runWorkflowBody(ctx: RunBodyContext, services: RunServices
             wake: input.wakeEvents,
             // Deterministic note row id for this run's first note, and the tools whose order the session persists.
             noteKey: `ctx0:${runId}`,
-            toolNames: await discoveredToolNames(services, input),
+            toolNames: discovered,
+            timings,
           });
+          // Everything before the first model call is invisible in `step timing`: what it cost is named here, once per run.
+          services.log?.({ runId, disclosureMs, toolsWaitMs: toolsMs, homeMs: timings.homeMs, contextMs: Date.now() - startedAt - toolsMs, totalMs: Date.now() - prepStarted }, 'run prepared for the first model call');
           // Journal the reference, not the message list: a model call re-derives it from the transcript.
           return services.brain.slim?.(built) ?? built;
         }),
@@ -153,7 +177,7 @@ export async function runWorkflowBody(ctx: RunBodyContext, services: RunServices
 
       // The conversation's frozen tool scope (batch 5b) narrows the tools this run is offered and may call.
       const toolScope = readToolScope(brainCtx['toolScope']);
-      const scoped = scopeToolsFor(await scopeChildTools(ctx, services, input), toolScope);
+      const scoped = scopeToolsFor(await scopeSubagentTools(ctx, services, input), toolScope);
       // The scope rides on the input too (set during the run, like supportsImages), so each tool's context reads the same one.
       if (toolScope !== undefined) input.toolScope = toolScope;
       outcome = await adapter.executeTurn({ ctx, services: scoped, input, runId, brainCtx, cancellation });
@@ -165,14 +189,15 @@ export async function runWorkflowBody(ctx: RunBodyContext, services: RunServices
         await stopDivergedRun(services, input, runId);
         return;
       }
-      // A transient failure is retried by Restate: rethrow without finalizing so the Session keeps its
+      // A transient failure is retried by the runner: rethrow without finalizing so the Session keeps its
       // activeRunId. Only a permanent (terminal) failure finalizes the run and releases the Session.
       if (!(error instanceof TerminalError) && ctx.lastAttempt !== true) throw error;
       // The terminal message is already safe to surface: engine-selection and refusal messages are
       // fixed strings, and model-timeout/budget messages are secret-scrubbed by the provider before
       // they become terminal. Persist it on the run so the failure reason stays visible in the UI.
       const message = error instanceof TerminalError ? error.message : RETRIES_EXHAUSTED_MESSAGE;
-      await finalizeTerminalRun(ctx, services, input, runId, { kind: 'failed', message });
+      const outage = error instanceof TerminalError ? providerOutageOf(error) : undefined;
+      await finalizeTerminalRun(ctx, services, input, runId, { kind: 'failed', message, ...(outage === undefined ? {} : { providerOutage: outage }) });
       await ctx.run('chain-cost', () => recordChainCost(services.store, input, runId));
       await notifyBackgroundParent(ctx, services.store, runId, 'failed');
       await ctx.runFinished(input.sessionKey, runId);
@@ -191,7 +216,7 @@ export async function runWorkflowBody(ctx: RunBodyContext, services: RunServices
     await notifyBackgroundParent(ctx, services.store, runId, outcome === 'stopped' || outcome === 'blocked' ? outcome : 'completed');
 
     await ctx.runFinished(input.sessionKey, runId);
-  });
+  }).finally(() => inOwnerScope(ownerId, async () => services.computerHolds?.end(runId)));
 }
 
 export const createRunWorkflow = (services: RunServices) => {
@@ -204,11 +229,11 @@ export const createRunWorkflow = (services: RunServices) => {
         rand: ctx.rand,
         // Durable time source: step durations are measured inside their own journaled action.
         // The SDK clock is durable and top-level; the lift only reconciles its nominal type.
-        date: { now: () => RestatePromise.resolve(ctx.date.now()) },
+        date: { now: () => DurablePromise.resolve(ctx.date.now()) },
         sleep: (ms) => ctx.sleep(ms),
-        run: <T>(name: string, action: () => Promise<T>): RestatePromise<T> => ctx.run(name, action),
+        run: <T>(name: string, action: () => Promise<T>): DurablePromise<T> => ctx.run(name, action),
         awakeable: <T>() => ctx.awakeable<T>(),
-        drainInbox: (): RestatePromise<WakeEvent[]> =>
+        drainInbox: (): DurablePromise<WakeEvent[]> =>
           ctx.objectClient<SessionDef>(sessionDef, input.sessionKey).drainInbox(),
         typingState: () => ctx.objectClient<SessionDef>(sessionDef, input.sessionKey).typingState(),
         cancel: ctx.promise<boolean>('cancel'),
@@ -244,7 +269,7 @@ function isRunInput(value: unknown): value is RunInput {
  * a run once; the session ignores a release for a run that is not its active one).
  */
 async function stopDivergedRun(services: RunServices, input: RunInput, runId: string): Promise<void> {
-  const unjournaled: ReportContext = { run: <T>(_name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()) };
+  const unjournaled: ReportContext = { run: <T>(_name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()) };
   await finalizeTerminalRun(unjournaled, services, input, runId, { kind: 'stopped' });
   await recordChainCost(services.store, input, runId);
   await services.enqueuer.releaseSession?.(input.sessionKey, runId);

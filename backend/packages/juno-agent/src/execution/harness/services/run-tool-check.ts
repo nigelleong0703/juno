@@ -1,6 +1,6 @@
 import { validateToolArguments, type ToolCall as PiToolCall } from '@earendil-works/pi-ai';
 import type { Doc, Tool, ToolResult } from '../../../contracts/index.js';
-import { checkArguments, invalidArgumentsResult, normalizeOptionalStrings } from '../../../modules/tools/toolArguments.js';
+import { checkArguments, decodeJsonText, invalidArgumentsResult, normalizeOptionalStrings } from '../../../modules/tools/toolArguments.js';
 import { isDiscoveryTool, TOOL_LOAD, TOOL_SEARCH } from '../../../modules/tools/tools/toolSearch.js';
 import { appendRunStep } from './run-steps.js';
 import type { RunInput, RunServices } from './run-types.js';
@@ -9,19 +9,32 @@ type Call = { name: string; arguments: Record<string, unknown> };
 
 /**
  * A model call at the argument boundary, before policy and approval see it: an optional string the model left "", blank or null is
- * taken out (each one logged: tool, field, model, so the rate per model can be counted), then the arguments are checked against the
+ * taken out and an object/array sent as JSON text is decoded (each one logged: tool, field, model, so the rate per model can be counted), then the arguments are checked against the
  * tool's JSON Schema. A call that fails the check never reaches an approval card; the model gets the teaching error instead.
- * Connected-app (MCP) tools are the server's own schema and are passed through.
+ * Connected-app (MCP) tools are the server's own schema and are passed through (the binding checks them, registry.ts).
  */
 export function checkedCall<C extends Call>(services: RunServices, input: RunInput, runId: string, call: C): { call: C; invalid: ToolResult | null } {
   const tool = services.toolRegistry.get(call.name);
+  // The registry hands out a connected app's tool as a by-name handle with no schema (the schema is the live server's, resolved when the call
+  // runs): its arguments are never rewritten here, and the binding checks them against the server's own schema (modules/mcp/registry.ts).
   if (tool === undefined || tool.mcp === true) return { call, invalid: null };
-  const { args: cleaned, normalized } = normalizeOptionalStrings(tool, call.arguments);
-  for (const entry of normalized) services.log?.({ tool: call.name, field: entry.field, was: entry.was, model: input.modelId, runId }, 'tool argument normalized');
+  const { args: present, normalized: blanks } = normalizeOptionalStrings(tool, call.arguments);
+  const { args: cleaned, normalized: decoded } = decodeJsonText(tool.parameters, present);
+  for (const entry of [...blanks, ...decoded]) services.log?.({ tool: call.name, field: entry.field, was: entry.was, model: input.modelId, runId }, 'tool argument normalized');
   const args = withSafeCoercion(tool, cleaned);
   // The one orchestrated browser tool answers a bad call itself, with guidance that is specific to its stages.
   const issues = tool.orchestrate === undefined ? checkArguments(tool, args) : [];
   return { call: args === call.arguments ? call : { ...call, arguments: args }, invalid: issues.length === 0 ? null : invalidArgumentsResult(tool, issues) };
+}
+
+/** The schema with every `additionalProperties: false` taken out, at any depth. */
+function withoutAdditionalLimit(schema: Tool['parameters']): Tool['parameters'] {
+  const walk = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(walk);
+    if (typeof value !== 'object' || value === null) return value;
+    return Object.fromEntries(Object.entries(value).filter(([key, entry]) => !(key === 'additionalProperties' && entry === false)).map(([key, entry]) => [key, walk(entry)]));
+  };
+  return Object.fromEntries(Object.entries(schema).filter(([key, entry]) => !(key === 'additionalProperties' && entry === false)).map(([key, entry]) => [key, walk(entry)]));
 }
 
 /**
@@ -32,7 +45,9 @@ function withSafeCoercion(tool: Tool, args: Record<string, unknown>): Record<str
   try {
     // The arguments came from the model as JSON; a round trip gives pi-ai's JSON type without an assertion.
     const json: PiToolCall['arguments'] = JSON.parse(JSON.stringify(args));
-    const coerced: unknown = validateToolArguments({ name: tool.name, description: tool.description, parameters: tool.parameters }, { type: 'toolCall', id: 'check', name: tool.name, arguments: json });
+    // An extra field (a model puts `sentence` beside x and y) must not switch coercion off for the fields that are right:
+    // the schema check here ignores unknown fields; the tool's own parse decides what to do with them.
+    const coerced: unknown = validateToolArguments({ name: tool.name, description: tool.description, parameters: withoutAdditionalLimit(tool.parameters) }, { type: 'toolCall', id: 'check', name: tool.name, arguments: json });
     return typeof coerced === 'object' && coerced !== null && !Array.isArray(coerced) ? { ...coerced } : args;
   } catch {
     return args;

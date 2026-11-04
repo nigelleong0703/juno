@@ -11,6 +11,7 @@ import type { PossibleMatch } from 'juno-agent/modules/memory/owner-edits';
 import type { MemoryPort } from 'juno-agent/modules/memory/port';
 import { listAll as listWhere } from 'juno-agent/modules/memory/util';
 import { ownerTimeZone } from 'juno-agent/modules/feed/context';
+import { isReplyOnly } from 'juno-agent/execution/agent-status';
 import { getOwnerId } from '../auth.js';
 import type { AgentdDeps } from './index.js';
 import { docOwnerId, listAll } from './relationships.js';
@@ -58,8 +59,11 @@ export function registerToday(app: Hono, deps: AgentdDeps) {
     const { localDate, hour } = localParts(new Date(), timezone);
     const pending = (await listWhere(deps.store, 'requests', { where: { status: 'pending' } })).filter((row) => docOwnerId(row) === ownerId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    const running = (await listWhere(deps.store, 'runs', { where: { status: 'running' } }))
-      .filter((run) => docOwnerId(run) === ownerId && run.parentRunId === undefined && run.kind !== 'background')
+    const live = (await listWhere(deps.store, 'runs', { where: { status: 'running' } }))
+      .filter((run) => docOwnerId(run) === ownerId && run.parentRunId === undefined && run.kind !== 'background');
+    // A chat reply still being written is not "working" (isReplyOnly).
+    const running = (await Promise.all(live.map(async (run) => ((await isReplyOnly(deps.store, run)) ? null : run))))
+      .filter((run): run is typeof live[number] => run !== null)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
     // The owner's feed posts: the ones routine runs made make the brief (only today's, local day); the newest few make the feed.
     const ownPosts = (await listAll(deps.store, 'feedPosts')).items.filter((post) => docOwnerId(post) === ownerId);

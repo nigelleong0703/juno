@@ -4,7 +4,7 @@
  */
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { Store, Tool, ToolRegistry, ToolResult, WakeEvent } from '../../../contracts/index.js';
 import type { Rule } from '@agent-desktop/public-contracts';
@@ -181,6 +181,34 @@ describe('a run the owner woke', () => {
   });
 });
 
+describe('a teammate (BACKEND 6.8)', () => {
+  const teammate = wake({ payload: { text: 'hi', speakerRole: 'stranger', speakerName: 'Alice', channelKind: 'slack', teammate: true } });
+  const team = (delegated?: string[]) => configOf({ chat: { conversationId: FRIENDS, title: FRIENDS_TITLE, stranger: { name: 'Alice' }, teammate: true, ...(delegated === undefined ? {} : { delegated }) } });
+
+  it('may ask for the agent\'s own work without the owner being asked; a stranger asking the same is asked about', () => {
+    for (const tool of ['subagent_start', 'task_update', 'schedule_add']) {
+      expect(decide({ ...team(), exposed: new Set([tool]) }, tool, {}, teammate), tool).toEqual({ kind: 'allow' });
+      expect(decide({ ...configOf(), exposed: new Set([tool]) }, tool, {}), tool).toMatchObject({ kind: 'ask', ruleId: 'builtin.stranger' });
+    }
+    expect(decide(team(), 'files.edit', { path: OWN_FOLDER + '/a.md' }, teammate)).toEqual({ kind: 'allow' });
+    expect(decide(team(), 'files.edit', { path: '/juno/MEMORY.md' }, teammate)).toMatchObject({ kind: 'ask' });
+  });
+
+  it('asks the owner for what would use the owner\'s accounts or data, naming who asked, unless the owner delegated that kind to the group', () => {
+    const ask = decide(team(), 'mail_send_email', { to: 'x@y.z', subject: 's', body: 'b' }, teammate);
+    expect(ask).toMatchObject({ kind: 'ask', ruleId: 'builtin.stranger', reason: expect.stringContaining('Alice asked in #general · Slack') });
+    expect(decide(team(), 'shell.run', { command: 'ls' }, teammate)).toMatchObject({ kind: 'ask', ruleId: 'builtin.stranger' });
+    // Delegated: the category of the call is covered, so the group's ask runs; a kind that was not delegated still asks.
+    const brief = deriveFor(team(), 'mail_send_email', { to: 'x@y.z', subject: 's', body: 'b' }, teammate).brief.categories;
+    expect(brief.length).toBeGreaterThan(0);
+    expect(decide(team([...brief]), 'mail_send_email', { to: 'x@y.z', subject: 's', body: 'b' }, teammate)).toEqual({ kind: 'allow' });
+    expect(decide(team(['spending']), 'mail_send_email', { to: 'x@y.z', subject: 's', body: 'b' }, teammate)).toMatchObject({ kind: 'ask' });
+    // Never for a call with no kind of decision, a stranger, or a private file.
+    expect(decide(team(['speaking', 'spending', 'public', 'committing', 'sharing']), 'shell.run', { command: 'ls' }, teammate)).toMatchObject({ kind: 'ask' });
+    expect(decide(configOf({ chat: { conversationId: FRIENDS, title: FRIENDS_TITLE, stranger: { name: 'Bob' }, delegated: [...brief] } }), 'mail_send_email', { to: 'x@y.z', subject: 's', body: 'b' })).toMatchObject({ kind: 'ask' });
+  });
+});
+
 describe('reading the policy for a stranger-woken run', () => {
   async function seeded(): Promise<Store> {
     const store = createMemoryStore();
@@ -190,7 +218,7 @@ describe('reading the policy for a stranger-woken run', () => {
     return store;
   }
   const registry: ToolRegistry = { forAgent: async () => [], get: () => undefined };
-  const callOf = (tool: string, args: unknown, wakes = [stranger]) => policyCallOf({ conversationId: FRIENDS, wakeEvents: wakes }, tool, args);
+  const callOf = (tool: string, args: unknown, wakes = [stranger]) => policyCallOf({ conversationId: FRIENDS, wakeEvents: wakes, agentId: AGENT, sessionKey: AGENT + ':' + FRIENDS }, tool, args);
 
   it('carries the chat, the speaker and the other chat a path points into; an owner run carries nothing', async () => {
     const store = await seeded();
@@ -203,6 +231,33 @@ describe('reading the policy for a stranger-woken run', () => {
     expect((await read('files.read', { path: WORK_FOLDER + '/q4.md' }, [owner, stranger])).chat?.stranger).toEqual({ name: 'Bob' });
     expect((await readToolPolicyConfig(store, registry, AGENT, OWNER)).chat).toBeUndefined();
   });
+
+  it('a child task, and the run that wraps its work up, is held to the root\'s rules: a teammate\'s or stranger\'s; an owner\'s is not', async () => {
+    const store = await seeded();
+    const origin = (speaker: 'owner' | 'member' | 'stranger') => ({ type: 'channel', channel: 'slack', conversationId: FRIENDS, speaker, speakerName: 'Alice' } as const);
+    const run = (id: string, speaker: 'owner' | 'member' | 'stranger', parentId?: string) => store.put('runs', { id, agentId: AGENT, conversationId: FRIENDS, origin: parentId === undefined ? origin(speaker) : { type: 'parent_run', runId: parentId }, rootOrigin: origin(speaker) } as never);
+    await run('run-root-team', 'member'); await run('run-child-team', 'member', 'run-root-team');
+    await run('run-root-out', 'stranger'); await run('run-child-out', 'stranger', 'run-root-out');
+    await run('run-root-own', 'owner'); await run('run-child-own', 'owner', 'run-root-own');
+    const subagentWake = (parentRunId: string) => wake({ kind: 'subagent_task', origin: { type: 'system' }, trusted: false, payload: { prompt: 'research', parentRunId } });
+    const subagentRead = (runId: string, wakes: WakeEvent[]) => readToolPolicyConfig(store, registry, AGENT, OWNER, undefined, policyCallOf({ conversationId: FRIENDS, wakeEvents: wakes, agentId: AGENT, sessionKey: AGENT + ':' + FRIENDS + '::child:' + runId }, 'mail_send_email', {}));
+    const team = await subagentRead('run-child-team', [subagentWake('run-root-team')]);
+    expect(team.chat).toEqual({ conversationId: FRIENDS, title: FRIENDS_TITLE, stranger: { name: 'Alice' }, teammate: true });
+    // The policy then asks the owner for what the root's asker could not do alone: a connector action, a private file.
+    const config = { ...configOf({ chat: team.chat }) };
+    const child = subagentWake('run-root-team');
+    expect(decide(config, 'mail_send_email', { to: 'x@y.z', subject: 's', body: 'b' }, child)).toMatchObject({ kind: 'ask', ruleId: 'builtin.stranger', reason: expect.stringContaining('Alice asked in #general · Slack') });
+    expect(decide(config, 'files.read', { path: '/juno/MEMORY.md' }, child)).toMatchObject({ kind: 'ask' });
+    expect(decide({ ...config, exposed: new Set([...config.exposed, 'subagent_start']) }, 'subagent_start', {}, child)).toEqual({ kind: 'allow' });
+    expect((await subagentRead('run-child-out', [subagentWake('run-root-out')])).chat).toMatchObject({ stranger: { name: 'Alice' } });
+    expect((await subagentRead('run-child-out', [subagentWake('run-root-out')])).chat?.teammate).toBeUndefined();
+    expect((await subagentRead('run-child-own', [subagentWake('run-root-own')])).chat).toBeUndefined();
+    // The run that wraps up a finished child (task_done naming the run that started it) is held the same way.
+    const done = wake({ kind: 'task_done', origin: { type: 'system' }, trusted: false, payload: { text: 'done', originRunId: 'run-root-team' } });
+    expect((await readToolPolicyConfig(store, registry, AGENT, OWNER, undefined, policyCallOf({ conversationId: FRIENDS, wakeEvents: [done], agentId: AGENT, sessionKey: AGENT + ':' + FRIENDS }, 'files.read', {}))).chat?.teammate).toBe(true);
+    // A child's own session names itself even when its wake says nothing (a steer): its run row carries the root.
+    expect((await subagentRead('run-child-team', [wake({ kind: 'subagent_task', origin: { type: 'system' }, trusted: false, payload: { prompt: 'continue' } })])).chat?.teammate).toBe(true);
+  });
 });
 
 describe('a stranger-woken run through the harness', () => {
@@ -211,17 +266,17 @@ describe('a stranger-woken run through the harness', () => {
     const journal = new Map<string, unknown>();
     return {
       rand: { uuidv4: () => id },
-      run<T>(name: string, action: () => Promise<T>): RestatePromise<T> {
-        if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-        return RestatePromise.resolve(action().then((value) => {
+      run<T>(name: string, action: () => Promise<T>): DurablePromise<T> {
+        if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+        return DurablePromise.resolve(action().then((value) => {
           journal.set(name, structuredClone(value));
           return value;
         }));
       },
-      awakeable<T>(): { id: string; promise: RestatePromise<T> } {
-        return { id: 'awk-1', promise: RestatePromise.resolve(new Promise<T>((resolver) => { settle = (value) => resolver(value as T); })) };
+      awakeable<T>(): { id: string; promise: DurablePromise<T> } {
+        return { id: 'awk-1', promise: DurablePromise.resolve(new Promise<T>((resolver) => { settle = (value) => resolver(value as T); })) };
       },
-      drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+      drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
       decide: (value) => settle?.(value),
     };
   }

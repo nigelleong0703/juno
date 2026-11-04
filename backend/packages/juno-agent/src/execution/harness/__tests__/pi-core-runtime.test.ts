@@ -3,12 +3,12 @@
  *
  * These drive the real Run loop with pi-agent-core's low-level `runAgentLoop` as the inner-turn
  * engine: the provider request, the sequential tool batch (validation/beforeToolCall/execute) and
- * the `finishTurn` finalization all come from core, while Restate stays the only durable journal.
+ * the `finishTurn` finalization all come from core, while the runner stays the only durable journal.
  * Failures are deterministic (memory store, scripted brain, no live model call, no sleeps).
  */
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import {
   LIMITS,
@@ -105,19 +105,19 @@ function harnessContext(external?: Map<string, unknown>): { ctx: RunContext; pus
     },
     ctx: {
       rand: { uuidv4: () => 'id-' + String(seq++) },
-      run<T>(name: string, action: () => Promise<T>): RestatePromise<T> {
+      run<T>(name: string, action: () => Promise<T>): DurablePromise<T> {
         if (used.has(name)) throw new Error('duplicate durable step: ' + name);
         used.add(name);
-        if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-        return RestatePromise.resolve(action().then((value) => {
+        if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+        return DurablePromise.resolve(action().then((value) => {
           journal.set(name, structuredClone(value));
           return value;
         }));
       },
-      awakeable<T>(): { id: string; promise: RestatePromise<T> } {
-        return { id: 'awake-' + String(seq++), promise: RestatePromise.resolve(new Promise<T>(() => {})) };
+      awakeable<T>(): { id: string; promise: DurablePromise<T> } {
+        return { id: 'awake-' + String(seq++), promise: DurablePromise.resolve(new Promise<T>(() => {})) };
       },
-      drainInbox: () => RestatePromise.resolve<WakeEvent[]>(inbox.splice(0, inbox.length)),
+      drainInbox: () => DurablePromise.resolve<WakeEvent[]>(inbox.splice(0, inbox.length)),
     },
   };
 }
@@ -491,12 +491,12 @@ function bodyHarness(runId: string): RunBodyContext {
   return {
     key: runId,
     rand: { uuidv4: () => runId + '-' + String((counter += 1)) },
-    run: <T>(_name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
-    awakeable: <T>() => ({ id: runId + '-awake', promise: RestatePromise.resolve(new Promise<T>(() => {})) }),
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
-    // The real Restate cancel promise stays pending until a stop fires; a source that resolves
-    // `false` makes RestatePromise.race pick the cancel branch and spuriously stops the run.
-    cancel: { peek: async () => false, get: () => RestatePromise.resolve(new Promise<boolean>(() => {})) },
+    run: <T>(_name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()),
+    awakeable: <T>() => ({ id: runId + '-awake', promise: DurablePromise.resolve(new Promise<T>(() => {})) }),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
+    // The real cancel promise stays pending until a stop fires; a source that resolves
+    // `false` makes DurablePromise.race pick the cancel branch and spuriously stops the run.
+    cancel: { peek: async () => false, get: () => DurablePromise.resolve(new Promise<boolean>(() => {})) },
     runFinished: async () => {},
   };
 }

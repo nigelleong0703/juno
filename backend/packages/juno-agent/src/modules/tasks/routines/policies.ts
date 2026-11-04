@@ -1,8 +1,8 @@
 /**
  * Routine business-task domain: completion, read, history and pause policies (BACKEND 5.2.1).
  *
- * This module owns the *policies*; the Restate Harness adapter (routineTimer) only loads durable
- * state, calls these pure transitions, and persists the result. Nothing here touches Restate,
+ * This module owns the *policies*; the harness adapter (routineTimer) only loads durable
+ * state, calls these pure transitions, and persists the result. Nothing here touches the runner,
  * the store, or the network, so every rule below has a direct unit regression.
  *
  * Core meaning: a generated output is *unread* until a read receipt with a cutoff at or past its

@@ -24,7 +24,7 @@ export const klWeekendPlan: TaskSpec = {
     (o) => {
       const replies = o.turns.flatMap((t) => t.replies);
       const researched = callsOf(o, 'web_fetch', 'web_search', 'browser.navigate', 'browser.get_text').length > 0
-        || callsOf(o, 'child_spawn').some((c) => c.args['mission'] === 'research');
+        || callsOf(o, 'subagent_start').some((c) => c.args['mission'] === 'research');
       return [
         verdict('the agent reacted to a message that started work', callsOf(o, 'react').length > 0, 'react never called'),
         verdict('the plan was researched on real pages, not written from memory', researched, 'no web or research-helper call'),

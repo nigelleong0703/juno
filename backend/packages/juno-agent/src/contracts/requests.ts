@@ -22,12 +22,16 @@ export type ChannelClaim = z.infer<typeof channelClaimSchema>;
 export const silenceQuestionSchema = z.object({ text: z.string().min(1), source: z.string().min(1) });
 export type SilenceQuestion = z.infer<typeof silenceQuestionSchema>;
 
+/** The routine a "<name> first trial run: turn it on?" question decides (BACKEND §3.6.4): the first option turns it on, the other turns it off. */
+export const previewQuestionSchema = z.object({ routineId: z.string().min(1) });
+export type PreviewQuestion = z.infer<typeof previewQuestionSchema>;
+
 /**
  * Internal view of a stored `requests` document. The public `Request` contract is what clients see;
  * the store additionally carries a few runtime-only fields. They live here, outside `public/`, so the
  * client contract copy stays clean and none of them can leak by being declared on a public schema.
  *
- * - `awakeableId`: the Restate handle a suspended run installs so the resolve route can wake it.
+ * - `awakeableId`: the awakeable handle a suspended run installs so the resolve route can wake it.
  *   Internal only: clients must never see it (see `toPublicRequest`).
  * - `wakeDeliveredAt`: when agentd delivered the resolution to the run/session (dedupes retries).
  * - `resolution`: the exact validated decision the resolve route persisted, re-delivered on retry.
@@ -47,12 +51,17 @@ export interface StoredRequest extends Request {
   channelClaim?: ChannelClaim;
   /** A "Want fewer of these?" question the silence rule raised: yes writes this rule, no writes nothing; the answer is not a chat message. */
   silenceQuestion?: SilenceQuestion;
-  /** Private link to a fenced action whose external result needs owner review. */
+  /** The trial-run card of a routine the agent started on its own: the answer turns the routine on or off; the answer is not a chat message and wakes nobody. */
+  previewQuestion?: PreviewQuestion;
+  /**
+   * Private link from the one question the agent asked the person about an uncertain action (`ask_about_uncertain_action`) to the fenced step
+   * it is about. `pending`: asked; `authorized`: the person said to do it again (one repeat, consumed by the next identical call);
+   * `declined`: the person said not to; `consumed` / `completed`: the authorized repeat started / finished.
+   */
   reconciliation?: {
-    stepId: string; tool: string; fingerprint: string; reason: string;
+    stepId: string; tool: string; fingerprint: string;
     connectionId?: string; account?: string;
-    state: 'pending' | 'user_reported_succeeded' | 'user_confirmed_not_executed' | 'still_unknown' | 'retry_consumed' | 'retry_completed';
-    source?: 'owner_report' | 'adapter_evidence';
+    state: 'pending' | 'authorized' | 'declined' | 'consumed' | 'completed';
     attemptStepId?: string;
   };
 }
@@ -70,7 +79,7 @@ export function approvalExpired(request: Pick<Request, 'kind' | 'createdAt'>, at
 }
 
 /** The runtime-only keys, in one place so stripping and parsing cannot drift apart. */
-export const STORED_REQUEST_INTERNAL_KEYS = ['awakeableId', 'wakeDeliveredAt', 'resolution', 'tool', 'interrupted', 'interruptRequested', 'channelClaim', 'silenceQuestion', 'reconciliation'] as const;
+export const STORED_REQUEST_INTERNAL_KEYS = ['awakeableId', 'wakeDeliveredAt', 'resolution', 'tool', 'interrupted', 'interruptRequested', 'channelClaim', 'silenceQuestion', 'previewQuestion', 'reconciliation'] as const;
 
 const nonEmptyString = z.string().min(1);
 
@@ -87,11 +96,12 @@ export const storedRequestInternalsSchema = z.object({
   interruptRequested: z.boolean().optional().catch(undefined),
   channelClaim: channelClaimSchema.optional().catch(undefined),
   silenceQuestion: silenceQuestionSchema.optional().catch(undefined),
+  previewQuestion: previewQuestionSchema.optional().catch(undefined),
   reconciliation: z.object({
-    stepId: nonEmptyString, tool: nonEmptyString, fingerprint: z.string().regex(/^[a-f0-9]{64}$/), reason: z.string().max(500),
+    stepId: nonEmptyString, tool: nonEmptyString, fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
     connectionId: nonEmptyString.optional(), account: nonEmptyString.optional(),
-    state: z.enum(['pending', 'user_reported_succeeded', 'user_confirmed_not_executed', 'still_unknown', 'retry_consumed', 'retry_completed']),
-    source: z.enum(['owner_report', 'adapter_evidence']).optional(), attemptStepId: nonEmptyString.optional(),
+    state: z.enum(['pending', 'authorized', 'declined', 'consumed', 'completed']),
+    attemptStepId: nonEmptyString.optional(),
   }).optional().catch(undefined),
 });
 
@@ -122,6 +132,7 @@ export function parseStoredRequest(request: Request): StoredRequest {
   if (parsed.interruptRequested === true) stored.interruptRequested = true;
   if (parsed.channelClaim !== undefined) stored.channelClaim = parsed.channelClaim;
   if (parsed.silenceQuestion !== undefined) stored.silenceQuestion = parsed.silenceQuestion;
+  if (parsed.previewQuestion !== undefined) stored.previewQuestion = parsed.previewQuestion;
   if (parsed.reconciliation !== undefined) stored.reconciliation = parsed.reconciliation;
   return stored;
 }

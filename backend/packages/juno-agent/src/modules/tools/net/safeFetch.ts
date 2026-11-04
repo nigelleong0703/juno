@@ -103,7 +103,7 @@ function defaultRequest(hop: Hop, options: RequestOptions): Promise<RawResponse>
       {
         method: 'GET',
         headers: {
-          'user-agent': 'VomuAgent-web-fetch/1.0',
+          'user-agent': 'JunoAgent-web-fetch/1.0 (https://junoteam.app; bot)',
           accept: options.accept ?? 'text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.1',
           'accept-encoding': 'identity',
         },

@@ -170,18 +170,19 @@ describe('connector layers', () => {
     });
     afterAll(async () => { await close(composio.server); });
 
+    // Uses the Trello row the operator test above drafted and listed (no built-in app goes through Composio any more).
     it('connects through Composio, keeps the key off the page, holds a tool that changes afterwards, and a first-party app hides its Composio twin', async () => {
       const account = await createAccount('layers-composio');
       const appNamed = async (id: string) => ((await account.api('GET', '/v1/apps')).body.items as Array<{ id: string; source: string; available: boolean; installations: Array<{ id: string; status: string }> }>).find((app) => app.id === id);
-      expect(await appNamed('spotify')).toMatchObject({ source: 'composio', available: true, installations: [] });
-      // Salesforce is an official app whose sign-in needs our client (not configured here); it lists as unavailable, not as a Composio app.
-      expect(await appNamed('salesforce')).toMatchObject({ source: 'official', available: false });
+      expect(await appNamed('trello-composio')).toMatchObject({ source: 'composio', available: true, installations: [] });
+      // An official app whose sign-in needs a client of ours that is not configured here (Asana) is not listed at all.
+      expect(await appNamed('asana')).toBeUndefined();
 
-      const started = await account.api('POST', '/v1/apps/spotify/install', {});
+      const started = await account.api('POST', '/v1/apps/trello-composio/install', {});
       expect(started.status).toBe(201);
       const login = new URL(started.body.openUrl as string);
       expect(login.origin).toBe(composio.base);
-      expect(seen.find((call) => call.path === '/api/v3.1/tool_router/session')?.body).toMatchObject({ user_id: account.userId, toolkits: { enable: ['spotify'] }, auth_configs: { spotify: 'ac_e2e_spotify' } });
+      expect(seen.find((call) => call.path === '/api/v3.1/tool_router/session')?.body).toMatchObject({ user_id: account.userId, toolkits: { enable: ['trello'] } });
 
       // The person logs in at Composio; the browser comes back to our callback, which asks Composio and flips the connection.
       const sessionId = login.pathname.split('/').pop() ?? '';
@@ -191,23 +192,23 @@ describe('connector layers', () => {
       expect(back.headers.get('location')).toContain('status=connected');
       // A second visit with the same state finds nothing to redeem.
       expect((await fetch(login.searchParams.get('cb') ?? '', { redirect: 'manual' })).status).toBe(400);
-      expect(await appNamed('spotify')).toMatchObject({ installations: [{ status: 'connected' }] });
+      expect(await appNamed('trello-composio')).toMatchObject({ installations: [{ status: 'connected' }] });
 
       // Tools: the unmarked one is a change; Composio's header never reaches the page.
-      const first = await account.api('GET', '/v1/apps/spotify');
+      const first = await account.api('GET', '/v1/apps/trello-composio');
       expect(JSON.stringify(first.body)).not.toContain('secret-for-');
       expect(first.body.capabilities).toEqual(expect.arrayContaining([{ name: 'list_things', title: 'list_things', kind: 'read' }, { name: 'make_thing', title: 'make_thing', kind: 'change' }]));
 
       // The server adds a tool and changes a parameter of an existing one: both are held for review, as changes.
       tools = [{ ...READ, inputSchema: { type: 'object', properties: { everything: { type: 'boolean' } } } }, WRITE, { name: 'export_all', inputSchema: { type: 'object', properties: {} }, annotations: { readOnlyHint: true } }];
-      const drifted = await account.api('GET', '/v1/apps/spotify');
+      const drifted = await account.api('GET', '/v1/apps/trello-composio');
       expect(drifted.body.capabilities).toEqual(expect.arrayContaining([
         { name: 'list_things', title: 'list_things', kind: 'change', needsReview: true },
         { name: 'export_all', title: 'export_all', kind: 'change', needsReview: true },
         { name: 'make_thing', title: 'make_thing', kind: 'change' },
       ]));
-      expect((await account.api('POST', '/v1/apps/spotify/tools/review', {})).body).toMatchObject({ reviewed: expect.arrayContaining(['list_things', 'export_all']) });
-      expect((await account.api('GET', '/v1/apps/spotify')).body.capabilities).toEqual(expect.arrayContaining([{ name: 'list_things', title: 'list_things', kind: 'read' }]));
+      expect((await account.api('POST', '/v1/apps/trello-composio/tools/review', {})).body).toMatchObject({ reviewed: expect.arrayContaining(['list_things', 'export_all']) });
+      expect((await account.api('GET', '/v1/apps/trello-composio')).body.capabilities).toEqual(expect.arrayContaining([{ name: 'list_things', title: 'list_things', kind: 'read' }]));
     });
   });
 });

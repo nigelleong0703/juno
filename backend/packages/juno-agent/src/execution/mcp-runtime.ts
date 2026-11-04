@@ -18,7 +18,7 @@ import type { WebSearchProvider } from '../modules/tools/web/searchProvider.js';
 import type { VoicePort } from '../modules/tools/tools/discordVoice.js';
 import type { ChannelPort } from '../modules/tools/tools/channelHistory.js';
 import { createSandboxStdioBridge } from '../modules/tools/tools/mcpStdio.js';
-import { createChildDispatchAdapter } from './child-dispatch.js';
+import { createSubagentDispatchAdapter } from './subagent-dispatch';
 import { createJevGatedManager, createJevMcpRuntime } from './jev-browser-gate.js';
 
 /** The MCP runtime for one execution: owner-scoped manager, per-agent sandbox stdio bridge. */
@@ -78,6 +78,6 @@ export async function createExecutionTools(input: {
     ...(input.connectorCatalog === undefined ? {} : { connectorCatalog: input.connectorCatalog }),
     mcp,
     // PH12: the production child-run dispatcher, so a spawned child is a real run keyed by its id.
-    childDispatch: createChildDispatchAdapter({ store: input.store, enqueuer: input.enqueuer }),
+    subagentDispatch: createSubagentDispatchAdapter({ store: input.store, enqueuer: input.enqueuer }),
   });
 }

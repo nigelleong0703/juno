@@ -2,13 +2,14 @@
  * RoutineTimer Virtual Object: durable clock, arm versioning and occurrence delivery.
  * Boot re-arming is done by agentd start.ts.
  *
- * BACKEND 5.2.1: this file is only the Restate adapter. Completion/read/history/pause policies
+ * BACKEND 5.2.1: this file is only the durable adapter. Completion/read/history/pause policies
  * live in modules/tasks/routines (pure domain); delivery resolution lives in routineTimer-delivery.
  */
 
 import { object, type ObjectContext, rpc } from '@agent-desktop/durable';
 import { routineSchema, type Routine } from '@agent-desktop/public-contracts';
-import { routineTimerDef, type RoutineTimerDef } from './definitions.js';
+import type { WakeEvent } from '../../../contracts/index.js';
+import { routineTimerDef, sessionDef, type RoutineTimerDef, type SessionDef } from './definitions.js';
 import { nextRunAt } from '../logic/schedule.js';
 import { inOwnerScope } from '../../execution-owner.js';
 import { defaultState, withDefaults, type Services, type TimerState } from './routineTimer-state.js';
@@ -30,6 +31,8 @@ export interface CompletionParams {
   itemsGenerated: number;
   outputIds?: string[];
   summary?: string;
+  /** The run failed because the model provider was unavailable and this occurrence gets another attempt: the wake to send and how long to wait. The failure is not counted. */
+  refire?: { wake: WakeEvent; delayMs: number };
 }
 
 export interface ReadParams {
@@ -50,6 +53,22 @@ async function completeRoutine(ctx: ObjectContext, services: Services, params: C
   if (params.runId !== undefined && routine.runs.some((entry) => entry.runId === params.runId)) return;
   const now = new Date(await ctx.date.now()).toISOString();
   const state = await loadState(ctx, params.routineId);
+  const refire = params.refire;
+  if (refire !== undefined) {
+    // The provider was down: this attempt is on the history, but it is not a failure of the routine. The same occurrence is sent again after the
+    // wait (a durable delayed send); only its last attempt counts toward the streak and the auto-disable.
+    await ctx.run('append-history', () => appendRoutineRun(services.store, routine, {
+      id: params.runId === undefined ? `rr-${params.routineId}-${Date.parse(now)}` : `rr-${params.runId}`,
+      routineId: params.routineId,
+      status: 'failed',
+      summary: 'The AI provider was unavailable; trying again at ' + new Date(Date.parse(now) + refire.delayMs).toISOString().slice(11, 16) + ' UTC',
+      ...(params.runId === undefined ? {} : { runId: params.runId }),
+      startedAt: params.occurrenceAt ?? now,
+      finishedAt: now,
+    }));
+    ctx.objectSendClient<RoutineTimerDef>(routineTimerDef, params.routineId).refire({ routineId: params.routineId, wake: refire.wake }, rpc.sendOpts({ delay: refire.delayMs }));
+    return;
+  }
   const decision = applyCompletion(
     { unreadStreak: state.unreadStreak, failStreak: state.failStreak, ...(state.lastResultAt === undefined ? {} : { lastResultAt: state.lastResultAt }) },
     { succeeded: params.succeeded, itemsGenerated: params.itemsGenerated, at: now },
@@ -188,6 +207,14 @@ export const createRoutineTimerHandlers = (services: Services) => ({
       const ownerId = await ctx.run('routine-owner', () => resolveRoutineOwner(services.store, routine));
       if (ownerId === undefined) return { outcome: 'unavailable' };
       return inOwnerScope(ownerId, () => fireMonitor(ctx, services, routine, ownerId));
+    },
+
+    /** The same occurrence once more, after a provider outage (routine-refire.ts): the wake goes to the delivery session under its own id. A routine switched off meanwhile sends nothing. */
+    async refire(ctx: ObjectContext, params: { routineId: string; wake: WakeEvent }): Promise<void> {
+      if (ctx.key !== params.routineId) return;
+      const routine = await ctx.run('handler-routine', () => services.store.get('routines', params.routineId));
+      if (routine === null || !routine.enabled || routine.status === 'needs_setup' || monitorsPaused(services, routine) || (await agentIsGone(ctx, services, routine))) return;
+      ctx.objectSendClient<SessionDef>(sessionDef, params.wake.sessionKey).receive(params.wake);
     },
 
     async recordCompletion(ctx: ObjectContext, params: CompletionParams): Promise<void> {

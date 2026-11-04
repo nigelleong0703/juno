@@ -11,10 +11,10 @@ import { tableFor } from './queries.js';
 export const COLLECTION_NAMES = [
   'accountDeletions', 'agents', 'computers', 'screens', 'controls', 'conversations', 'items', 'runs', 'steps', 'requests', 'routines', 'rules', 'audit',
   'memoryEntries', 'memoryClaims', 'agentHome', 'goals', 'ideas', 'meals', 'agentCalendar', 'feedPosts', 'devices', 'skills', 'plugins',
-  'connections', 'agentApps', 'appCatalog', 'modelProviders', 'modelProviderLogins', 'library', 'artifactFiles', 'documentDrafts', 'spaces', 'spaceHosted', 'settings', 'secureVault', 'profiles',
+  'connections', 'agentApps', 'appCatalog', 'modelProviders', 'modelProviderLogins', 'library', 'artifactFiles', 'documentDrafts', 'fileSnapshots', 'spaces', 'spaceHosted', 'settings', 'secureVault', 'profiles',
   'inspirations', 'channels', 'channelInstallations', 'meetingSessions', 'subscriptions', 'eventReceipts', 'compactions', 'transcripts',
   'browserGoalGates', 'agentTasks', 'backgroundTasks', 'artifacts', 'monitorState', 'proactiveLog',
-  'ownerPresence', 'phoneCalls', 'voiceCalls',
+  'ownerPresence', 'phoneCalls', 'voiceCalls', 'outbox', 'outboxControl',
 ] satisfies readonly Collection[];
 type Unlisted = Exclude<Collection, (typeof COLLECTION_NAMES)[number]>;
 const everyCollectionIsListed: [Unlisted] extends [never] ? true : never = true;
@@ -101,22 +101,27 @@ export async function deleteAuthUser(db: DurableDb, userId: string): Promise<boo
   return found > 0;
 }
 
-const BLOB_TABLES = ['library', 'artifact_files', 'document_drafts', 'transcripts'] as const;
+const BLOB_TABLES = ['library', 'artifact_files', 'document_drafts', 'file_snapshots', 'transcripts'] as const;
 const KEYS_PER_SCAN = 50;
 
 /**
- * Blobs are content-addressed, so two accounts that stored the same bytes share one object. Of `keys`, the ones some OTHER owner's
- * row still names (an upload, an artifact file, a transcript image); those objects must stay. One scan per table per 50 keys
- * (`LIKE` over the document text, so a `_` in a key only ever errs towards keeping the object).
+ * Blobs are content-addressed, so two accounts that stored the same bytes share one object, and two agents of one account can too.
+ * Of `keys`, the ones some row still names (an upload, an artifact file, a transcript image); those objects must stay. With
+ * `exceptOwner` that owner's rows do not count (deleting a whole account: its rows are still there while its blobs go); without it
+ * every row counts (one agent's rows are already deleted, and what is still named belongs to someone else). One scan per table
+ * per 50 keys (`LIKE` over the document text, so a `_` in a key only ever errs towards keeping the object).
  */
-export async function blobKeysUsedByOthers(db: DurableDb, ownerId: string, keys: readonly string[]): Promise<Set<string>> {
-  requireOwner(ownerId);
+export async function blobKeysStillNamed(db: DurableDb, keys: readonly string[], exceptOwner?: string): Promise<Set<string>> {
+  if (exceptOwner !== undefined) requireOwner(exceptOwner);
   const used = new Set<string>();
   for (let start = 0; start < keys.length; start += KEYS_PER_SCAN) {
     const chunk = keys.slice(start, start + KEYS_PER_SCAN);
     const flags = chunk.map((_, index) => `MAX(CASE WHEN CAST(doc AS TEXT) LIKE ? THEN 1 ELSE 0 END) AS k${String(index)}`).join(', ');
     for (const table of BLOB_TABLES) {
-      const [row] = await db.query<Record<string, unknown>>(`SELECT ${flags} FROM ${table} WHERE owner_id <> ?`, [...chunk.map((key) => `%${key}%`), ownerId]);
+      const [row] = await db.query<Record<string, unknown>>(
+        `SELECT ${flags} FROM ${table}${exceptOwner === undefined ? '' : ' WHERE owner_id <> ?'}`,
+        [...chunk.map((key) => `%${key}%`), ...(exceptOwner === undefined ? [] : [exceptOwner])],
+      );
       chunk.forEach((key, index) => { if (Number(row?.[`k${String(index)}`] ?? 0) > 0) used.add(key); });
     }
   }

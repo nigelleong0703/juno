@@ -93,12 +93,18 @@ export function registerComputers(app: Hono, deps: ScreenRoutesDeps): void {
       if (agentId && !(await ownsAgent(deps.store, ownerId, agentId))) {
         throw new ComputerdClientError(404, 'agent_not_found', `agent ${agentId} not found`);
       }
-      return ensureComputer(deps.store, client, ownerId, agentId, getConfig().COMPUTER_RESOLUTION, signal());
+      return ensureComputer(deps.store, client, ownerId, agentId, getConfig(), signal());
     }),
   );
 
+  /** An id that is not the owner's computer row is refused before computerd is asked (a chat no longer creates the computer, so "no computer" is a normal state). */
+  const requireRow = async (id: string): Promise<void> => {
+    if ((await deps.store.get('computers', id)) === null) throw new ComputerdClientError(404, 'computer_not_found', `computer ${id} not found`);
+  };
+
   app.post('/v1/computers/:id/pause', (c) =>
     action(c, async () => {
+      await requireRow(c.req.param('id'));
       await client.pause(signal());
       return deps.store.patch('computers', c.req.param('id'), { state: 'paused' });
     }),
@@ -106,6 +112,7 @@ export function registerComputers(app: Hono, deps: ScreenRoutesDeps): void {
 
   app.post('/v1/computers/:id/resume', (c) =>
     action(c, async () => {
+      await requireRow(c.req.param('id'));
       await client.resume(signal());
       return deps.store.patch('computers', c.req.param('id'), { state: 'running' });
     }),

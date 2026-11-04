@@ -42,6 +42,12 @@ export function createPostgresHarnessStore(db: DurableDb): HarnessVersionStore {
       const [record] = await db.query<VersionRecord>("SELECT * FROM harness_versions WHERE status = 'active'");
       return record === undefined ? undefined : toRow(record);
     },
+    async pinnedVersions() {
+      const records = await db.query<{ id: string; sessions: string | number }>(
+        "SELECT doc->'message'->'contextMeta'->>'harnessVersion' AS id, count(*) AS sessions FROM transcripts WHERE doc->'message'->>'role' = 'system' AND doc->'message'->'contextMeta'->>'harnessVersion' IS NOT NULL GROUP BY 1",
+      );
+      return records.map((record) => ({ id: record.id, sessions: Number(record.sessions) }));
+    },
     async seedActive(version: HarnessVersion) {
       return db.transaction(async (tx) => {
         // The previous active row and any candidate are retired first: the partial unique index allows one active at a time.

@@ -9,6 +9,7 @@
  * the live dev stack (Postgres 54330, services 8787/8788/8791).
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createConnection, createServer } from 'node:net';
@@ -16,6 +17,7 @@ import { createServer as createHttpServer, type Server } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import EmbeddedPostgres from 'embedded-postgres';
+import postgres from 'postgres';
 import type { TestProject } from 'vitest/node';
 
 /** What scenarios receive through vitest `inject('e2e')`. */
@@ -28,6 +30,8 @@ export interface E2eContext {
   agentdUrl: string;
   /** The service bearer of the isolated agentd's internal API (for the run-now route). */
   internalToken: string;
+  /** The credential of the connectors the api hosts (what agentd's MCP client sends them). */
+  hostedMcpToken: string;
   /** JSON file the scripted model re-reads on every call: { [`${agentId}:${conversationId}`]: ScriptedTurn[] }. */
   scriptFile: string;
   /** The isolated stack's Postgres, for scenarios that must assert durable internal state. */
@@ -48,6 +52,12 @@ export interface E2eContext {
   artifactUrlSecret: string;
   /** Execution worker processes beside the coordinator (E2E_WORKERS); 0 = one `all`-role agentd. */
   workers: number;
+  /** Where agentd expects Slack's Web API (SLACK_API_BASE_URL); the case that needs it listens on this port itself (harness/slack.ts). */
+  slackUrl: string;
+  /** Where agentd expects FCM (FCM_API_BASE_URL, and the token host of its test service account); the case that needs it listens on this port itself (harness/fcm.ts). */
+  fcmUrl: string;
+  /** The scenario clock of agentd: a file holding milliseconds added to its time (harness/clock.mjs); tests move it with `advanceClock`. */
+  clockFile: string;
 }
 
 declare module 'vitest' {
@@ -79,13 +89,23 @@ const PORTS = {
   api: 18787 + PORT_OFFSET,
   /** Composio's stand-in (the scenario that uses it listens here); the stack only points COMPOSIO_BASE_URL at it. */
   composio: 18797 + PORT_OFFSET,
+  /** Slack's stand-in (harness/slack.ts, listened on by the case that needs it); the stack only points SLACK_API_BASE_URL at it. */
+  slack: 18798 + PORT_OFFSET,
+  /** FCM's stand-in (harness/fcm.ts, listened on by the case that needs it); the stack points FCM_API_BASE_URL and the service account's token_uri at it. */
+  fcm: 18790 + PORT_OFFSET,
   control: 18799 + PORT_OFFSET,
 } as const;
+/** A throwaway Firebase service account (RSA key made now, never used anywhere real) whose token and message hosts are the FCM stand-in. */
+function fcmServiceAccount(): string {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  return JSON.stringify({
+    project_id: 'e2e-project', client_email: 'e2e@e2e-project.iam.gserviceaccount.com',
+    private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), token_uri: `http://127.0.0.1:${PORTS.fcm}/token`,
+  });
+}
 const COMPOSIO_ENV = {
   COMPOSIO_API_KEY: 'e2e-composio-key',
   COMPOSIO_BASE_URL: `http://127.0.0.1:${PORTS.composio}`,
-  // Spotify has no Composio-managed OAuth app: the deployment names its own app's auth config.
-  COMPOSIO_AUTH_CONFIG_SPOTIFY: 'ac_e2e_spotify',
 } as const;
 
 /** Live dev-stack ports. Any env value or argument that mentions one of these aborts the boot. */
@@ -99,9 +119,12 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '.
 const dataDir = join(repoRoot, '.data', 'e2e');
 const pidFile = join(dataDir, 'pids.json');
 const logDir = join(dataDir, 'logs');
+const clockFile = join(dataDir, 'clock-offset');
 
 const SECRETS = {
   internalToken: 'e2e-internal-agentd-token-0123456789',
+  // The credential of the connectors the api hosts (agentd's MCP client sends it); scenarios that call a hosted endpoint directly use the same value.
+  hostedMcpToken: 'e2e-hosted-mcp-token-0123456789',
   // The app catalog admin path (/admin/v1/apps); scenarios/apps.test.ts uses the same value.
   adminToken: 'e2e-admin-token-0123456789',
   computerdToken: 'e2e-computerd-token-0123456789',
@@ -285,7 +308,9 @@ function startProcess(name: string, command: string, args: string[], cwd: string
 }
 
 function startService(name: string, dir: string, env: Record<string, string>): Managed {
-  return startProcess(name, process.execPath, ['--import', 'tsx', 'src/main.ts', '--e2e-stack'], join(repoRoot, 'packages', dir), env);
+  // A process given a clock file runs on the scenario clock (harness/clock.mjs).
+  const clock = env['E2E_CLOCK_FILE'] === undefined ? [] : ['--import', join(dirname(fileURLToPath(import.meta.url)), 'clock.mjs')];
+  return startProcess(name, process.execPath, [...clock, '--import', 'tsx', 'src/main.ts', '--e2e-stack'], join(repoRoot, 'packages', dir), env);
 }
 
 async function fetchOk(url: string): Promise<boolean> {
@@ -360,6 +385,22 @@ function migrate(): void {
   });
   if (result.status !== 0) {
     throw new Error(`[e2e] migration failed (status ${String(result.status)}):\n${result.stdout}\n${result.stderr}`);
+  }
+}
+
+/**
+ * The scenario clock also has to reach the database: the durable runner stamps invocations with the process clock (clock.mjs) but decides
+ * what is due, and which leases have expired, by the database's `clock_timestamp()`. A `public.clock_timestamp()` that adds the offset in
+ * `public.e2e_clock` shadows the built-in one (search path public first), and `advanceClock` moves both.
+ */
+async function installScenarioClock(): Promise<void> {
+  const sql = postgres(databaseUrl, { max: 1 });
+  try {
+    await sql.unsafe(`CREATE TABLE public.e2e_clock (ms bigint NOT NULL); INSERT INTO public.e2e_clock VALUES (0);
+      CREATE FUNCTION public.clock_timestamp() RETURNS timestamptz LANGUAGE sql VOLATILE AS $$ SELECT pg_catalog.clock_timestamp() + (SELECT ms FROM public.e2e_clock) * interval '1 millisecond' $$;
+      ALTER DATABASE agents SET search_path = public, pg_catalog`);
+  } finally {
+    await sql.end();
   }
 }
 
@@ -503,13 +544,39 @@ const realModelBaseUrl = process.env['E2E_MODEL_BASE_URL'] ?? 'http://127.0.0.1:
 const computerProvider = process.env['E2E_COMPUTER_PROVIDER'] ?? 'fake';
 /** The local computer's image: `juno-desktop:local` unless `E2E_SANDBOX_IMAGE` names another tag (a rebuilt image checked before its retag). */
 const sandboxImage = process.env['E2E_SANDBOX_IMAGE'] ?? 'juno-desktop:local';
+/** Written on every container this stack's computerd makes (COMPUTERD_DEPLOYMENT_ID), so teardown finds exactly its own and no other stack's. */
+const DEPLOYMENT_ID = `e2e-${process.pid}-${Date.now().toString(36)}`;
+
+/**
+ * Remove the containers this run's computerd made and the volumes of the (throwaway) accounts that owned them. Synchronous, so it
+ * also runs from the exit path; call it after computerd has stopped, so nothing is created behind it. Best effort: a failure is
+ * printed, never thrown. Only objects with this run's deployment label, or this run's owner hashes on managed volumes, are touched.
+ */
+function removeLocalComputers(): void {
+  if (computerProvider !== 'local') return;
+  const docker = (args: string[]) => spawnSync('docker', args, { encoding: 'utf8', timeout: 60_000 });
+  const containers = docker(['ps', '-aq', '--no-trunc', '--filter', `label=dev.agent-desktop.deployment=${DEPLOYMENT_ID}`]).stdout.split('\n').filter(Boolean);
+  const owners = new Set<string>();
+  for (const id of containers) {
+    const owner = docker(['inspect', '-f', '{{index .Config.Labels "dev.agent-desktop.owner"}}', id]).stdout.trim();
+    if (owner !== '') owners.add(owner);
+  }
+  if (containers.length > 0) {
+    const removed = docker(['rm', '-f', ...containers]);
+    if (removed.status !== 0) console.error(`[e2e] could not remove this run's containers: ${removed.stderr.trim()}`);
+  }
+  for (const owner of owners) {
+    const volumes = docker(['volume', 'ls', '-q', '--filter', `label=dev.agent-desktop.owner=${owner}`, '--filter', 'label=dev.agent-desktop.managed=1']).stdout.split('\n').filter(Boolean);
+    if (volumes.length > 0) docker(['volume', 'rm', ...volumes]);
+  }
+}
 
 /** The scripted model's context window: small enough that the long-chat scenario makes the harness compact, large enough that short chats never do. */
 const SCRIPTED_CONTEXT_WINDOW = '24000';
 
 function modelEnv(scriptFile: string): Record<string, string> {
   // Scripted scenarios wait for the chat digest's quiet window; real-model tests trigger it with runNow instead.
-  if (realModel === undefined || realModel.length === 0) return { MODEL_PROVIDER: 'scripted', SCRIPTED_MODEL_FILE: scriptFile, CHAT_DIGEST_QUIET_MS: '3000', SCRIPTED_CONTEXT_WINDOW: SCRIPTED_CONTEXT_WINDOW };
+  if (realModel === undefined || realModel.length === 0) return { MODEL_PROVIDER: 'scripted', SCRIPTED_MODEL_FILE: scriptFile, CHAT_DIGEST_QUIET_MS: '3000', CHAT_DIGEST_OBSERVE_MS: '3000', CHAT_DIGEST_OBSERVE_MAX: '4', SCRIPTED_CONTEXT_WINDOW: SCRIPTED_CONTEXT_WINDOW };
   return { MODEL_BASE_URL: realModelBaseUrl, MODEL_ID: realModel, ...(process.env['E2E_MODEL_SUPPORTS_IMAGES'] === 'true' ? { MODEL_SUPPORTS_IMAGES: 'true' } : {}) };
 }
 
@@ -552,6 +619,7 @@ async function startBackend(scriptFile: string): Promise<void> {
       COMPUTER_PROVIDER: computerProvider,
       LOCAL_SANDBOX_IMAGE: sandboxImage,
       COMPUTERD_TOKEN: SECRETS.computerdToken,
+      COMPUTERD_DEPLOYMENT_ID: DEPLOYMENT_ID,
       SCREEN_TICKET_SECRET: SECRETS.screenTicketSecret,
       DATABASE_URL: databaseUrl,
       COMPUTER_BINDING_FILE: join(dataDir, 'computerd-binding.json'),
@@ -579,14 +647,21 @@ async function startBackend(scriptFile: string): Promise<void> {
 
   agentdEnv = cleanEnv({
       AGENTD_PORT: String(PORTS.agentd),
+      // The api's public origin: agentd's MCP client sends the hosted-connector credential to this origin's hosted paths only.
+      BETTER_AUTH_URL: apiUrl,
       // A Microsoft sign-in client the deployment "has", so the Outlook apps count as offerable (a card for them is only a card: no sign-in
-      // starts and no Microsoft host is contacted). Google, Strava and the platform keys stay absent.
+      // starts and no Microsoft host is contacted). Google, Asana and the platform keys stay absent.
       MICROSOFT_CLIENT_ID: 'e2e-microsoft-client',
       MICROSOFT_CLIENT_SECRET: 'e2e-microsoft-secret',
       ...COMPOSIO_ENV,
+      SLACK_API_BASE_URL: `http://127.0.0.1:${PORTS.slack}/api`,
+      FCM_SERVICE_ACCOUNT: fcmServiceAccount(),
+      FCM_API_BASE_URL: `http://127.0.0.1:${PORTS.fcm}`,
+      E2E_CLOCK_FILE: clockFile,
       // Which reasoning tier chat runs use (quick | standard | deep), so real-model runs can be measured per tier.
       ...(process.env['CHAT_EFFORT_TIER'] ? { CHAT_EFFORT_TIER: process.env['CHAT_EFFORT_TIER'] } : {}),
       INTERNAL_AGENTD_TOKEN: SECRETS.internalToken,
+      HOSTED_MCP_TOKEN: SECRETS.hostedMcpToken,
       SECRETS_KEY: SECRETS.secretsKey,
       DATABASE_URL: databaseUrl,
       COMPUTERD_URL: computerdUrl,
@@ -629,6 +704,7 @@ async function startBackend(scriptFile: string): Promise<void> {
       BLOB_DIR: join(dataDir, 'blobs'),
       AGENTD_URL: agentdUrl,
       INTERNAL_AGENTD_TOKEN: SECRETS.internalToken,
+      HOSTED_MCP_TOKEN: SECRETS.hostedMcpToken,
       ADMIN_TOKEN: SECRETS.adminToken,
       ...COMPOSIO_ENV,
       MCP_ALLOW_PRIVATE_HOSTS: '1',
@@ -678,6 +754,7 @@ async function teardown(): Promise<void> {
   tornDown = true;
   controlServer?.close();
   for (const entry of [...managed].reverse()) await stopManaged(entry);
+  removeLocalComputers();
   try {
     await pg?.stop();
   } catch {
@@ -710,6 +787,7 @@ function exitCleanup(): void {
   }
   // Orphaned vitest workers are direct children of this process and otherwise keep spinning.
   spawnSync('pkill', ['-KILL', '-P', String(process.pid)]);
+  removeLocalComputers();
   removeDataDir();
 }
 
@@ -775,9 +853,11 @@ async function bootStack(): Promise<E2eContext> {
 
     const scriptFile = join(dataDir, 'scripted-model.json');
     writeFileSync(scriptFile, '{}');
+    writeFileSync(clockFile, '0');
 
     await startPostgres();
     migrate();
+    await installScenarioClock();
     await startBackend(scriptFile);
     await startControlServer();
 
@@ -787,6 +867,7 @@ async function bootStack(): Promise<E2eContext> {
       apiUrl: `http://127.0.0.1:${PORTS.api}`,
       agentdUrl: `http://127.0.0.1:${PORTS.agentd}`,
       internalToken: SECRETS.internalToken,
+      hostedMcpToken: SECRETS.hostedMcpToken,
       scriptFile,
       databaseUrl,
       controlUrl: `http://127.0.0.1:${PORTS.control}`,
@@ -798,6 +879,9 @@ async function bootStack(): Promise<E2eContext> {
       spaceUrlSecret: SECRETS.spaceUrlSecret,
       artifactUrlSecret: SECRETS.artifactUrlSecret,
       workers: WORKERS,
+      slackUrl: `http://127.0.0.1:${PORTS.slack}`,
+      fcmUrl: `http://127.0.0.1:${PORTS.fcm}`,
+      clockFile,
     };
   } catch (error) {
     // Vitest does not run the returned teardown when setup throws, so clean up here.

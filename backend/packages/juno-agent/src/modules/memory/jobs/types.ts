@@ -1,5 +1,5 @@
 /**
- * What the memory jobs (BACKEND §5.4) need from the outside. Nothing here knows about Restate: the harness adapter
+ * What the memory jobs (BACKEND §5.4) need from the outside. Nothing here knows about the runner: the harness adapter
  * (`execution/harness/services/memory-timer.ts`) supplies the model call and the clock, keeps the checkpoints and re-runs on schedule.
  */
 import type { AssistantTurn } from '../../../contracts/index.js';

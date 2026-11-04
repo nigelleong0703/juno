@@ -77,18 +77,24 @@ describe('the tool list a run hands to the model call', () => {
     expect(toolsForModel(all, {}).find((entry) => entry.name === 'react')?.deferLoading).toBe(true);
     expect(toolsForModel(all, {}, { reactions: true }).find((entry) => entry.name === 'react')?.deferLoading).toBe(false);
   });
+
+  it('makes message_agent a core tool only in a room with other agents', () => {
+    const all = [...core, tool('message_agent', 'Talk to an agent.')];
+    expect(toolsForModel(all, {}).find((entry) => entry.name === 'message_agent')?.deferLoading).toBe(true);
+    expect(toolsForModel(all, {}, { roomTalk: true }).find((entry) => entry.name === 'message_agent')?.deferLoading).toBe(false);
+  });
 });
 
 describe('the discovery directory', () => {
-  const groups = groupNamespaces([tool('shell.run', 'Run a command.'), tool('shell.start', 'Start a command.')]);
+  const groups = groupNamespaces([tool('shell.poll', 'Poll a command.'), tool('shell.start', 'Start a command.')]);
 
   it('names tools as the model can call them when it has native loading, and keeps the tool_call wording otherwise', () => {
-    const aliases = createToolNameAliases(['shell.run', 'shell.start']);
+    const aliases = createToolNameAliases(['shell.poll', 'shell.start']);
     const native = renderNamespaceDirectory(groups, (name) => aliases.toProtocol(name));
-    expect(native).toContain('shell_run, shell_start');
+    expect(native).toContain('shell_poll, shell_start');
     expect(native).not.toContain('tool_call');
     const proxy = renderNamespaceDirectory(groups);
-    expect(proxy).toContain('shell.run, shell.start');
+    expect(proxy).toContain('shell.poll, shell.start');
     expect(proxy).toContain('tool_call');
   });
 });

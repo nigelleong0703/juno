@@ -50,6 +50,7 @@ export function transportFor(
   if (config.transport === 'http') {
     return new HttpMcpTransport({
       url: config.url,
+      hosted: config.hosted === true,
       ...(config.headers === undefined ? {} : { headers: config.headers }),
       ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
       ...(authorize === undefined ? {} : { authorize }),

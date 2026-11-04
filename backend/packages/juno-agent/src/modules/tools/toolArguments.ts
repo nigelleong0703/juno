@@ -6,6 +6,8 @@
  *    ("clear this value") lists the field in `Tool.clearable`, and null then passes through.
  *  - `publicParameters`: the schema the model is shown declares each optional string as `["string","null"]`, so "no value" has a
  *    legal spelling and "" stops being the natural one.
+ *  - `decodeJsonText`: a field the schema declares as an object or array that arrived as JSON text of that shape is decoded (a model
+ *    stringifies nested values; a validation round trip costs a voice caller seconds and weaker models answer it with `{}`).
  *  - `checkArguments`: a bounded JSON Schema check (required, type, enum, array size) that runs before a tool does.
  *  - `invalidArguments` / `argumentErrorText`: the one shape of a validation error the model reads: the field, what it sent, what
  *    is expected, and a corrected example.
@@ -25,7 +27,7 @@ export interface ArgumentIssue {
 
 export interface Normalization {
   field: string;
-  was: 'empty' | 'whitespace' | 'null';
+  was: 'empty' | 'whitespace' | 'null' | 'json_text';
 }
 
 const MAX_ISSUES = 5;
@@ -98,6 +100,69 @@ export function normalizeOptionalStrings(tool: Pick<Tool, 'parameters' | 'cleara
   return { args: next, normalized };
 }
 
+// ---------------------------------------------------------------------------
+// Structured values sent as JSON text
+// ---------------------------------------------------------------------------
+
+/** The value JSON text holds when it is exactly the object or array the schema wants; undefined for anything else. */
+function decodedAs(types: readonly string[], text: string): unknown {
+  if (types.includes('string') || !holdsJson(text)) return undefined;
+  const value: unknown = JSON.parse(text.trim());
+  return (types.includes('object') && isRecord(value)) || (types.includes('array') && Array.isArray(value)) ? value : undefined;
+}
+
+/** The types a field accepts: its own `type`, or for `anyOf`/`oneOf` every branch's (unknown when a branch names none). */
+function acceptedTypes(spec: Json): string[] {
+  const branches = spec['anyOf'] ?? spec['oneOf'];
+  if (!Array.isArray(branches)) return typesOf(spec);
+  const kinds = branches.map((branch) => (isRecord(branch) ? typesOf(branch) : []));
+  return kinds.every((entry) => entry.length > 0) ? [...new Set(kinds.flat())] : ['string'];
+}
+
+function decodeValue(spec: Json, value: unknown, where: string, found: Normalization[]): unknown {
+  let next = value;
+  if (typeof value === 'string') {
+    const decoded = decodedAs(acceptedTypes(spec), value);
+    if (decoded !== undefined) {
+      found.push({ field: where, was: 'json_text' });
+      next = decoded;
+    }
+  }
+  if (isRecord(next)) return decodeObject(spec, next, where, found);
+  const items = spec['items'];
+  if (Array.isArray(next) && isRecord(items)) {
+    const list: unknown[] = next;
+    const mapped = list.map((item, index) => decodeValue(items, item, where + '[' + String(index) + ']', found));
+    return mapped.some((item, index) => item !== list[index]) ? mapped : next;
+  }
+  return next;
+}
+
+function decodeObject(schema: Json, value: Json, path: string, found: Normalization[]): Json {
+  const properties = isRecord(schema['properties']) ? schema['properties'] : {};
+  let out: Json | undefined;
+  for (const [key, field] of Object.entries(value)) {
+    const spec = properties[key];
+    if (!isRecord(spec)) continue;
+    const next = decodeValue(spec, field, path === '' ? key : path + '.' + key, found);
+    if (next !== field) {
+      out ??= { ...value };
+      out[key] = next;
+    }
+  }
+  return out ?? value;
+}
+
+/**
+ * The arguments with every object or array field that arrived as JSON text of that shape decoded, and which fields were (for the log).
+ * Only a field whose schema type is object/array and not string is touched, and only when the text parses to that type; anything else
+ * is left for `checkArguments` to name.
+ */
+export function decodeJsonText(parameters: Json, args: Json): { args: Json; normalized: Normalization[] } {
+  const normalized: Normalization[] = [];
+  return { args: decodeObject(inlineRefs(parameters), args, '', normalized), normalized };
+}
+
 function widen(schema: Json): Json {
   if (isRecord(schema['properties'])) return publicParameters(schema);
   if (isRecord(schema['items']) && isRecord(schema['items']['properties'])) return { ...schema, items: publicParameters(schema['items']) };
@@ -127,14 +192,85 @@ export function publicParameters(schema: Json): Json {
 // Checking: what the model sent, in words
 // ---------------------------------------------------------------------------
 
+/** A string that is an object or an array written out as JSON text: the model encoded a structured value as a string. */
+function holdsJson(text: string): boolean {
+  const trimmed = text.trim();
+  if (!/^[{[]/.test(trimmed)) return false;
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function describeReceived(value: unknown): string {
   if (value === undefined) return 'nothing (the field is missing)';
   if (value === null) return 'null';
-  if (typeof value === 'string') return value === '' ? 'an empty string' : value.trim() === '' ? 'a blank string' : 'a string of ' + String(value.length) + ' characters';
+  if (typeof value === 'string') {
+    if (value === '') return 'an empty string';
+    if (value.trim() === '') return 'a blank string';
+    return holdsJson(value)
+      ? 'a string of JSON text (' + String(value.length) + ' characters); send the value itself, not text that encodes it'
+      : 'a string of ' + String(value.length) + ' characters';
+  }
   if (typeof value === 'number') return 'a number';
   if (typeof value === 'boolean') return 'a boolean';
   if (Array.isArray(value)) return 'an array of ' + String(value.length) + (value.length === 1 ? ' item' : ' items');
   return 'an object';
+}
+
+const MAX_REF_DEPTH = 8;
+
+/** The target of a local reference (`#/$defs/Name`, `#/definitions/Name`); undefined for anything else. */
+function localRef(root: Json, ref: string): Json | undefined {
+  const match = /^#\/(\$defs|definitions)\/([^/]+)$/.exec(ref);
+  const group = match === null ? undefined : root[match[1] ?? ''];
+  const target = match === null || !isRecord(group) ? undefined : group[decodeURIComponent(match[2] ?? '')];
+  return isRecord(target) ? target : undefined;
+}
+
+function inlineNode(node: unknown, root: Json, depth: number): unknown {
+  if (Array.isArray(node)) return node.map((entry) => inlineNode(entry, root, depth));
+  if (!isRecord(node)) return node;
+  const ref = node['$ref'];
+  if (typeof ref === 'string') {
+    const target = localRef(root, ref);
+    // A reference that cannot be followed (not local, not found, or a schema that refers to itself past the depth bound) stays as it is.
+    if (target !== undefined && depth < MAX_REF_DEPTH) {
+      const { $ref: _ref, ...siblings } = node;
+      return inlineNode({ ...target, ...siblings }, root, depth + 1);
+    }
+  }
+  const out: Json = {};
+  for (const [key, value] of Object.entries(node)) out[key] = key === '$defs' || key === 'definitions' ? value : inlineNode(value, root, depth);
+  return out;
+}
+
+const inlined = new WeakMap<object, Json>();
+
+/**
+ * The schema with every local `$ref` replaced by what it points to, siblings (a field's own description) kept. Servers that build their schema
+ * from protobuf messages (Google Maps Grounding Lite: `origin: { "$ref": "#/$defs/Waypoint" }`) put the type of an object field only in
+ * `$defs`; without this the field has no type to check and a JSON-encoded string passes.
+ */
+export function inlineRefs(schema: Json): Json {
+  const known = inlined.get(schema);
+  if (known !== undefined) return known;
+  const next = JSON.stringify(schema).includes('"$ref"') ? (inlineNode(schema, schema, 0) as Json) : schema;
+  inlined.set(schema, next);
+  return next;
+}
+
+/**
+ * The schema as the model is shown it: local references written out (a model reads `"origin": { "$ref": "#/$defs/Waypoint" }` as a
+ * name, not a shape, and sends text), and `$defs` dropped once nothing refers to it. The server still gets the arguments as sent.
+ */
+export function shownSchema(schema: Json): Json {
+  const next = inlineRefs(schema);
+  if (next === schema) return next;
+  const { $defs: _defs, definitions: _definitions, ...rest } = next;
+  return JSON.stringify(rest).includes('"$ref"') ? next : rest;
 }
 
 function matchesType(type: string, value: unknown): boolean {
@@ -154,8 +290,19 @@ function article(noun: string): string {
 
 function visit(schema: Json, value: unknown, path: string, issues: ArgumentIssue[]): void {
   if (issues.length >= MAX_ISSUES) return;
-  // Combinators and references are not checked here: the tool's own validation owns them.
-  if (['anyOf', 'oneOf', 'allOf', 'not', '$ref'].some((keyword) => schema[keyword] !== undefined)) return;
+  // `not`, `allOf` and a reference that could not be followed are not checked here: the tool's own validation owns them.
+  if (['allOf', 'not', '$ref'].some((keyword) => schema[keyword] !== undefined)) return;
+  // `anyOf` / `oneOf`: only the kind of value is checked, and only when every branch names its type (an address OR coordinates, both objects:
+  // text is wrong whichever branch is meant). Which branch fits is the tool's own validation.
+  const branches = schema['anyOf'] ?? schema['oneOf'];
+  if (branches !== undefined) {
+    const kinds = Array.isArray(branches) ? branches.map((branch) => (isRecord(branch) ? typesOf(branch) : [])) : [];
+    if (kinds.length > 0 && kinds.every((entry) => entry.length > 0) && !kinds.flat().some((type) => matchesType(type, value))) {
+      const names = [...new Set(kinds.flat())];
+      issues.push({ path, received: describeReceived(value), expected: names.filter((type) => type !== 'null').map(article).join(' or ') + (names.includes('null') ? ' (or null)' : '') });
+    }
+    return;
+  }
   const types = typesOf(schema);
   if (types.length > 0 && !types.some((type) => matchesType(type, value))) {
     issues.push({ path, received: describeReceived(value), expected: types.filter((type) => type !== 'null').map(article).join(' or ') + (types.includes('null') ? ' (or null)' : '') });
@@ -193,7 +340,7 @@ function visit(schema: Json, value: unknown, path: string, issues: ArgumentIssue
 /** What is wrong with these arguments against the tool's JSON Schema; empty when nothing is. */
 export function checkArguments(tool: Pick<Tool, 'parameters'>, args: unknown): ArgumentIssue[] {
   const issues: ArgumentIssue[] = [];
-  visit(tool.parameters, args ?? {}, '', issues);
+  visit(inlineRefs(tool.parameters), args ?? {}, '', issues);
   return issues;
 }
 
@@ -213,7 +360,9 @@ function sample(spec: unknown, name: string): unknown {
   if (type === 'number' || type === 'integer') return typeof spec['minimum'] === 'number' ? spec['minimum'] : 1;
   if (type === 'boolean') return true;
   if (type === 'array') return isRecord(spec['items']) ? [sample(spec['items'], name)] : [];
-  return exampleObject(spec, []);
+  // An object with nothing required (a place that is an address OR coordinates OR an id) still shows one field, so the example is an object.
+  const properties = isRecord(spec['properties']) ? Object.keys(spec['properties']) : [];
+  return exampleObject(spec, stringsOf(spec['required']).length === 0 && properties[0] !== undefined ? [properties[0]] : []);
 }
 
 function exampleObject(schema: Json, extra: readonly string[]): Json {
@@ -229,11 +378,13 @@ function exampleObject(schema: Json, extra: readonly string[]): Json {
 export function argumentErrorText(tool: Pick<Tool, 'name' | 'parameters'>, issues: readonly ArgumentIssue[]): string {
   const lines = ['Error: invalid ' + tool.name + ' arguments.'];
   for (const issue of issues.slice(0, MAX_ISSUES)) lines.push('- ' + (issue.path === '' ? 'arguments' : issue.path) + ': received ' + issue.received + '; expected ' + issue.expected + '.');
+  const parameters = inlineRefs(tool.parameters);
   const fields = issues.map((issue) => issue.path.split(/[.[]/)[0] ?? '').filter((name) => name !== '');
-  const example = exampleObject(tool.parameters, fields);
+  const example = exampleObject(parameters, fields);
   if (Object.keys(example).length > 0) lines.push('Corrected example: ' + JSON.stringify(example));
-  const properties = isRecord(tool.parameters['properties']) ? Object.keys(tool.parameters['properties']) : [];
-  if (properties.length > stringsOf(tool.parameters['required']).length) lines.push('Leave out an optional field that has no value (or send null); never send "" for it.');
+  const properties = isRecord(parameters['properties']) ? Object.keys(parameters['properties']) : [];
+  if (properties.length > stringsOf(parameters['required']).length) lines.push('Leave out an optional field that has no value (or send null); never send "" for it.');
+  lines.push('Nothing was run. Correct the arguments and call ' + tool.name + ' again.');
   return lines.join('\n');
 }
 

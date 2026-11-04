@@ -13,7 +13,7 @@ import type { HomeComputer } from '../../ports/computer/index.js';
 import type { Embedder } from './embedder.js';
 import type { MemoryGraph } from './graph.js';
 import { createMemoryPort, type MemoryPort } from './port.js';
-import { backfillVectors, createVectorWriter, type VectorWriter } from './vectors.js';
+import { alignVectors, backfillVectors, createVectorWriter, type VectorWriter } from './vectors.js';
 
 export interface MemoryLog {
   info(fields: Record<string, unknown>, message: string): void;
@@ -62,7 +62,8 @@ export function createMemoryModule(deps: MemoryModuleDeps): MemoryModule | undef
     ...(vectors === undefined ? {} : { vectorWriter: vectors }),
     start() {
       if (embedder === undefined) return;
-      void backfillVectors({ items, embedder })
+      void alignVectors({ items, embedder })
+        .then((dimension) => (dimension === undefined ? 0 : backfillVectors({ items, embedder })))
         .then((stored) => { if (stored > 0) log?.info({ stored }, 'Embedded memory items (vector backfill)'); })
         .catch((error: unknown) => log?.error({ err: error }, 'Memory vector backfill failed; the next boot retries it'));
     },

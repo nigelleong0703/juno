@@ -199,7 +199,9 @@ export function createLifecycle(opts: LifecycleOptions): Lifecycle {
     gatewayKey: (computerId) => gatewayKeyFor(secret, computerId),
     async readEnvironment(agentId, signal) {
       const assigned = await allocator.readAssigned(agentId);
-      if (!assigned.binding) throw unavailable('no computer is bound for this owner yet');
+      // No computer yet is the normal state of an owner who has not used one (a chat no longer creates it, BACKEND 7.3a): the same
+      // "not started" answer as a computer without this agent's screen, so the first tool call starts it (`defaultEnvironmentSource`).
+      if (!assigned.binding) throw noScreen('no computer exists for this owner yet; the first computer action starts it');
       if (!assigned.screen) throw noScreen(`agent ${agentId} has no screen yet`);
       return provider.environment(assigned.binding, signal, agentId);
     },

@@ -46,10 +46,10 @@ const wakeEntryId = (sessionKey: string, eventId: string): string => `tx_wake_${
 
 /**
  * Persist the wake events that started a run. Each entry has a deterministic id, so if the DB write
- * succeeds but Restate loses the step result and replays it, the existing rows keep their seq and no
+ * succeeds but the runner loses the step result and replays it, the existing rows keep their seq and no
  * duplicate user turn is appended.
  */
-export async function appendWakeEvents(store: Store, blobs: BlobStore, sessionKey: string, events: WakeEvent[], place?: AttachmentPlacement, brain?: Pick<Brain, 'withSessionHarness'>, quietExit = false): Promise<void> {
+export async function appendWakeEvents(store: Store, blobs: BlobStore, sessionKey: string, events: WakeEvent[], place?: AttachmentPlacement, brain?: Pick<Brain, 'withSessionHarness'>, nobodyWaiting = false): Promise<void> {
   const entries = await readTranscript(store, sessionKey);
   const existing = new Set(entries.map(entry => entry.id));
   let seq = entries.length ? Math.max(...entries.map(entry => entry.seq)) + 1 : 0;
@@ -57,9 +57,11 @@ export async function appendWakeEvents(store: Store, blobs: BlobStore, sessionKe
     const id = wakeEntryId(sessionKey, event.id);
     if (existing.has(id)) continue;
     // The wake text is read from the version the session is pinned to (BACKEND §11.2), like its context.
-    const message = brain?.withSessionHarness === undefined ? wakeMessage(event, { quietExit }) : await brain.withSessionHarness(entries, () => wakeMessage(event, { quietExit }));
+    const message = brain?.withSessionHarness === undefined ? wakeMessage(event, { nobodyWaiting }) : await brain.withSessionHarness(entries, () => wakeMessage(event, { nobodyWaiting }));
     await store.put('transcripts', {
       id, sessionKey, seq: seq++, message: { ...await wakeWithAttachments(store, blobs, event, message, place) },
+      // Who may instruct the agent: the Guardian (BACKEND 8.3) tells the owner's words from what others wrote by this, never by the text.
+      toolState: { wake: { kind: event.kind, trusted: event.trusted } },
       compactionEpoch: 0, at: new Date().toISOString(),
     });
   }

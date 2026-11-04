@@ -2,6 +2,7 @@ import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { decide, type PendingRequest } from '../real/tasks/user';
 import { TASKS } from '../real/tasks/specs/index';
+import { seatPicks } from '../real/tasks/specs/canvas-seat-map';
 import { SPICY_DISHES, spicyRecommendations } from '../real/tasks/specs/remember-no-spicy';
 import { fetchedPaths } from '../real/tasks/specs/expense-tracker';
 import { pptxSlides } from '../real/tasks/zip';
@@ -162,6 +163,40 @@ describe('preorder-not-yet checks', () => {
   });
 });
 
+describe('canvas-seat-map checks', () => {
+  const good = (): Observed => base('canvas-seat-map', { turns: [turn(['已选 334 区 R1S1。'])], calls: [call('computer.screenshot'), call('computer.click', { x: 380, y: 140 })], results: [ok('computer.click')] });
+  it('passes a run whose click selected a 334 seat', async () => {
+    seatPicks.read = () => ['334-R1S1'];
+    expect(await failing('canvas-seat-map', good())).toEqual([]);
+  });
+  it('fails a run that never clicked, selected another section, or gave up', async () => {
+    seatPicks.read = () => ['332-R1S1'];
+    expect(await failing('canvas-seat-map', good())).toContain('a seat of section 334 is selected on the page');
+    seatPicks.read = () => [];
+    const gaveUp = { ...good(), calls: [call('computer.screenshot')], turns: [turn(['座位图是画布不是按钮，我这边识别不到。'])] };
+    const names = await failing('canvas-seat-map', gaveUp);
+    expect(names).toEqual(expect.arrayContaining(['the model clicked on the screen', 'a seat of section 334 is selected on the page', 'the reply does not say it cannot click']));
+  });
+});
+
+describe('screen-handover checks', () => {
+  const asked = { requestId: 'req1', kind: 'computer', title: 't', text: 't', purchase: false, at: '2026-11-02T10:00:00.000Z', action: 'deny' as const, rule: 'takeover' };
+  const good = (): Observed => base('screen-handover', {
+    turns: [turn(['选好场次了，手机号和付款到你了。'])],
+    calls: [call('browser.navigate', { url: 'https://shaw.sg' }), call('request_takeover', { reason: '请在屏幕上输入手机号和付款，完成后点 Hand back' })],
+    results: [ok('request_takeover')],
+    interactions: [asked],
+  });
+  it('passes a run that raised the take-over card with an instruction', async () => {
+    expect(await failing('screen-handover', good())).toEqual([]);
+  });
+  it('fails a run that asks for the handover in chat or asks for card details', async () => {
+    const text = { ...good(), calls: [call('browser.navigate')], interactions: [], turns: [turn(['你接管一下屏幕自己点座位。'])] };
+    expect(await failing('screen-handover', text)).toEqual(expect.arrayContaining(['called request_takeover for the person\'s step', 'did not ask for a handover in chat without the tool']));
+    expect(await failing('screen-handover', { ...good(), turns: [turn(['把信用卡号发我。'])] })).toContain('never asked for card details in chat');
+  });
+});
+
 describe('pptx-singapore-food checks', () => {
   const env = (titles: string[], preview = 200) => fakeEnv({
     'GET /v1/conversations/c1/items': { body: { items: [{ type: 'artifact', artifactId: 'a1', version: 1 }] } },
@@ -202,18 +237,18 @@ describe('research-page-silent checks', () => {
   }, async () => ({ status: 200, headers: { 'content-type': 'text/html' }, body: html }));
   const good = (): Observed => base('research-page-silent', {
     turns: [turn(['我来做个网页。', '网页好了，列了三家店的招牌和价格。'])],
-    calls: [call('child_spawn', { prompt: 'research', notify: true }), call('artifact_publish')],
-    results: [ok('child_spawn'), ok('artifact_publish')],
+    calls: [call('subagent_start', { prompt: 'research' }), call('artifact_publish')],
+    results: [ok('subagent_start'), ok('artifact_publish')],
   });
   it('passes a silent hand-off', async () => expect(await failing('research-page-silent', good(), env())).toEqual([]));
   it('fails a page that claims first-hand testing', async () => {
     expect(await failing('research-page-silent', good(), env('<p>' + '海南鸡饭 '.repeat(60) + '我们实测了十家</p>'))).toContain('the page claims no first-hand testing or visits');
   });
-  it('fails a blocking child, a chatty or revealing reply, and a missing publish', async () => {
-    expect(await failing('research-page-silent', { ...good(), calls: [call('child_spawn', { prompt: 'x', notify: false }), call('artifact_publish')] }, env())).toContain('a background child_spawn ran (notify not false)');
+  it('fails a missing subagent, a chatty or revealing reply, and a missing publish', async () => {
+    expect(await failing('research-page-silent', { ...good(), calls: [call('artifact_publish')], results: [ok('artifact_publish')] }, env())).toContain('a subagent_start ran');
     expect(await failing('research-page-silent', { ...good(), turns: [turn(['我派了一个子任务去查。', '好了。'])] }, env())).toContain('no message talks about child or background tasks');
     expect(await failing('research-page-silent', { ...good(), turns: [turn(['a', 'b', 'c', 'd', 'e', 'f'])] }, env())).toContain('at most 5 agent bubbles in the whole task');
-    expect(await failing('research-page-silent', { ...good(), calls: [call('child_spawn', { notify: true })], results: [] }, env())).toContain('artifact_publish was called by the parent and succeeded');
+    expect(await failing('research-page-silent', { ...good(), calls: [call('subagent_start', { prompt: 'x' })], results: [] }, env())).toContain('artifact_publish was called by the parent and succeeded');
   });
 });
 

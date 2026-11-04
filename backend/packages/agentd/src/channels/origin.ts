@@ -4,7 +4,7 @@
  * chat of the message that woke the run: a platform message, or an app message sent inside a channel conversation) and delivery
  * sends to exactly that, else to the chat a channel conversation is pinned to.
  */
-import type { Store } from '@agent-desktop/contracts';
+import { channelRowId, type Store } from '@agent-desktop/contracts';
 import type { ChannelOrigin, Conversation } from '@agent-desktop/public-contracts';
 import { channelMetaOf } from '../routes/channels.js';
 import { parseButtonToken } from '@agent-desktop/channels/render';
@@ -34,11 +34,18 @@ export function originOfItem(item: { replyTo?: ChannelOrigin }, conv: Conversati
  * The platform chat a question / approval goes to. Requests do not record a wake, so the origin is that of the user message the
  * run answered: the latest user message in the conversation at or before the request (or the pinned chat of a channel-only conversation).
  */
-export async function originOfRequest(store: Store, request: { conversationId?: string; createdAt: string }): Promise<{ origin: ChannelOrigin; conv: Conversation } | undefined> {
+export async function originOfRequest(store: Store, request: { conversationId?: string; createdAt: string; payload?: { kind: string; askedBy?: unknown } }): Promise<{ origin: ChannelOrigin; conv: Conversation } | undefined> {
   if (request.conversationId === undefined) return undefined;
   const conv = await store.get('conversations', request.conversationId);
   if (conv === null) return undefined;
   const pinned = conversationOrigin(conv);
+  // An approval someone else's ask raised (BACKEND 6.8) goes to the owner's own private chat with the agent, never into the group.
+  if (request.payload?.kind === 'approval' && request.payload.askedBy !== undefined) {
+    const row = pinned === undefined ? null : await store.get('channels', channelRowId(pinned.kind, pinned.channelId));
+    return pinned === undefined || row?.ownerChatId === undefined
+      ? undefined
+      : { origin: { kind: pinned.kind, channelId: pinned.channelId, chatId: row.ownerChatId, threadId: row.ownerChatId, chatType: 'private' }, conv };
+  }
   if (pinned !== undefined) return { origin: pinned, conv };
   const recent = await store.list('items', { where: { conversationId: conv.id }, orderBy: 'at', order: 'desc', limit: 30 });
   const asked = recent.items.find((item) => item.type === 'user_message' && item.at <= request.createdAt);

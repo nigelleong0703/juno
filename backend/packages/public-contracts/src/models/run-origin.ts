@@ -9,12 +9,17 @@ import { idSchema, isoDateTimeSchema } from './common.js';
 export const runOriginSchema = z.discriminatedUnion('type', [
   /** The owner typed in the app. */
   z.object({ type: z.literal('owner_message'), conversationId: idSchema, itemId: idSchema.optional() }),
-  /** A message in a platform chat (Telegram, Slack, ...). `member` is reserved for a known non-owner; today the platforms report owner or stranger. */
+  /**
+   * A message in a platform chat (Telegram, Slack, ...). `member` is a teammate (a known person in a group the owner put the agent in,
+   * BACKEND 6.8), `stranger` anyone else who is not the owner. A child task and everything under it is held to the same rules as this root.
+   */
   z.object({
     type: z.literal('channel'),
     channel: z.string().min(1),
     conversationId: idSchema,
     speaker: z.enum(['owner', 'member', 'stranger']),
+    /** Who spoke, as the platform names them: the card an owner is asked says who asked, also for a child's request. */
+    speakerName: z.string().max(80).optional(),
   }),
   /** A routine's schedule or monitor fired. */
   z.object({ type: z.literal('routine'), routineId: idSchema, occurrenceAt: isoDateTimeSchema }),

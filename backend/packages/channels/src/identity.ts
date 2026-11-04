@@ -10,8 +10,6 @@ import type { AdapterAuth } from './abilities.js';
 export interface ChannelIdentity {
   /** The platform's name for people ("Slack"; Feishu on the Lark domain: "Lark"). */
   displayName(row: Pick<ChannelRow, 'domain'>): string;
-  /** Whether a person mentioned in a group message is this channel's own bot. */
-  addressesSelf(row: Pick<ChannelRow, 'botUserId' | 'channelId'>, person: { id: string; handle?: string }): boolean;
   /** The platform's message id as the channel ingress stores it (`externalMessageId`). */
   externalMessageKey(chatId: string, messageId: string): string;
   /** The workspace an account lives in; '' when the platform's user ids are global. */
@@ -27,7 +25,6 @@ export interface ChannelIdentity {
 export function platformIdentity(name: string, overrides: Partial<ChannelIdentity> = {}): ChannelIdentity {
   return {
     displayName: () => name,
-    addressesSelf: (row, person) => row.botUserId !== undefined && person.id === row.botUserId,
     externalMessageKey: (_chatId, messageId) => messageId,
     workspaceOf: () => '',
     botLabel: (_row, agentName) => agentName,

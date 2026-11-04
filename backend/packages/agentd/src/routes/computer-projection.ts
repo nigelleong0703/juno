@@ -11,6 +11,14 @@ import type { ScreenResponse, Store } from '@agent-desktop/contracts';
 import type { ComputerdClient, ComputerView, PublicScreen } from '../computerd.js';
 import { ComputerdClientError } from '../computerd.js';
 
+/** What the computer row shows of computerd's configuration (the same env variables computerd reads; `getConfig()` fits). */
+export interface ComputerSettings {
+  /** The configured screen size every screen boots with. */
+  COMPUTER_RESOLUTION: string;
+  /** Idle minutes before the computer is paused. */
+  COMPUTER_IDLE_PAUSE_MINUTES: number;
+}
+
 /** The one public computer row for this owner, created on first ensure. */
 export async function projectComputer(
   store: Store,
@@ -18,12 +26,13 @@ export async function projectComputer(
   view: ComputerView,
   /** The agent the caller is ensuring for; its binding is persisted on the computer row. */
   agentId: string | undefined,
-  /** The configured screen size (COMPUTER_RESOLUTION) every screen boots with. */
-  resolution: string,
+  settings: ComputerSettings,
 ): Promise<Computer> {
+  const resolution = settings.COMPUTER_RESOLUTION;
   const patch = {
     state: 'running' as const,
     resolution,
+    idlePauseMinutes: settings.COMPUTER_IDLE_PAUSE_MINUTES,
     os: view.template,
     lastUpdatedAt: new Date().toISOString(),
     resources: resources(view),
@@ -49,7 +58,7 @@ export async function projectComputer(
     controller: 'agent',
     resources: patch.resources,
     size: patch.size,
-    idlePauseMinutes: 30,
+    idlePauseMinutes: patch.idlePauseMinutes,
     updateSchedule: { kind: 'auto' },
     uptimeSeconds: 0,
     os: view.template,
@@ -144,10 +153,10 @@ export async function ensureComputer(
   computerd: Pick<ComputerdClient, 'computer' | 'ensureScreen'>,
   ownerId: string,
   agentId: string | undefined,
-  resolution: string,
+  settings: ComputerSettings,
   signal: AbortSignal,
 ): Promise<Computer> {
-  const computer = await projectComputer(store, ownerId, await computerd.computer(signal), agentId, resolution);
+  const computer = await projectComputer(store, ownerId, await computerd.computer(signal), agentId, settings);
   if (agentId === undefined) return computer;
   const screen = remapScreen(await computerd.ensureScreen(agentId, signal), computer.id, ownerId);
   return withScreen(computer, screen);

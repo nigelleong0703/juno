@@ -4,6 +4,7 @@ import { zValidator } from '@hono/zod-validator';
 import type { Agent, CreateAgentInput } from '@agent-desktop/public-contracts';
 import { createAgentInputSchema, updateAgentInputSchema } from '@agent-desktop/public-contracts';
 import { createLogger } from '@agent-desktop/log';
+import { deleteAnnounced } from 'juno-agent/modules/deleted-rows';
 import { seedAgentFiles } from 'juno-agent/modules/home/service';
 import { onboardNewAgent } from 'juno-agent/modules/onboarding';
 import { emitAgentStatus, withLiveStatus } from 'juno-agent/execution/agent-status';
@@ -14,6 +15,7 @@ import type { SkillsService } from '@agent-desktop/memory-graph/skills';
 import { getOwnerId } from '../auth.js';
 import type { AgentdDeps } from './index.js';
 import { detachAgentFromComputer } from './computer-projection.js';
+import { deleteAgentData, stopAgentLiveRuns } from './agent-data-delete.js';
 import { deleteConversationCascade } from './conversation-delete.js';
 import { stopAgentRuns } from './runs.js';
 import { gateDeps } from './routines.js';
@@ -304,8 +306,9 @@ export type AgentDeleteResult =
   | { ok: false; status: 403 | 404 | 409 | 500 | 502; code: string; message: string };
 
 /**
- * Delete one agent for its owner: its direct chat (live runs stopped first), goals, ideas, calendar, feed posts, routines and
- * home mirror, then the agent, then `agent.deleted` so every open device drops it. The route and account deletion both come here.
+ * Delete one agent for its owner: every live run stopped first, then its direct chat, goals, ideas, calendar, feed posts, routines,
+ * home mirror and the rest of its data (runs, apps, artifacts and their bytes, Spaces, audit: `deleteAgentData`), then the agent,
+ * then `agent.deleted` so every open device drops it. The route and account deletion both come here.
  */
 export async function deleteAgentCascade(deps: AgentdDeps, ownerId: string, agentId: string): Promise<AgentDeleteResult> {
   const existing = await deps.store.get('agents', agentId);
@@ -319,6 +322,9 @@ export async function deleteAgentCascade(deps: AgentdDeps, ownerId: string, agen
   if (loaded.truncated) {
     return { ok: false, status: 500, code: 'LIST_TRUNCATED', message: 'Conversation list truncated; retry later' };
   }
+  // Every live run of the agent first, chats or not: background, memory and routine runs would otherwise write rows we are about to delete.
+  const stopped = await stopAgentLiveRuns(deps, agentId);
+  if (!stopped.ok) return stopped;
   for (const conv of loaded.items) {
     if (conv.kind !== 'direct') continue;
     if (conv.agentIds.length !== 1 || conv.agentIds[0] !== agentId) continue;
@@ -328,10 +334,10 @@ export async function deleteAgentCascade(deps: AgentdDeps, ownerId: string, agen
   }
   // The agent's goals, ideas and feed posts go with it; nothing else points at them.
   for (const goal of (await listAll(deps.store, 'goals')).items) {
-    if (goal.agentId === agentId) await deps.store.delete('goals', goal.id);
+    if (goal.agentId === agentId) await deleteAnnounced(deps.store, 'goals', goal.id);
   }
   for (const idea of (await listAll(deps.store, 'ideas')).items) {
-    if (idea.agentId === agentId) await deps.store.delete('ideas', idea.id);
+    if (idea.agentId === agentId) await deleteAnnounced(deps.store, 'ideas', idea.id);
   }
   for (const item of (await listAll(deps.store, 'agentCalendar')).items) {
     if (item.agentId !== agentId) continue;
@@ -339,7 +345,7 @@ export async function deleteAgentCascade(deps: AgentdDeps, ownerId: string, agen
     await deps.enqueuer.scheduleCalendarItem?.(item.id);
   }
   for (const post of (await listAll(deps.store, 'feedPosts')).items) {
-    if (post.agentId === agentId) await deps.store.delete('feedPosts', post.id);
+    if (post.agentId === agentId) await deleteAnnounced(deps.store, 'feedPosts', post.id);
   }
   // Its routines go too, so no timer wakes a deleted agent (a stray fire also checks the agent exists).
   for (const routine of (await listAll(deps.store, 'routines')).items) {
@@ -350,6 +356,7 @@ export async function deleteAgentCascade(deps: AgentdDeps, ownerId: string, agen
   for (const row of (await listAll(deps.store, 'agentHome')).items) {
     if (row.agentId === agentId) await deps.store.delete('agentHome', row.id);
   }
+  await deleteAgentData(deps, agentId);
   await detachAgentFromComputer(deps.store, agentId);
   await deps.store.delete('agents', agentId);
   await deps.store.emit({ type: 'agent.deleted', agentId });

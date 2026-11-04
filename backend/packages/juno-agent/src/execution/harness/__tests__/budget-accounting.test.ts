@@ -1,6 +1,6 @@
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from "vitest"
-import { RestatePromise } from "@agent-desktop/durable"
+import { DurablePromise } from "@agent-desktop/durable"
 import { createMemoryStore, NoopEnqueuer } from "../../../testing/store.js"
 import type { AssistantTurn, Brain, BrainContext, Store, WakeEvent } from "../../../contracts/index.js"
 import type { Run } from "@agent-desktop/public-contracts"
@@ -10,7 +10,7 @@ import { ModelTurnError } from "../../brain/model-turn-error.js"
 import { NEVER_CANCELLED } from "../services/cancel.js"
 import { runLoop } from "../services/run-loop.js"
 import { createRunBudget } from "../services/run-budget.js"
-import { childSnapshotFor, snapshotOf } from "../services/budget-snapshot.js"
+import { subagentSnapshotFor, snapshotOf } from "../services/budget-snapshot.js"
 import type { AppSettings } from "@agent-desktop/public-contracts"
 import { chargeCompactionStep, chargeEffect, chargeFailedAttemptStep, checkBeforeEffect } from "../services/model-budget.js"
 import type { RunContext, RunInput, RunServices } from "../services/run-types.js"
@@ -40,20 +40,20 @@ function testContext(clock: { now: number }): RunContext & { sleeps: number[] } 
   const sleeps: number[] = []
   const ctx: RunContext = {
     rand: { uuidv4: () => "id-" + String(seq++) },
-    run: <T>(name: string, action: () => Promise<T>): RestatePromise<T> => {
+    run: <T>(name: string, action: () => Promise<T>): DurablePromise<T> => {
       if (used.has(name)) throw new Error("duplicate durable step: " + name)
       used.add(name)
-      return RestatePromise.resolve(action())
+      return DurablePromise.resolve(action())
     },
-    awakeable: <T>(): { id: string; promise: RestatePromise<T> } => {
+    awakeable: <T>(): { id: string; promise: DurablePromise<T> } => {
       throw new Error("no human waits in budget tests")
     },
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
-    date: { now: () => RestatePromise.resolve(clock.now) },
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
+    date: { now: () => DurablePromise.resolve(clock.now) },
     sleep: (ms: number) => {
       sleeps.push(ms)
       clock.now += ms
-      return RestatePromise.resolve(undefined)
+      return DurablePromise.resolve(undefined)
     },
   }
   return { ...ctx, sleeps }
@@ -154,9 +154,9 @@ describe("budget service accounting", () => {
 
   it("inherits subtracted child limits and fails closed on corrupt parent spend", () => {
     const snapshot = { limits: { steps: 10, tokens: 100, activeSeconds: 60, costUsd: 1 }, explicitCost: false }
-    const child = childSnapshotFor(snapshot, { inputTokens: 40, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, computeSeconds: 5, costUsd: 0.25, steps: 2 })
+    const child = subagentSnapshotFor(snapshot, { inputTokens: 40, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, computeSeconds: 5, costUsd: 0.25, steps: 2 })
     expect(child.limits).toMatchObject({ steps: 8, tokens: 50, activeSeconds: 55, costUsd: 0.75 })
-    const corrupt = childSnapshotFor(snapshot, { inputTokens: NaN, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, computeSeconds: -3, costUsd: -1, steps: 2 })
+    const corrupt = subagentSnapshotFor(snapshot, { inputTokens: NaN, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, computeSeconds: -3, costUsd: -1, steps: 2 })
     expect(corrupt.limits.tokens).toBe(0)
     expect(corrupt.limits.costUsd).toBe(0)
     expect(corrupt.limits.activeSeconds).toBe(0)
@@ -245,15 +245,15 @@ describe("terminal model failures keep honest accounting", () => {
     return {
       rand: { uuidv4: () => "id-" + String(seq++) },
       localDate: { now: () => { clock += 200; return clock } },
-      run: <T>(name: string, action: () => Promise<T>): RestatePromise<T> => {
+      run: <T>(name: string, action: () => Promise<T>): DurablePromise<T> => {
         if (used.has(name)) throw new Error("duplicate durable step: " + name)
         used.add(name)
-        return RestatePromise.resolve(action())
+        return DurablePromise.resolve(action())
       },
-      awakeable: <T>(): { id: string; promise: RestatePromise<T> } => {
+      awakeable: <T>(): { id: string; promise: DurablePromise<T> } => {
         throw new Error("no human waits in budget tests")
       },
-      drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+      drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
     }
   }
 

@@ -31,8 +31,8 @@ const TAIL_TAG = /\s*\[(claim|mem):([A-Za-z0-9_-]+)\]\s*$/;
 const NOTED_BY = /\s*\(noted by [^()]*, [^()\s]+\)\s*$/;
 const keyOf = (tag: Tag): string => tag.kind + ':' + tag.id;
 
-/** The lines of a view as they are written (`- text (noted by …) [tag]`), under their `## <name>（<id>）` sections on a person's page. */
-export function parseViewLines(content: string, personPage: boolean): ViewLine[] {
+/** The lines of a view as they are written (`- text (noted by …) [tag]`), under their `## <name>（<id>）` sections (one agent's own lines, BACKEND 5.4a). */
+export function parseViewLines(content: string): ViewLine[] {
   const lines: ViewLine[] = [];
   let section: string | undefined;
   for (const raw of content.split('\n')) {
@@ -49,7 +49,7 @@ export function parseViewLines(content: string, personPage: boolean): ViewLine[]
     }
     const text = rest.replace(NOTED_BY, '').replace(/\s+/g, ' ').trim();
     if (text === '') continue;
-    lines.push({ ...(tag === undefined ? {} : { tag }), text, ...(personPage && section !== undefined ? { agentId: section } : {}) });
+    lines.push({ ...(tag === undefined ? {} : { tag }), text, ...(section !== undefined ? { agentId: section } : {}) });
   }
   return lines;
 }
@@ -73,8 +73,8 @@ async function applyOwnerEdit(deps: HomeDeps & { memory: MemoryGraph }, input: {
   const people = await identity.listPeople(ownerId);
   // A page of a person nobody knows has no items to attach lines to.
   if (personId !== undefined && !people.some((person) => person.id === personId)) return;
-  const before = parseViewLines(input.previous, personId !== undefined);
-  const after = parseViewLines(input.next, personId !== undefined);
+  const before = parseViewLines(input.previous);
+  const after = parseViewLines(input.next);
   const beforeTagged = new Map<string, ViewLine & { tag: Tag }>();
   for (const line of before) if (line.tag !== undefined) beforeTagged.set(keyOf(line.tag), { ...line, tag: line.tag });
   const afterTagged = new Map<string, ViewLine>();

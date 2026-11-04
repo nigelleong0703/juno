@@ -40,7 +40,7 @@ function run(id: string, extra: Partial<Run> = {}): Run {
 }
 
 /** A child run `depth` levels under the chat run `run-chat`. */
-function childOf(id: string, parentRunId: string, depth: number, extra: Partial<Run> = {}): Run {
+function subagentOf(id: string, parentRunId: string, depth: number, extra: Partial<Run> = {}): Run {
   return run(id, { kind: 'background', parentRunId, title: 'Child ' + id, origin: { type: 'parent_run', runId: parentRunId }, rootOrigin: OWNER_ORIGIN, ...extra, ...{ rootRunId: 'run-chat', depth } });
 }
 
@@ -66,7 +66,7 @@ async function build() {
   await own.put('agents', { id: 'agent-a', name: 'Atlas' } as never);
   await (mem.forOwner?.(B) as Store).put('agents', { id: 'agent-b', name: 'Bea' } as never);
   await own.put('runs', run('run-chat'));
-  await own.put('runs', childOf('run-child', 'run-chat', 1, { title: 'Find rain jacket options' }));
+  await own.put('runs', subagentOf('run-child', 'run-chat', 1, { title: 'Find rain jacket options' }));
   await own.put('backgroundTasks', job('shell-agent-a-p1'));
   await own.put('agentTasks', declared);
   return { app, mem, enqueuer, processStops };
@@ -129,7 +129,7 @@ describe('agent task list API', () => {
     // Eight ended rows from four sources, all started at the same instant, and two earlier ones.
     for (const index of [1, 2, 3]) await own.put('backgroundTasks', job('shell-agent-a-done' + String(index), { status: 'completed', endedAt: at, startedAt: at, outcome: 'Exited with code 0' }));
     for (const index of [1, 2]) await own.put('agentTasks', { ...declared, id: 'task-done' + String(index), status: 'completed', finishedAt: at });
-    for (const index of [1, 2, 3]) await own.put('runs', childOf('run-done' + String(index), 'run-chat', 1, { status: 'completed', finishedAt: at }));
+    for (const index of [1, 2, 3]) await own.put('runs', subagentOf('run-done' + String(index), 'run-chat', 1, { status: 'completed', finishedAt: at }));
     await own.put('backgroundTasks', job('shell-agent-a-old', { status: 'failed', startedAt: '2026-10-12T00:00:00.000Z', endedAt: at }));
     await own.put('agentTasks', { ...declared, id: 'task-old', status: 'failed', startedAt: '2026-10-11T00:00:00.000Z', finishedAt: at });
 
@@ -168,10 +168,10 @@ describe('agent task list API', () => {
     const spend = (steps: number) => ({ inputTokens: steps, outputTokens: 0, computeSeconds: 0, costUsd: 0, steps });
     await own.patch('runs', 'run-chat', { usage: spend(1) });
     await own.patch('runs', 'run-child', { usage: spend(2) });
-    await own.put('runs', childOf('run-grandchild', 'run-child', 2, { usage: spend(4) }));
-    await own.put('runs', childOf('run-great', 'run-grandchild', 3, { usage: spend(8) }));
+    await own.put('runs', subagentOf('run-grandchild', 'run-child', 2, { usage: spend(4) }));
+    await own.put('runs', subagentOf('run-great', 'run-grandchild', 3, { usage: spend(8) }));
     // Past the spawn limit nothing can exist; a row that did would still not be walked.
-    await own.put('runs', childOf('run-too-deep', 'run-great', 4, { usage: spend(16) }));
+    await own.put('runs', subagentOf('run-too-deep', 'run-great', 4, { usage: spend(16) }));
 
     for (const entry of ['run-chat', 'task-1', 'shell-agent-a-p1', 'run-great']) {
       const res = await requestAs(app, A, '/v1/tasks/' + entry + '/tree');

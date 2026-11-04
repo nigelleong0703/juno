@@ -24,6 +24,7 @@ describe('wake text pinning', () => {
     const versions: HarnessVersionStore = {
       async row(id) { return id === altered.id ? { id, parentId: null, files: { ...altered.files }, origin: 'seed', status: 'retired', note: '', createdAt: '2026-10-26T00:00:00.000Z' } : undefined; },
       async active() { return undefined; },
+      async pinnedVersions() { return []; },
       async seedActive() { throw new Error('not used'); },
     };
     const store = createMemoryStore();

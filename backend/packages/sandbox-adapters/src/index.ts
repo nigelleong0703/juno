@@ -50,7 +50,7 @@ export {
 export type { BrowserInput, BrowserNode, BrowserResult } from './browser.js';
 export { MEET_HELPER, MEET_TIMEOUT_MS, meetCommand, meetInputSchema, meetResultSchema, parseMeetOutput } from './meet.js';
 export type { MeetInput, MeetResult } from './meet.js';
-export { COMPUTER_RECREATED_HEADER, CONTROL_CHANGED_HEADER, MAX_INSTALL_PACKAGES, PACKAGE_NAME } from 'juno-agent/computer';
+export { COMPUTER_RECREATED_HEADER, CONTROL_CHANGED_HEADER, MAX_INSTALL_PACKAGES, PACKAGE_NAME, PASSIVE_HEADER } from 'juno-agent/computer';
 export { agentUser, homeOwnership, installPackages, applyHomeOwnership, userScript } from './isolation.js';
 export { vncPasswordKey, vncResponse, encryptDesBlock } from './des.js';
 export { RfbHandshake, type RfbChannel, type Detached } from './rfb.js';
@@ -72,7 +72,7 @@ export { createSandboxProcesses, MAX_PROCESS_READ_BYTES, PROCESS_ROOT, type Sand
 export type { CommandResult, RuntimeOptions, SandboxRuntime } from './runtime.js';
 export { createSandboxHome, parseSnapshot, snapshotScript, type SandboxHome } from './home.js';
 export { createKeyedMutex, type KeyedMutex } from './mutex.js';
-export type { ComputerProvider, EraseReport } from './provider.js';
+export { MAX_HOLD_TTL_MS, type ComputerProvider, type EraseReport } from './provider.js';
 export { createMacSide, createSandboxSide, type PathKind, type TransferSide } from './path-transfer.js';
 export { GATEWAY_PORT, SPACE_ID, SPACE_PORTS, listenerProblem, parseListeners, type ListeningPort, type SpaceRegistration } from './spaces.js';
 export {
@@ -88,11 +88,16 @@ export type { ComputerClient, ComputerClientProvider } from './client.js';
 export { createE2bProvider, type E2bProviderOptions } from './e2b.js';
 export { createE2bDriver, type E2bDriverOptions } from './e2b-driver.js';
 export { createDockerCli, type DockerCli } from './docker-cli.js';
-export { createDockerDriver, runArguments, type DockerDriverOptions } from './docker-driver.js';
+export { createDockerDriver, runArguments, LINK_LABEL, type DockerDriverOptions } from './docker-driver.js';
+export { deploymentId, reapDecision, sweepManagedContainers, ORPHAN_GRACE_MS, type ReapInput, type ReapVerdict, type SweepReport } from './orphans.js';
+export { ownerHash, OWNER_LABEL } from './local-container.js';
 export type { CreateSpec, LifecycleDriver, LinkEnv, MachineState } from './driver.js';
 export { createLinkedProvider, type LinkedProviderOptions, type StartedContext } from './linked-provider.js';
 export { createLinkHub, streamConnector, type ExecOutput, type LinkConnection, type LinkHub, type LinkHubOptions, type LinkStream } from './link-hub.js';
 export { createLinkRuntime } from './link-runtime.js';
+export { createSkillsBundleSource, readSkillsBundle, type SkillsBundle } from './skills-bundle.js';
+export { createSkillsRollout, type SkillsRollout, type SkillsRolloutReport } from './skills-rollout.js';
+export { syncPlatformSkills, SKILLS_DIR } from './skills-sync.js';
 export { httpOverStream, type LinkResponse } from './link-http.js';
 export { agentRuntime, prepareForAgent } from './isolation.js';
 export { relaunchSpaces, type RelaunchDeps } from './space-relaunch.js';
@@ -120,6 +125,7 @@ export {
   userControl,
   BrowserDownError,
   StaleComputerError,
+  ComputerAsleepError,
   computerRecovering,
   type StaleReason,
   type ComputerErrorCode,

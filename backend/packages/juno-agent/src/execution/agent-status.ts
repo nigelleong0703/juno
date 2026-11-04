@@ -18,11 +18,44 @@ const RECENT_RUN_WINDOW = 20;
 /** Upkeep the user did not ask for (memory jobs and the like) is a background run with no parent; a delegated child is a background run too, but it is the agent's work. */
 const isUpkeep = (run: Run): boolean => run.kind === 'background' && run.parentRunId === undefined;
 
-/** Runs executing now: `running`, or a reserved child still `queued`. A run parked on a request is not working. */
+/**
+ * A chat reply that has not run a visible tool step yet is being written, not worked on: the chat shows the typing bubble, and
+ * the agent is not "working" (owner 2026-11-02: a plain reply showed Working and opened an empty Activity). Steps marked
+ * `internal` (finding tools, bookkeeping) are not work a person can see. Every other run kind is a task from the start.
+ */
+export async function isReplyOnly(store: Store, run: Run): Promise<boolean> {
+  if (run.kind !== 'chat' || run.status !== 'running') return false;
+  // The run row lists a step only once it has finished; a step still running (a long first tool call) is in the steps collection.
+  if (run.steps.some((step) => step.internal !== true)) return false;
+  const started = await store.list('steps', { where: { runId: run.id }, limit: VISIBLE_STEP_LOOKUP });
+  if (started.items.some((step) => step.internal !== true)) return false;
+  // A task the agent declared for this run (task_update) is work the person can see in Tasks, even when the call itself is plumbing.
+  const tasks = await store.list('agentTasks', { where: { agentId: run.agentId, status: 'running' }, limit: 10 });
+  return !tasks.items.some((task) => task.runId === run.id);
+}
+
+const VISIBLE_STEP_LOOKUP = 50;
+
+/**
+ * A step was just recorded: when it is the first one a person can see in a chat run, the agent goes from replying to working, so its
+ * status is announced (the run row alone changes no status event).
+ */
+export async function announceFirstStep(store: Store, runId: string, step: { id: string; internal?: boolean }): Promise<void> {
+  if (step.internal === true) return;
+  const run = await store.get('runs', runId);
+  if (run === null || run.kind !== 'chat' || run.status !== 'running') return;
+  const started = await store.list('steps', { where: { runId }, limit: VISIBLE_STEP_LOOKUP });
+  const visible = started.items.filter((other) => other.internal !== true);
+  if (visible.length === 1 && visible[0]?.id === step.id) await emitAgentStatus(store, run.agentId);
+}
+
+/** Runs executing now: `running`, or a reserved child still `queued`. A run parked on a request is not working, nor is a reply still being written. */
 async function activeRuns(store: Store, agentId: string): Promise<Run[]> {
   const running = await store.list('runs', { where: { agentId, status: 'running' }, limit: 100 });
   const queued = await store.list('runs', { where: { agentId, status: 'queued' }, limit: 100 });
-  return [...running.items, ...queued.items].filter((run) => !isUpkeep(run)).sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
+  const candidates = [...running.items, ...queued.items].filter((run) => !isUpkeep(run));
+  const working = (await Promise.all(candidates.map(async (run) => ((await isReplyOnly(store, run)) ? null : run)))).filter((run): run is Run => run !== null);
+  return working.sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
 }
 
 /** The newest top-level run (child failures are reported through their parent) failed, and nothing newer exists. */
@@ -70,12 +103,12 @@ async function doingLine(store: Store, agentId: string, runs: readonly Run[]): P
 
 /**
  * Precedence: working > needs_you > paused > error > idle.
- * - working: any run of the agent (any session, child runs included) is `running` or `queued`;
+ * - working: any run of the agent (any session, child runs included) is `running` or `queued`, except a chat reply that has not run a visible tool step yet (`isReplyOnly`: typing, not working);
  * - needs_you: a pending request (approval, sign-in, secure input, ...) for the agent; a question or connect card in a direct chat does not count;
  * - paused: the agent has `pausedAt`;
  * - error: the agent's newest top-level run failed (any later run clears it);
  * - idle: otherwise.
- * The store is owner-scoped (request/Restate owner scope), so only this owner's rows count.
+ * The store is owner-scoped (request/runner owner scope), so only this owner's rows count.
  */
 export async function agentStatus(store: Store, agentId: string): Promise<AgentStatusSnapshot> {
   const active = await activeRuns(store, agentId);

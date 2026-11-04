@@ -134,8 +134,10 @@ describe('shared Discord bot', () => {
     expect(main?.channel).toMatchObject({ kind: 'discord', chatId: 'DM1' });
     expect(main?.title).toMatch(/^Discord · /);
     await admitSharedDiscordMessage(ctx(), 'BOT', { id: 'dm2', channel_id: 'DM2', author: { id: 'USTRANGER' }, content: 'let me in', mentions: [], mention_roles: [] });
+    // A server message nobody addressed is only observed (an `observed` wake per agent of the server, never a run).
     await admitSharedDiscordMessage(ctx(), 'BOT', guildMessage({ content: 'no mention at all' }));
-    expect(wakes).toHaveLength(3);
+    expect(wakes.filter((wake) => wake.kind !== 'observed')).toHaveLength(3);
+    expect(wakes.filter((wake) => wake.kind === 'observed')).toHaveLength(2);
   });
 
   it('gives a group mention the recent channel messages as untrusted context, and stores none of them', async () => {

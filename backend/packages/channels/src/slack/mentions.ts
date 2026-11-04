@@ -1,5 +1,6 @@
 import { getJson, record, str } from '../http.js';
 import type { ChannelPerson } from '../types.js';
+import { slackApiBase } from './base.js';
 
 const MENTION = /<@([UW][A-Z0-9]+)(?:\|([^>]*))?>/g;
 
@@ -9,7 +10,7 @@ export function slackUserNamer(fetchFn: typeof fetch, token: string): (id: strin
   return async (id) => {
     const known = names.get(id);
     if (known !== undefined) return known;
-    const info = record(record(await getJson(fetchFn, 'https://slack.com/api/users.info?user=' + id, { authorization: 'Bearer ' + token }))['user']);
+    const info = record(record(await getJson(fetchFn, slackApiBase() + 'users.info?user=' + id, { authorization: 'Bearer ' + token }))['user']);
     const name = str(record(info['profile'])['display_name']) ?? str(info['real_name']) ?? id;
     names.set(id, name);
     return name;

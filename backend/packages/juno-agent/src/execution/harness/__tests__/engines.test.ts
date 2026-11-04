@@ -6,7 +6,7 @@ import { NEVER_CANCELLED } from '../services/cancel.js';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import { ScriptedModel, FakeToolRegistry } from '../testing/stubs.js';
 import type { WakeEvent } from '../../../contracts/index.js';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 
 const at = new Date().toISOString();
 
@@ -44,12 +44,12 @@ function turnContext() {
   };
   const ctx = {
     rand: { uuidv4: () => 'id-1' },
-    run: <T>(name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
-    awakeable: <T>(): { id: string; promise: RestatePromise<T> } => ({
+    run: <T>(name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()),
+    awakeable: <T>(): { id: string; promise: DurablePromise<T> } => ({
       id: 'awake',
-      promise: RestatePromise.resolve(new Promise<T>(() => {})),
+      promise: DurablePromise.resolve(new Promise<T>(() => {})),
     }),
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
   return {
     ctx,

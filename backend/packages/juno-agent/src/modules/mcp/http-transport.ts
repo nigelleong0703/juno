@@ -6,7 +6,7 @@
 import { guardedFetch } from '../tools/net/guardedFetch.js';
 import { MCP_MODERN_VERSION, McpAuthError, McpProtocolError, buildNotification, buildRequest, encodeHeaderValue, parseFrame, parseResult, subscriptionParams } from './protocol.js';
 import type { McpListenOptions, McpNotificationHandler, McpRequestOptions, McpTransport } from './transport.js';
-import { platformKeyHeaders } from './platform-keys.js';
+import { hostedMcpHeaders, platformKeyHeaders } from './platform-keys.js';
 import { parseChallenge } from './challenge.js';
 
 export interface HttpTransportOptions {
@@ -19,6 +19,11 @@ export interface HttpTransportOptions {
   authorize?: () => Promise<string>;
   /** Fixed extra headers (the owner's API key for a connector that takes one). */
   headers?: Record<string, string>;
+  /**
+   * The url is built from a stored hosted endpoint (a path: `isStoredHostedEndpoint`), or is the freshly resolved URL of a hosted catalog entry.
+   * Only then the request carries the hosted-connector credential. A custom server never does, whatever its url.
+   */
+  hosted?: boolean;
 }
 
 const DEFAULT_MAX_BYTES = 1_000_000;
@@ -91,8 +96,10 @@ export class HttpMcpTransport implements McpTransport {
   private readonly notifyTimeoutMs: number;
   private readonly authorize: (() => Promise<string>) | undefined;
   private readonly extraHeaders: Record<string, string>;
+  private readonly hosted: boolean;
 
   constructor(options: HttpTransportOptions) {
+    this.hosted = options.hosted === true;
     this.url = options.url;
     this.fetchImpl = options.fetchImpl ?? guardedFetch;
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
@@ -218,8 +225,12 @@ export class HttpMcpTransport implements McpTransport {
     };
     if (this.sessionId !== undefined) headers['mcp-session-id'] = this.sessionId;
     if (this.protocolVersion !== undefined) headers['mcp-protocol-version'] = this.protocolVersion;
-    if (this.authorize !== undefined) headers.authorization = await this.authorize();
-    return { ...headers, ...routing, ...this.extraHeaders, ...platformKeyHeaders(this.url) };
+    const upstream = this.authorize === undefined ? undefined : await this.authorize();
+    // A catalog connector our gateway hosts takes our service credential in `Authorization` and the owner's token in its own header;
+    // every other server gets the owner's token in `Authorization` and never sees the service credential.
+    const hosted = this.hosted ? hostedMcpHeaders(upstream) : undefined;
+    if (hosted === undefined && upstream !== undefined) headers.authorization = upstream;
+    return { ...headers, ...routing, ...this.extraHeaders, ...platformKeyHeaders(this.url), ...hosted };
   }
 
   /** Modern requests name their method (and target) in headers so an intermediary can route without the body. */
@@ -242,8 +253,9 @@ export class HttpMcpTransport implements McpTransport {
       throw new McpAuthError(response.status, parseChallenge(response.headers.get('www-authenticate')));
     }
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      throw new McpProtocolError(response.status, 'MCP server returned HTTP ' + String(response.status));
+      // The server's own words ride along (bounded): a model told only "HTTP 400" repeats the mistake.
+      const said = (await this.readBody(response).catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 500);
+      throw new McpProtocolError(response.status, 'MCP server returned HTTP ' + String(response.status) + (said === '' ? '' : ': ' + said), response.status);
     }
     return response;
   }

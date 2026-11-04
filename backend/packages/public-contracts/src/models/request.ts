@@ -77,6 +77,16 @@ export const approvalPayloadSchema = z.object({
    * and payment facts, the consequence and the screenshot. Clients render it with the UI blocks; `purchase`/`preview` stay for reference.
    */
   ui: uiDocSchema.optional(),
+  /**
+   * Someone other than the owner asked for this in a platform chat (BACKEND 6.8): who, where, and whether they are a teammate (a
+   * known person in a group the owner put the agent in) or a stranger. The card goes to the owner (the app, and the owner's own
+   * private chat on the platform), never into the group; clients show "<name> asked in <where>".
+   */
+  askedBy: z.object({
+    name: z.string().max(80).optional(),
+    where: z.string().max(120).optional(),
+    kind: z.enum(['teammate', 'stranger']),
+  }).optional(),
   /** 0.22.0: the decision brief (what, why, if denied, kind of decision, platform, verified facts). Absent on older requests. */
   brief: decisionBriefSchema.optional(),
   /** 0.22.0: whether "allow this kind" can be offered, and the limits it would start with. */

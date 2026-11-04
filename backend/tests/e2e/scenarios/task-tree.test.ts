@@ -33,7 +33,7 @@ describe('task tree', () => {
       // 1. One owner message: a child that reports back by itself, and a command that keeps running.
       const ack = `TREE-ACK-${randomUUID().slice(0, 8)}`;
       const { conversationId } = await scriptedChat(account, agent.body.id, [
-        { toolCalls: [toolCall('call-spawn', 'child_spawn', { prompt: 'look up fares', title: 'Look up fares', notify: true }), toolCall('call-shell', 'shell.start', { command: 'fake:exit 0 after 600000', title: 'Dev server' })] },
+        { toolCalls: [toolCall('call-spawn', 'subagent_start', { prompt: 'look up fares', title: 'Look up fares' }), toolCall('call-shell', 'shell.start', { command: 'fake:exit 0 after 600000', title: 'Dev server' })] },
         { text: ack },
         { text: ack },
       ], 'find me fares and start the dev server');
@@ -77,7 +77,8 @@ describe('task tree', () => {
       // 4. A routine run is a task of its own: started by the routine, delivered to its chat.
       const delivery = await account.api('POST', '/v1/conversations', { kind: 'direct', memberAgentIds: [agent.body.id] });
       const digest = `TREE-DIGEST-${randomUUID().slice(0, 8)}`;
-      scriptModel(`${agent.body.id}:${delivery.body.id}`, [{ text: digest }, { text: digest }, { text: digest }]);
+      const say = { toolCalls: [toolCall('say', 'send_message', { kind: 'text', purpose: 'result', text: digest })] };
+      scriptModel(`${agent.body.id}:${delivery.body.id}`, [say, { text: 'posted' }, say, { text: 'posted' }, say, { text: 'posted' }]);
       const routine = await account.api('POST', '/v1/routines', {
         name: 'Tree digest', agentId: agent.body.id, instructions: 'post the digest', enabled: true,
         trigger: { kind: 'schedule', cron: '*/5 * * * * *', human: 'every 5 seconds', tz: 'UTC' },

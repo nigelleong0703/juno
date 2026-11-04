@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { createMemoryStore, NoopEnqueuer } from '@agent-desktop/db';
+import { createLiveRuns } from 'juno-agent/execution/live-runs';
 import { createInternalAgentApp } from '../internal-app.js';
 import { testChannels } from '../../../__tests__/test-app.js';
 
@@ -16,6 +17,7 @@ function build() {
     store,
     bus: store.eventBus,
     enqueuer: new NoopEnqueuer(),
+    live: createLiveRuns(),
     channels: testChannels,
     internalToken: TOKEN,
   });
@@ -40,6 +42,7 @@ describe('createInternalAgentApp', () => {
         store,
         bus: store.eventBus,
         enqueuer: new NoopEnqueuer(),
+        live: createLiveRuns(),
         channels: testChannels,
         internalToken: '',
       }),
@@ -81,6 +84,7 @@ describe('createInternalAgentApp', () => {
       store,
       bus: store.eventBus,
       enqueuer: new NoopEnqueuer(),
+      live: createLiveRuns(),
       channels: testChannels,
       internalToken: TOKEN,
     });

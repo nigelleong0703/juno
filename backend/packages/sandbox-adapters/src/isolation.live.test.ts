@@ -1,8 +1,8 @@
 /**
  * LIVE per-agent isolation (BACKEND §7.9 verification list) against a real throwaway container of the local desktop
  * image: the real local provider, the real migration, two agents with real users, Xvfb with cookies, Chromium and
- * the iptables rules. Skipped unless LIVE_DOCKER=1 (it needs Docker, the image `juno-desktop:local` and network
- * access for apt). It starts its own container and removes it afterwards; it never touches another one.
+ * the network namespaces. Skipped unless LIVE_DOCKER=1 (it needs Docker, a local desktop image with iproute2 and nftables
+ * (`LIVE_BASE_IMAGE`, default `juno-desktop:local`) and network access for apt). It starts its own container and removes it afterwards; it never touches another one.
  *
  *   LIVE_DOCKER=1 pnpm --filter @agent-desktop/sandbox-adapters exec vitest run src/isolation.live.test.ts
  */
@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { E2bBinding } from '@agent-desktop/contracts';
 import { createSandboxHome } from './home.js';
 import { agentUser, installPackages } from './isolation.js';
+import { inAgentNetns } from './isolation-user.js';
 import { liveImage, startLiveLink, type LiveLink } from './live-link.js';
 import { createLocalProvider } from './local.js';
 import { screenPorts } from './ports.js';
@@ -133,15 +134,25 @@ live('per-agent isolation on a real container', () => {
     expect((await sh(A, 1, 'id -u')).stdout.trim()).not.toBe('0');
   });
 
-  it('screens: A cannot reach B\'s browser (CDP) or VNC or display; A reaches its own CDP port from its shell (owner decision 2026-10-27), and root reaches both', async () => {
+  it('screens: A cannot reach B\'s browser (CDP) or VNC or display; each agent reaches its own CDP port from its shell (owner decision 2026-10-27); root reaches the browsers only from inside the agent\'s namespace', async () => {
     const ports = screenPorts(2);
     const own = screenPorts(1);
     const probe = (port: number) => `curl -s -m 4 -o /dev/null -w '%{http_code}' http://127.0.0.1:${port}/json/version; echo " exit=$?"`;
-    expect((await sh(B, 2, probe(ports.cdp))).stdout).not.toContain('200');
-    expect((await sh(A, 1, probe(ports.cdp))).stdout).not.toContain('200');
     expect((await sh(A, 1, probe(own.cdp))).stdout).toContain('200');
-    expect(await root((run) => run(`curl -s -m 4 -o /dev/null -w '%{http_code}' http://127.0.0.1:${own.cdp}/json/version`))).toBe('200');
-    // VNC / noVNC ports are root-only for everyone, A's own included.
+    expect((await sh(B, 2, probe(ports.cdp))).stdout).toContain('200');
+    expect((await sh(A, 1, probe(ports.cdp))).stdout).not.toContain('200');
+    expect((await sh(B, 2, probe(own.cdp))).stdout).not.toContain('200');
+    // The debugging ports are on the agents' loopbacks, not on root's.
+    expect(await root((run) => run(`curl -s -m 4 -o /dev/null -w '%{http_code}' http://127.0.0.1:${own.cdp}/json/version; true`))).toBe('000');
+    expect(await root((run) => run(`${inAgentNetns(A)} curl -s -m 4 -o /dev/null -w '%{http_code}' http://127.0.0.1:${own.cdp}/json/version`))).toBe('200');
+    expect(await root((run) => run(`${inAgentNetns(B)} curl -s -m 4 -o /dev/null -w '%{http_code}' http://127.0.0.1:${ports.cdp}/json/version`))).toBe('200');
+    // A cannot get at B through the namespaces' addresses either (the veth subnets are on the blocklist); both still reach the internet.
+    const bAddress = (await root((run) => run(`${inAgentNetns(B)} ip -4 -o addr show dev eth0 | awk '{print $4}' | cut -d/ -f1`))).trim();
+    expect(bAddress).toMatch(/^198\.19\./);
+    const viaVeth = await sh(A, 1, `curl -s -m 4 -o /dev/null -w '%{http_code}' http://${bAddress}:${ports.cdp}/json/version; echo " exit=$?"`);
+    expect(viaVeth.stdout).not.toContain('200');
+    for (const [agent, display] of [[A, 1], [B, 2]] as const) expect((await sh(agent, display, "curl -s -m 8 -o /dev/null -w '%{http_code}' https://example.com")).stdout).toBe('200');
+    // VNC / noVNC ports are on root's loopback, which no agent can reach, A's own included.
     for (const port of [own.vnc, own.web, ports.vnc, ports.web]) {
       const refused = await sh(A, 1, `python3 -c "import socket,sys; s=socket.socket(); s.settimeout(4); s.connect(('127.0.0.1',${port}))"; echo exit=$?`);
       expect(refused.stdout, `port ${port}`).not.toContain('exit=0');
@@ -162,6 +173,8 @@ live('per-agent isolation on a real container', () => {
   it('browser tools and files tools work as the agent user', async () => {
     const tabs = await provider.act(binding, B, 2, { kind: 'browser', input: { action: 'tabs' } }, signal());
     expect(tabs.browser?.action).toBe('tabs');
+    const snapshot = await provider.act(binding, A, 1, { kind: 'browser', input: { action: 'snapshot' } }, signal());
+    expect(snapshot.browser?.action).toBe('snapshot');
     await provider.act(binding, A, 1, { kind: 'writeFile', input: { path: '/workspace/viafile.txt', content: 'written by tool\n' } }, signal());
     expect((await provider.act(binding, B, 2, { kind: 'readFile', path: '/workspace/viafile.txt' }, signal())).fileRead?.content).toBe('written by tool\n');
     expect((await sh(A, 1, 'stat -c %U /workspace/viafile.txt')).stdout.trim()).toBe(agentUser(A));

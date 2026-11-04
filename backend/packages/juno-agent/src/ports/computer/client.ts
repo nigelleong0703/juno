@@ -96,6 +96,13 @@ export interface ComputerClient {
   environment(agentId: string, signal: AbortSignal, on?: ComputerTarget): Promise<ComputerEnvironment>;
   /** Optional: copy a file or folder between the agent's sandbox and the owner's Mac (computerd moves the bytes). */
   copy?(agentId: string, input: ComputerCopyInput, signal: AbortSignal): Promise<ComputerCopyResult>;
+  /**
+   * Optional: keep the owner's computer from pausing for `ttlMs` (BACKEND §7.3b); calling again with the same id renews it. Passive:
+   * it never creates, resumes or starts a computer. The computer pauses `DEFAULT_IDLE_PAUSE_MINUTES` after the last hold ended.
+   */
+  hold?(agentId: string, holdId: string, ttlMs: number, signal: AbortSignal): Promise<void>;
+  /** Optional: end a hold placed with `hold`. */
+  release?(agentId: string, holdId: string, signal: AbortSignal): Promise<void>;
   /** Optional: start this agent's screen (its user and display) if it has none yet; the explicit first-use allocation. */
   ensureScreen?(agentId: string, signal: AbortSignal): Promise<void>;
   /** Optional: the user's `/juno` home (identity, memory, skills files). A client without it leaves those context sections to the mirror. */

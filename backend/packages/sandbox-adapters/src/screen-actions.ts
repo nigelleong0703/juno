@@ -11,12 +11,13 @@ import type { ScreenFile } from './screen-file.js';
 import { shq, xdotoolClick, xdotoolMove, xdotoolScroll } from './screen-boot.js';
 import { createSandboxProcesses } from './processes.js';
 import { screenPorts } from './ports.js';
-import { agentUser } from './isolation-user.js';
+import { agentUser, inAgentNetns } from './isolation-user.js';
 import { copyFromComputer, pasteToComputer } from './clipboard.js';
 const JEV_SUPERVISOR = '/usr/bin/python3 /opt/juno/jev-browser/agent_jev_supervise.py';
 function jevCommand(agentId: string, displayNo: number): string {
   const port = screenPorts(displayNo).cdp;
-  return 'JUNO_JEV_CDP=' + shq('http://127.0.0.1:' + String(port)) + ' JUNO_JEV_AGENT_USER=' + shq(agentUser(agentId)) + ' ' + JEV_SUPERVISOR;
+  // Root runs it, inside the agent's network namespace: that is where the agent's browser listens on loopback.
+  return inAgentNetns(agentId) + ' env JUNO_JEV_CDP=' + shq('http://127.0.0.1:' + String(port)) + ' JUNO_JEV_AGENT_USER=' + shq(agentUser(agentId)) + ' ' + JEV_SUPERVISOR;
 }
 
 export async function runScreenAction(
@@ -58,9 +59,9 @@ export async function runScreenAction(
     case 'navigate':
       return { navigate: await files.navigate(root, agentId, displayNo, action.url) };
     case 'browser':
-      return { browser: await files.browser(root, displayNo, action.input) };
+      return { browser: await files.browser(root, agentId, displayNo, action.input) };
     case 'meet':
-      return { meet: await files.meet(root, displayNo, action.input) };
+      return { meet: await files.meet(root, agentId, displayNo, action.input) };
     case 'shell':
       return { shell: await files.shell(runtime, displayNo, action.input) };
     case 'readFile':

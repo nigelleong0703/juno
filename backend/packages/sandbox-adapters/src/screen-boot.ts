@@ -21,7 +21,7 @@ import type { ScreenHandle, ScreenRequest } from './types.js';
 import { ComputerdError, failed } from './errors.js';
 import { screenPorts } from './ports.js';
 import { screenStartFailure } from './screen-diagnostics.js';
-import { agentHome, agentUser } from './isolation-user.js';
+import { agentHome, agentUser, inAgentNetns } from './isolation-user.js';
 import { shq } from './shq.js';
 
 // Re-exported unchanged so this module keeps its public surface (the package index, the action
@@ -193,11 +193,14 @@ export function startScreenScript(request: ScreenBootRequest): string {
     `AU=${user}; AH=${home}; XA="$AH/.Xauthority"`,
     'if [ -z "${SCREEN_NO_ISOLATION:-}" ]; then',
     '  export XAUTHORITY="$XA"; XVFB_AUTH="-auth $XA"; VNC_AUTH="-auth $XA"',
-    '  start_agent() { name=$1; shift; (exec setpriv --reuid="$AU" --regid="$AU" --init-groups env HOME="$AH" USER="$AU" LOGNAME="$AU" XAUTHORITY="$XA" "$@") >>"$(dirname "$(pf "$name")")/$name.log" 2>&1 & echo $! > "$(pf "$name")"; }',
+    // Everything the agent's user runs lives in the agent's network namespace (BACKEND 7.9): its Chromium's debugging port is on that
+    // namespace's loopback. Root's own checks of that port enter the namespace too ($NSX); X is a filesystem socket and needs no entry.
+    `  NSX="${inAgentNetns(request.agentId)}"`,
+    '  start_agent() { name=$1; shift; (exec $NSX setpriv --reuid="$AU" --regid="$AU" --init-groups env HOME="$AH" USER="$AU" LOGNAME="$AU" XAUTHORITY="$XA" "$@") >>"$(dirname "$(pf "$name")")/$name.log" 2>&1 & echo $! > "$(pf "$name")"; }',
     '  gen_auth() { rm -f "$XA"; (umask 077; xauth -f "$XA" add "$(hostname)/unix:' + String(d) + '" . "$(mcookie)") >/dev/null 2>&1; chown "$AU:$AU" "$XA"; }',
     '  AUID=$(id -u "$AU"); RD=' + rootDir(d),
     'else',
-    '  XVFB_AUTH=-ac; VNC_AUTH=; AUID=$(id -u); RD=' + dir,
+    '  XVFB_AUTH=-ac; VNC_AUTH=; AUID=$(id -u); RD=' + dir + '; NSX=',
     '  start_agent() { start_bg "$@"; }',
     '  gen_auth() { :; }',
     'fi',
@@ -242,7 +245,7 @@ export function startScreenScript(request: ScreenBootRequest): string {
     // window's _NET_WM_PID ties it to the exact Chromium pid recorded for this display, so a
     // navigated browser is reused instead of being killed and re-launched.
     `window_owned() { p=$(cat "$(pf chromium)" 2>/dev/null) || return 1; [ -n "$p" ] && kill -0 "$p" 2>/dev/null || return 1; xdotool search --pid "$p" >/dev/null 2>&1; }`,
-    `ready_cdp() { for i in $(seq 1 60); do curl -fsS "http://127.0.0.1:${ports.cdp}/json/version" >/dev/null 2>&1 && return 0; sleep 0.25; done; return 1; }`,
+    `ready_cdp() { for i in $(seq 1 60); do $NSX curl -fsS "http://127.0.0.1:${ports.cdp}/json/version" >/dev/null 2>&1 && return 0; sleep 0.25; done; return 1; }`,
     `ready_browser() { for i in $(seq 1 60); do window_owned && ready_cdp && return 0; sleep 0.25; done; return 1; }`,
     `adopt_chromium() { ${adoptChromium(profile, `"${dir}/chromium.pid"`, '$AUID')}; }`,
     `alive dock || start_dock`,

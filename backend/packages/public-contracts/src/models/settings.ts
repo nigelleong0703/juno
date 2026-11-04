@@ -51,8 +51,8 @@ export const tierNames = ['chat', 'task', 'deep', 'fast'] as const;
 export type TierName = (typeof tierNames)[number];
 
 /**
- * The four tiers: `chat` (the owner's conversations), `task` (child tasks, routines, jobs), `deep` (child_spawn deep) and `fast`
- * (child_spawn fast and the background one-shots). A PATCH replaces the whole object (send every row to keep); `null` clears all.
+ * The four tiers: `chat` (the owner's conversations), `task` (subagents, routines, jobs), `deep` (subagent_start deep) and `fast`
+ * (subagent_start fast and the background one-shots). A PATCH replaces the whole object (send every row to keep); `null` clears all.
  * On `fast` an `effort` needs a `modelId`: its default model is a fallback chain whose levels are not known up front.
  */
 export const tiersSchema = z.object({

@@ -96,6 +96,20 @@ describe('computerd HTTP adapter', () => {
     expect(parseBody(fake.calls[3]?.init)).toEqual({ deltaY: -120 });
   });
 
+  it('places and releases a hold on the owner\'s computer by its id', async () => {
+    const fake = responseFetch({});
+    const client = createComputerdClient({ baseUrl: 'http://computerd.test', token: 'secret', fetch: fake.fetch, getOwnerId: async () => 'alice' });
+    const signal = new AbortController().signal;
+    await client.hold?.('agent-1', 'run:r1:ab', 90_000, signal);
+    await client.release?.('agent-1', 'run:r1:ab', signal);
+    expect(fake.calls.map((call) => `${call.init?.method} ${call.url}`)).toEqual([
+      'PUT http://computerd.test/v1/computer/holds/run%3Ar1%3Aab',
+      'DELETE http://computerd.test/v1/computer/holds/run%3Ar1%3Aab',
+    ]);
+    expect(parseBody(fake.calls[0]?.init)).toEqual({ ttlMs: 90_000 });
+    expect(header(fake.calls[0]?.init, 'x-owner-id')).toBe('alice');
+  });
+
   it('marks Mac desktop, browser and recording calls without changing the sandbox default', async () => {
     const fake = responseFetch({ data: 'png', mimeType: 'image/png', width: 1600, height: 1000 });
     const client = createComputerdClient({ baseUrl: 'http://computerd.test', fetch: fake.fetch });

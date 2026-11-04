@@ -3,7 +3,9 @@
  * send client. One `feishu` kind serves both clouds; the row's `domain` picks the API base URL. The
  * app_secret is the row's sealed `botToken`. Everything sits behind an injectable fetch.
  */
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { httpFailure, type SendFailure } from '../failure.js';
 import type { ChannelFile, ChannelInboundEvent, ChannelPerson, ChannelSender, ChannelSendResult, ChannelSendTarget } from '../types.js';
 import { renderMentions } from '../mentions.js';
 import { feishuCard } from './render.js';
@@ -80,9 +82,11 @@ export function parseFeishuMessage(event: unknown, botOpenId: string): FeishuCha
   } catch {
     return null;
   }
+  let unaddressed = false;
   if (chatType === 'group') {
     const botKeys = (message.mentions ?? []).filter((m) => m.id?.open_id === botOpenId).map((m) => m.key);
-    if (botKeys.length === 0) return null;
+    // Feishu delivers the group messages that do not mention the bot only when the tenant granted `im:message.group_msg`; the agent only observes them.
+    unaddressed = botKeys.length === 0;
     for (const key of botKeys) text = text.split(key).join('');
   }
   // Other people's `@_user_N` placeholders read as `@Name`. Feishu has no unique handle.
@@ -105,6 +109,7 @@ export function parseFeishuMessage(event: unknown, botOpenId: string): FeishuCha
     text,
     ...(mentions.length === 0 ? {} : { mentions }),
     ...(files.length === 0 ? {} : { files }),
+    ...(unaddressed ? { addressed: false } : {}),
   };
 }
 
@@ -217,16 +222,30 @@ export async function lookupFeishuOpenIdByEmail(fetchFn: typeof fetch, creds: Fe
 
 // ---- sender ----------------------------------------------------------------------------------------
 
+/**
+ * Feishu answers errors with HTTP 400 and a `code` (https://open.feishu.cn/document/server-docs/im-v1/message/create): 230002 the bot is not in the chat,
+ * 232009 the chat was disbanded (both permanent), 230020 the frequency limit (transient); the access-token codes are the credential.
+ */
+export function feishuFailure(res: { status: number; code?: number }): SendFailure {
+  if (res.code !== undefined && TOKEN_INVALID_CODES.has(res.code)) return { kind: 'token_invalid' };
+  if (res.code === 230002 || res.code === 232009) return { kind: 'channel_gone' };
+  if (res.code === 230020) return { kind: 'transient' };
+  return httpFailure(res.status);
+}
+
 export function createFeishuSender(fetchFn: typeof fetch = fetch): ChannelSender {
   async function send(target: ChannelSendTarget, msgType: 'text' | 'interactive', content: string): Promise<ChannelSendResult> {
     const channel = target.channel;
     const creds: FeishuCredentials = { appId: channel.channelId, appSecret: channel.botToken ?? '', ...(channel.domain === undefined ? {} : { domain: channel.domain }) };
     const sep = target.threadId.indexOf(':');
     const root = sep === -1 ? undefined : target.threadId.slice(sep + 1);
+    // `uuid` (50 characters at most): requests with the same one send at most one message within an hour, create and reply alike
+    // (https://open.feishu.cn/document/server-docs/im-v1/message/create, .../reply), so a re-send after a crash makes no second message.
+    const uuid = target.idempotencyKey === undefined ? {} : { uuid: createHash('sha256').update(target.idempotencyKey).digest('hex').slice(0, 50) };
     const res = root === undefined
-      ? await feishuCall(fetchFn, creds, 'POST', '/open-apis/im/v1/messages?receive_id_type=chat_id', { receive_id: target.chatId, msg_type: msgType, content })
-      : await feishuCall(fetchFn, creds, 'POST', '/open-apis/im/v1/messages/' + encodeURIComponent(root) + '/reply', { msg_type: msgType, content });
-    if (!res.ok) return { ok: false, error: 'Feishu send failed: ' + String(res.code ?? res.status) + ' ' + res.error };
+      ? await feishuCall(fetchFn, creds, 'POST', '/open-apis/im/v1/messages?receive_id_type=chat_id', { receive_id: target.chatId, msg_type: msgType, content, ...uuid })
+      : await feishuCall(fetchFn, creds, 'POST', '/open-apis/im/v1/messages/' + encodeURIComponent(root) + '/reply', { msg_type: msgType, content, ...uuid });
+    if (!res.ok) return { ok: false, error: 'Feishu send failed: ' + String(res.code ?? res.status) + ' ' + res.error, failure: feishuFailure(res) };
     const data = res.data['data'];
     const id = typeof data === 'object' && data !== null ? (data as Record<string, unknown>)['message_id'] : undefined;
     return typeof id === 'string' ? { ok: true, externalId: id } : { ok: true };

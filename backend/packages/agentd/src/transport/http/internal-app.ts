@@ -16,6 +16,7 @@ import { createMcpManager, guardedFetch, type McpManager } from 'juno-agent/modu
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { BlobStore, Enqueuer, EventBus, Store } from '@agent-desktop/contracts';
+import type { DurableDb } from '@agent-desktop/durable';
 import { NotFoundError } from '@agent-desktop/contracts';
 import type { BackendConfig } from 'juno-agent';
 import { bearerAuth } from '../../auth.js';
@@ -26,7 +27,9 @@ import type { SkillsService } from '@agent-desktop/memory-graph/skills';
 import type { AccountEraser } from '../../account/erase.js';
 import type { EvolutionControl } from '../../evaluation/skill-evolution.js';
 import type { ComputerdClient } from '../../computerd.js';
-import { aguiSnapshots, eventCursor, streamEvents } from '../../events.js';
+import type { ComputerClient } from 'juno-agent/computer';
+import type { OutboxSender } from '../../outbox/sender.js';
+import { aguiSnapshots, eventCursor, streamEvents, streamRunEvents } from '../../events.js';
 import { clientKind, connectClient, watchScreen } from 'juno-agent/execution/presence';
 import {
   ownerBus,
@@ -39,6 +42,8 @@ import {
 } from '../../owner-scope.js';
 import { registerRoutes } from '../../routes/index.js';
 import type { Speaker } from '../../routes/speech.js';
+import type { VoiceCallIssuer, VoicePrepare, VoiceWarm } from '../../routes/voice-call.js';
+import type { LiveRuns } from 'juno-agent/execution/live-runs';
 
 const RUN_NOW_SERVICES: ReadonlySet<string> = new Set(['MemoryTimer', 'IdeasTimer', 'ChatDigest', 'Session']);
 
@@ -49,6 +54,10 @@ export interface InternalAgentDeps {
   config?: BackendConfig;
   /** computerd's internal API; absent keeps the screen routes out of the app. */
   computerd?: ComputerdClient;
+  /** The agents' computer client; putting back an earlier version of a file (`POST /v1/files/restore`) writes through it. Absent answers 503. */
+  computer?: ComputerClient;
+  /** The outbox sender; absent keeps the delivery health out of the operator view. */
+  outbox?: Pick<OutboxSender, 'wake' | 'health'>;
   /** Runs a timer's `runNow` job and waits for its answer (operators and the e2e suite); absent keeps the route out of the app. */
   runNow?: (service: string, key: string, input: unknown) => Promise<unknown>;
   /** Deletes a whole account (`DELETE /v1/account`); absent keeps the route out of the app. */
@@ -65,6 +74,8 @@ export interface InternalAgentDeps {
   channels: ChannelRegistry;
   /** The blob store: platform files a chat message carries are kept there (through the library). */
   blobs?: BlobStore;
+  /** Raw SQL (Postgres only); deleting an agent uses it to keep bytes another row still names. */
+  raw?: DurableDb;
   /** The app catalog table; the gateway (packages/api) reads the offered connectors from `GET /internal/connector-catalog`, and the admin routes edit it. Absent keeps both out of the app. */
   appCatalog?: StoredCatalog;
   /** Lists an app's tools for its capability list on the Apps page; absent builds one over the catalog (outbound calls through the private-network guard). */
@@ -75,6 +86,17 @@ export interface InternalAgentDeps {
   feishuRegisterApp?: FeishuRegisterApp;
   /** Text-to-speech sidecar client; absent uses the one TTS_ENABLED configures (tests inject a fake). */
   speaker?: Speaker;
+  /** Voice call credential issuer; tests may replace the configured LiveKit client. */
+  voiceCallIssuer?: VoiceCallIssuer;
+  /**
+   * Live run text (execution/live-runs.ts): the ONE hub the harness publishes into and the run stream reads from. A process that also
+   * executes (`AGENTD_ROLE=all`) shares it with its runner in memory; a coordinator fills it from the workers' cross-process transport.
+   */
+  live: LiveRuns;
+  /** Warms a conversation's prompt cache; boot binds it to the execution runtime (absent answers 503). */
+  warm?: VoiceWarm;
+  /** Starts the reads a conversation's next run can do before the person finishes speaking; boot binds it to the execution runtime (absent answers 503). */
+  prepare?: VoicePrepare;
   /** The HTTP routes the loaded plugins registered; boot passes the host's list. */
   pluginRoutes?: readonly PluginRoute[];
   /** Service bearer token; required and non-empty, read from INTERNAL_AGENTD_TOKEN. */
@@ -116,6 +138,17 @@ export function createInternalAgentApp(deps: InternalAgentDeps): Hono {
   app.get('/healthz', (c) => {
     return c.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
+
+  // The operator's health view (service bearer, all owners): one entry per subsystem that can be red. `delivery` is the outbox (BACKEND 5.7.11): red while a
+  // channel has failed three tries in a row. The plain /healthz above stays "ok" on purpose: a broken bot must not take the whole service out of rotation.
+  const outbox = deps.outbox;
+  if (outbox !== undefined) {
+    app.get('/internal/health', (c) => {
+      if (c.req.header('authorization') !== `Bearer ${deps.internalToken}`) return c.json({ error: { code: 'UNAUTHORIZED', message: 'Invalid or missing token' } }, 401);
+      const delivery = outbox.health();
+      return c.json({ status: delivery.status === 'ok' ? 'ok' : 'degraded', entries: { delivery } });
+    });
+  }
 
   // The connector catalog is deployment-wide, not per owner: the service bearer alone opens it.
   const catalog = deps.appCatalog;
@@ -183,6 +216,21 @@ export function createInternalAgentApp(deps: InternalAgentDeps): Hono {
       return c.json(await runNow(service, c.req.param('key'), input));
     });
   }
+  // One run's live text and reply events for the voice bridge (internal; never the public contract). `after` is the durable
+  // cursor the consumer last saw (0 is refused): the stream replays that run's durable events after it and never replays live text.
+  const RUN_STREAM = '/v1/conversations/:conversationId/runs/:runId/stream';
+  app.use(RUN_STREAM, bearerAuth(auth));
+  app.get(RUN_STREAM, async (c) => {
+    const ownerId = requestOwnerId(c);
+    const conversationId = c.req.param('conversationId');
+    const runId = c.req.param('runId');
+    const after = Number(c.req.query('after'));
+    if (!Number.isInteger(after) || after < 0) return c.json({ error: { code: 'BAD_REQUEST', message: 'after must be a durable cursor' } }, 400);
+    if (!(await aguiSnapshots(ownerStore(deps, ownerId)).visible(conversationId, ownerId))) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'No such conversation' } }, 404);
+    }
+    return streamRunEvents({ durable: ownerBus({ bus: deps.bus }, ownerId), live: deps.live, conversationId, runId, ownerId, after });
+  });
   app.use('/v1/events/cursor', bearerAuth(auth));
   app.get('/v1/events/cursor', async (c) => {
     return c.json({ after: await eventCursor(ownerBus({ bus: deps.bus }, requestOwnerId(c))) });
@@ -207,7 +255,10 @@ export function createInternalAgentApp(deps: InternalAgentDeps): Hono {
     ...(catalog === undefined ? {} : { appCatalog: catalog }),
     ...(mcp === undefined ? {} : { mcp }),
     ...(deps.blobs ? { blobs: deps.blobs } : {}),
+    ...(deps.raw ? { raw: deps.raw } : {}),
     ...(deps.computerd ? { computerd: deps.computerd } : {}),
+    ...(deps.computer ? { computer: deps.computer } : {}),
+    ...(deps.outbox ? { outbox: deps.outbox } : {}),
     ...(deps.accountEraser ? { accountEraser: deps.accountEraser } : {}),
     ...(deps.channelFetch ? { channelFetch: deps.channelFetch } : {}),
     ...(deps.identity ? { identity: deps.identity } : {}),
@@ -215,6 +266,9 @@ export function createInternalAgentApp(deps: InternalAgentDeps): Hono {
     ...(deps.skills ? { skills: deps.skills } : {}),
     ...(deps.feishuRegisterApp ? { feishuRegisterApp: deps.feishuRegisterApp } : {}),
     ...(deps.speaker ? { speaker: deps.speaker } : {}),
+    ...(deps.voiceCallIssuer ? { voiceCallIssuer: deps.voiceCallIssuer } : {}),
+    ...(deps.warm ? { warm: deps.warm } : {}),
+    ...(deps.prepare ? { prepare: deps.prepare } : {}),
     ...(deps.pluginRoutes ? { pluginRoutes: deps.pluginRoutes } : {}),
     auth,
   });

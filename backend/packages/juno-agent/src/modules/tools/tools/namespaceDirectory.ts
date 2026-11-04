@@ -9,20 +9,19 @@ export const CORE_TOOL_NAMES: readonly string[] = [
   'skill_search',
   'skill_read',
   // Delegation is a first-step orchestration decision, available without discovery.
-  'child_spawn',
+  'subagent_start',
   'todo_write',
+  // The tools most runs reach for (live use over three days: tool_search was the most called tool, almost always to get one of
+  // these). Listed here they cost no discovery round trip; their schemas ride in the cached prefix.
+  'web_search', 'web_fetch', 'shell.run', 'files.read', 'files.write',
   // Who someone is and what they said (memory graph, batch 7): the connections part is shown only where the owner is alone (personLookup.ts).
   'person_lookup',
   // The owner's goals, recorded in the turn (ownerOnly: shown only where the owner is alone with the agent).
   'goal_update',
   // Busy times only, offered where the owner is not alone with the agent (batch 5b, scope.ts).
   'calendar_free_busy',
-  // Stable harness-owned interaction primitives; infrequent computer tools remain discoverable.
-  'browser.advance', 'browser.navigate', 'browser.snapshot', 'browser.click',
-  'browser.type', 'browser.fill', 'browser.get_text', 'browser.dialog',
-  'computer.screenshot', 'computer.click', 'computer.type', 'computer.key', 'computer.scroll',
-  // Only an agent allowed on the Mac is offered these (index.ts hides them otherwise).
-  'computer.snapshot', 'computer.act', 'computer.verify',
+  // Browser and computer tools (about 14k characters of definitions) are not declared up front: the namespace directory names
+  // the two families and what they do, and tool_search returns the definitions the first time they are needed (BACKEND 3.5.2a).
 ];
 export type DisclosureMode = 'off' | 'legacy' | 'compact';
 export function disclosureMode(env: Record<string, string | undefined> = process.env): DisclosureMode {
@@ -158,6 +157,12 @@ export function matchNamespace(groups: readonly NamespaceGroup[], filter: string
 }
 // A group with at most this many tools lists every canonical name; a bigger one (a large connector) lists only its namespace, meta and count.
 const MAX_LISTED_GROUP_TOOLS = 8;
+// What the two computer families can do, said in the directory line: the model reads this instead of about 20 declared
+// definitions and asks tool_search for the family when the task needs it. Files and shell are core tools already.
+const FAMILY_PURPOSE: Record<string, string> = {
+  'builtin:browser': 'open, read, click and type in web pages; ask tool_search for the browser',
+  'builtin:computer': 'see the screen, click, type, press keys and use apps; ask tool_search for the computer',
+};
 function groupLine(group: NamespaceGroup, wireName: ((name: string) => string) | undefined): string {
   const native = wireName !== undefined;
   const names = group.tools.map((tool) => (wireName === undefined ? tool.name : wireName(tool.name)));
@@ -166,6 +171,8 @@ function groupLine(group: NamespaceGroup, wireName: ((name: string) => string) |
   const acct = group.account === undefined ? '' : group.account;
   const meta = who === '' && acct === '' ? '' : ' (' + (who === '' ? acct : acct === '' ? who : who + ', ' + acct) + ')';
   head += meta + ' (' + String(names.length) + (names.length === 1 ? ' tool' : ' tools') + ')';
+  const purpose = FAMILY_PURPOSE[group.key];
+  if (purpose !== undefined) head += ' - ' + purpose;
   return names.length <= MAX_LISTED_GROUP_TOOLS ? head + ': ' + names.join(', ') : head + (native ? ': find them with tool_search' : ': list with tool_search namespace filter');
 }
 // Layer 1 of progressive disclosure: deterministic and COMPLETE (every group, no budget). Small groups list all

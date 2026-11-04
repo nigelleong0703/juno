@@ -14,7 +14,8 @@ import { RunnerStub } from '../../__tests__/runner-stub.js';
 type TestStore = ReturnType<typeof createMemoryStore>;
 
 const OWNER = 'owner-agui-routes';
-const AT = '2026-10-29T00:00:00.000Z';
+// A minute ago: pending requests expire after 24 hours, so a fixed date would make these tests fail once it ages.
+const AT = new Date(Date.now() - 60_000).toISOString();
 
 function approval(id: string, convId: string, runId: string): Request {
   return {
@@ -246,7 +247,7 @@ describe('POST /v1/conversations/:id/runs', () => {
     const chatId = await seedChat(seed);
     await seed.put('requests', { ...approval('req_stp-a', chatId, 'run-one'), awakeableId: 'awk-a' });
     const stub = new RunnerStub();
-    stub.failWith = new Error('restate ingress unavailable');
+    stub.failWith = new Error('runner unavailable');
     const input = runInput(chatId, [], [{ interruptId: 'req_stp-a', status: 'resolved', payload: { action: 'approve' } }]);
     const failing = makeApp(raw, new RunnerEnqueuer(stub.asRunner(), raw));
     expect((await requestAs(failing, OWNER, '/v1/conversations/' + chatId + '/runs', { method: 'POST', body: input })).status).toBe(502);

@@ -3,7 +3,7 @@
  * which Actions policy, the capability list with read and change marks, removing a bot or workspace, and that turning an app off for an
  * agent holds the routine that needs it. Slack and the MCP server are fakes; nothing touches the network.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Hono } from 'hono';
 import { createMemoryStore } from '@agent-desktop/db';
 import type { Store, WakeEvent } from '@agent-desktop/contracts';
@@ -31,7 +31,11 @@ const policy = (agentId: string, appId: string, extra: object) => store.put('age
 /** An MCP manager that lists one read tool and one change tool for any connection. */
 const fakeMcp = { listTools: async () => [{ name: 'list_things', title: 'List things', description: '', access: 'read' }, { name: 'make_thing', title: 'Make a thing', description: '', access: 'action', needsReview: true }] } as unknown as McpManager;
 
+afterEach(() => { vi.unstubAllEnvs(); });
+
 beforeEach(async () => {
+  // The listing offers an app that needs our OAuth client only when this deployment has it (Gmail: Google's).
+  vi.stubEnv('GOOGLE_OAUTH_CLIENT_ID', 'test-google-client');
   const mem = createMemoryStore();
   store = withDefaultOwner(mem, OWNER);
   const enqueuer = { async enqueue(event: WakeEvent) { void event; return { accepted: true }; }, async stopRun() {}, async resolveAwakeable() {}, async scheduleRoutine() {} } as never;
@@ -47,11 +51,12 @@ describe('GET /v1/apps', () => {
     expect(listed.filter((entry) => entry.category === 'chat').map((entry) => entry.id)).toEqual(['slack', 'discord', 'telegram', 'feishu']);
     expect(await appOf('slack')).toMatchObject({ grants: { chatRead: true, actions: false }, installations: [], enabledAgents: [] });
     expect(await appOf('gmail')).toMatchObject({ category: 'work', group: 'productivity', grants: { chatRead: true, actions: true }, installations: [], enabledAgents: [] });
-    // A read-only server offers no Actions grant; an app that takes the owner's own key says so.
-    expect((await appOf('strava'))?.grants).toEqual({ chatRead: true, actions: false });
-    expect(await appOf('hevy')).toMatchObject({ auth: 'api_key', userConfig: [{ key: 'api_key', title: 'Hevy API key', sensitive: true, required: true }] });
-    // A provider that needs an OAuth client this server lacks cannot be added yet.
-    expect((await appOf('strava'))?.available).toBe(false);
+    // A read-only server offers no Actions grant.
+    expect((await appOf('google-maps'))?.grants).toEqual({ chatRead: true, actions: false });
+    // A provider that needs an OAuth client this server lacks is not listed at all; the apps an ordinary person cannot connect are gone.
+    for (const id of ['asana', 'strava', 'hevy', 'dropbox', 'salesforce', 'spotify', 'shopify-admin']) expect(await appOf(id), id).toBeUndefined();
+    vi.stubEnv('ASANA_CLIENT_ID', 'test-asana-client');
+    expect(await appOf('asana')).toMatchObject({ available: true, installations: [] });
   });
 
   it('an added app lists its accounts and which agents may use it, with each policy; no row means everyone, asking first', async () => {

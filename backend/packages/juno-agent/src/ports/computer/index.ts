@@ -36,7 +36,7 @@ export {
   userControl,
 } from './errors.js';
 export type { ComputerErrorCode, ComputerHttpStatus } from './errors.js';
-export { COMPUTER_RECREATED_HEADER, CONTROL_CHANGED_HEADER, MAX_INSTALL_PACKAGES, PACKAGE_NAME, parseResolution } from './types.js';
+export { COMPUTER_RECREATED_HEADER, CONTROL_CHANGED_HEADER, MAX_INSTALL_PACKAGES, PACKAGE_NAME, PASSIVE_HEADER, parseResolution } from './types.js';
 export type {
   ComputerCopyInput,
   ComputerCopyResult,
@@ -72,5 +72,5 @@ export type {
   ShellInput,
   ShellOutput,
 } from './types.js';
-export type { HomeComputer, HomeContent, HomeExtractedText, HomeFileStat, HomeSnapshot, HomeTextFormat, PlatformSkill } from './home.js';
+export type { HomeComputer, HomeContent, HomeExtractedText, HomeFileStat, HomeSnapshot, HomeTextFormat } from './home.js';
 export { homeContentSchema, homeExtractedTextSchema, homePutResultSchema, homeSnapshotSchema } from './home.js';

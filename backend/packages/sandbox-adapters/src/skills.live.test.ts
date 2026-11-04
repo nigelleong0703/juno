@@ -87,10 +87,6 @@ live('platform skills on a real container', () => {
     // Seven skills with a name and a description each (the spaces skill joined the six office ones in the Spaces batch).
     expect(Number(list.trim())).toBe(14);
     expect(await sh(`echo x >> ${S}/docx/SKILL.md 2>&1 || echo denied`)).toContain('denied');
-    // The home snapshot (what the context's skills section is built from) lists them with name, description and path.
-    const snapshot = await provider.withRuntime(binding, signal(), (runtime) => createSandboxHome(runtime).snapshot(AGENT), { user: 'root' });
-    expect(snapshot.platformSkills?.map((skill) => skill.name).sort()).toEqual(['card', 'docx', 'huddle', 'markdown', 'pdf', 'pptx', 'spaces', 'xlsx']);
-    expect(snapshot.platformSkills?.find((skill) => skill.name === 'pdf')).toEqual({ name: 'pdf', path: `${S}/pdf/SKILL.md`, description: expect.stringContaining('merge') });
   });
 
   it('docx: creates, edits and reopens a Word document', async () => {

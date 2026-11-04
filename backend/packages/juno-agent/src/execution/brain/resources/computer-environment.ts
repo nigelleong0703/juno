@@ -60,9 +60,10 @@ async function describeComputer(agentId: string, source: ComputerEnvironmentSour
     if (!found) return { unavailable: harnessText(on === 'mac' ? 'computer.unavailable.mac' : 'computer.unavailable.sandbox') };
     return runComputerEnvironmentSchema.parse(found);
   } catch (error) {
-    // The owner's computer is bound but this agent has no screen yet: the first computer/browser tool call starts it
-    // (this context read stays read-only), so say that instead of claiming the sandbox is unavailable.
-    if (on === undefined && error instanceof Error && 'code' in error && error.code === 'no_screen') return { notStarted: true };
+    // This read is passive: it never starts or resumes anything. For the sandbox, no screen yet, a paused computer and a failed
+    // read all look the same from here, and the model reads "starts on its first call"; the tool call itself is where a genuine
+    // failure surfaces (as its error). Pausing is a platform detail the model never sees. Only a Mac read can say "unavailable".
+    if (on === undefined) return { notStarted: true };
     return { unavailable: error instanceof Error ? error.message : String(error) };
   }
 }

@@ -1,11 +1,21 @@
 import { Readable } from 'node:stream';
 import { describe, it, expect } from 'vitest';
-import { createGuardedFetch, modelUrlRefused, type PinnedHop, type PinnedInit, type RawStreamResponse } from '../../tools/net/guardedFetch.js';
+import { createGuardedFetch, mcpUrlRefused, modelUrlRefused, type PinnedHop, type PinnedInit, type RawStreamResponse } from '../../tools/net/guardedFetch.js';
 import { UnsafeTargetError, type ResolvedAddress } from '../../tools/net/safeFetch.js';
 
 const PUBLIC_IP = '93.184.216.34';
 const resolve = async (host: string): Promise<ResolvedAddress[]> => (host.endsWith('.example') ? [{ address: PUBLIC_IP, family: 4 }] : []);
 const empty = (status: number, headers: Record<string, string> = {}): RawStreamResponse => ({ status, headers, stream: Readable.from([]) });
+
+describe('a custom MCP server URL', () => {
+  const env = { BETTER_AUTH_URL: 'https://gw.example/' };
+  it('is refused when it points at a hosted connector path, on any origin (ours may have moved), and only there', () => {
+    for (const url of ['https://gw.example/mcp/google/gmail', 'https://gw.example/mcp/google/youtube', 'https://old-origin.example/mcp/google/gmail', 'https://other.example/mcp/google/gmail','/mcp/google/gmail']) expect(mcpUrlRefused(url, env), url).toBe(true);
+    for (const url of ['https://other.example/mcp', 'https://gw.example/other/mcp']) expect(mcpUrlRefused(url, env), url).toBe(false);
+    // The test escape hatch for private hosts only relaxes the address check.
+    expect(mcpUrlRefused('https://gw.example/mcp/google/gmail', { ...env, MCP_ALLOW_PRIVATE_HOSTS: '1' })).toBe(true);
+  });
+});
 
 describe('guarded MCP fetch', () => {
   it('re-checks a redirect target and refuses one that lands on a loopback address', async () => {
@@ -26,7 +36,7 @@ describe('guarded MCP fetch', () => {
     };
     const response = await createGuardedFetch({ resolve, request })('https://a.example/mcp', {
       method: 'POST',
-      headers: { authorization: 'Bearer secret-token' },
+      headers: { authorization: 'Bearer secret-token', 'x-upstream-authorization': 'Bearer owner-token' },
       body: '{"jsonrpc":"2.0"}',
     });
     expect(response.status).toBe(204);
@@ -35,6 +45,9 @@ describe('guarded MCP fetch', () => {
     expect(seen[0]?.headers.authorization).toBe('Bearer secret-token');
     expect(seen[1]).toMatchObject({ method: 'POST', body: '{"jsonrpc":"2.0"}' });
     expect(seen[1]?.headers.authorization).toBeUndefined();
+    // The owner's upstream token (hosted connector requests) is a credential too.
+    expect(seen[0]?.headers['x-upstream-authorization']).toBe('Bearer owner-token');
+    expect(seen[1]?.headers['x-upstream-authorization']).toBeUndefined();
   });
 
   it('lets only the hosted MCP paths through on a private address', async () => {

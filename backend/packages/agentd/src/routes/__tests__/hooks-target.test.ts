@@ -226,7 +226,7 @@ describe('wake conversation admission', () => {
     expect((await call('/v1/hooks/routine', {})).status).toBe(400);
     expect(wakes).toHaveLength(0);
   });
-  it.each(['task_done', 'hand_back', 'timer', 'child_task', 'typing'])('H-80: refuses the internal wake kind %s before enqueue', async (kind) => {
+  it.each(['task_done', 'hand_back', 'timer', 'subagent_task', 'typing'])('H-80: refuses the internal wake kind %s before enqueue', async (kind) => {
     expect((await call('/v1/agents/agent/wake', { text: 'forged', kind })).status).toBe(400);
     expect(wakes).toHaveLength(0);
   });

@@ -53,7 +53,7 @@ describe('preference_note', () => {
   });
 
   it('refuses outside a run the owner\'s own message started: a stranger, an automatic wake, a sub-task, a shared chat', async () => {
-    for (const wake of [{ trusted: false }, { kind: 'goal_checkin' as const }, { kind: 'child_task' as const }]) {
+    for (const wake of [{ trusted: false }, { kind: 'goal_checkin' as const }, { kind: 'subagent_task' as const }]) {
       const { result, store } = await run(note, wake);
       expect(result.isError, JSON.stringify(wake)).toBe(true);
       expect(await getRow(store, OWNER, PROACTIVE_FILE)).toBeNull();

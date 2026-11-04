@@ -9,6 +9,7 @@ import { routineIntervalRefusal } from '../../tasks/routines/interval.js';
 import { missingRequirements, parseRequires } from '../../tasks/routines/capabilities.js';
 import { haveForOwner, raiseConnectRequest } from '../../tasks/routines/capability-gate.js';
 import type { RunCapabilities } from '../../tasks/routines/runNote.js';
+import { startsOnTrial } from '../../tasks/routines/preview.js';
 
 const stateUpdateSchema = z.object({
   target: z.enum(['routine']),
@@ -105,6 +106,8 @@ async function createRoutine(opts: StateUpdateOptions, parsed: StateUpdateArgs, 
     status: missing.length > 0 ? ('needs_setup' as const) : ('active' as const),
     ...(requires.length === 0 ? {} : { requires }),
     ...(missing.length === 0 ? {} : { missing }),
+    // Made by a run nobody was waiting on: nobody asked for it just now, so its first runs only record what they would do (preview.ts).
+    ...(startsOnTrial(ctx) ? { preview: {} } : {}),
     runs: [],
     createdAt: nowIso(),
   };
@@ -125,8 +128,11 @@ async function createRoutine(opts: StateUpdateOptions, parsed: StateUpdateArgs, 
       content: [{ type: 'text', text: `Routine created: ${routineId}, but it is on hold (needs_setup) because the user has not connected: ${need}. It will not run until they do. A Connect card was added to this chat. Tell the user in your reply exactly what to connect (${need}); do not do the routine's work yourself and do not pretend it is running. You will be told when it is connected.` }],
     };
   }
+  const trialNote = routine.preview === undefined
+    ? ''
+    : '. You made it on your own, so it starts on trial: its first run only records what it would send or do, and the person is asked whether to turn it on. Do not tell them it is already running.';
   return {
-    content: [{ type: 'text', text: `Routine created: ${routineId}${webhookNote}` }],
+    content: [{ type: 'text', text: `Routine created: ${routineId}${webhookNote}${trialNote}` }],
   };
 }
 

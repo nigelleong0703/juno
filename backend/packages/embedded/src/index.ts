@@ -1,6 +1,6 @@
 /**
  * Embedded Juno (SDK-02): the public API and agentd in this Node process, on a throwaway embedded Postgres and
- * free ports, for scripts and tests. The same code paths as the hosted stack; no Restate, no separate processes.
+ * free ports, for scripts and tests. The same code paths as the hosted stack; no separate processes.
  *
  * Limits, by design: one embedded Juno per process, and after stop() the process starts no other (the backend reads
  * its settings once per process). The database is always a fresh one; `dataDir` keeps only the file store.

@@ -3,10 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { createAccount, diagnose, listenEvents, listItems, runReport, toolActivity, type Account, type EventListener } from '../harness/client';
 
 /**
- * One exit for every run (BACKEND §3.7): the final reply is the message the people in the chat see, whatever woke the agent. With a real
- * model: a calendar reminder posts the reminder itself once (no "sent" line after it), a routine with nothing new posts nothing, a routine
- * with something new posts one message or one Feed post, and a finished child task is told to the user once as the answer, not as news
- * that a task finished. Assertions check what was posted and which tools ran, never exact wording.
+ * The delivery split (BACKEND §3.7, §3.3b): where someone waits (a calendar reminder, a finished task the owner asked for) the final reply is
+ * the message; in a routine nobody waits on it is a record line and the agent speaks through send_message / feed_post. With a real model: a
+ * calendar reminder posts the reminder itself once (no "sent" line after it), a routine with nothing new posts nothing, a routine with
+ * something new posts one message or one Feed post, and a finished subagent is told to the user once as the answer, not as news that a
+ * task finished. Assertions check what was posted and which tools ran, never exact wording.
  */
 
 /** E2E_VERBOSE=1 prints what the agent said, to read a run by eye. */
@@ -104,13 +105,13 @@ describe('real model: the final reply is the one exit', () => {
     for (const line of said) expect(line, 'not a delivery note').not.toMatch(STATUS_ONLY);
   }, 600_000);
 
-  it('a finished child task is told once as the answer, not as news that a task finished', async () => {
+  it('a finished subagent is told once as the answer, not as news that a task finished', async () => {
     const account = await createAccount('real-child-done');
     const events = await listenEvents(account.cookie);
     try {
       const { conversationId } = await agentWithChat(account, 'Lead');
       const sent = await account.api('POST', `/v1/conversations/${conversationId}/runs`, aguiInput(`/v1/conversations/${conversationId}/runs`, {
-        text: 'Please hand this to a background helper (child_spawn with notify true) and tell me what it finds when it is done: what is the capital city of Australia, and in which year did it become the capital?',
+        text: 'Please hand this to a background helper (a subagent: subagent_start) and tell me what it finds when it is done: what is the capital city of Australia, and in which year did it become the capital?',
       }));
       expect(sent.status).toBe(202);
       const wrap = await runTitled(events, account, conversationId, 'Wrapping up', 400_000);

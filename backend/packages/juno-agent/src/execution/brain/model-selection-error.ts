@@ -1,4 +1,5 @@
 import { TerminalError } from '@agent-desktop/durable';
+import { MODEL_NEEDS_SETTINGS } from '../harness/logic/plain-errors.js';
 
 export type ModelSelectionErrorCode =
   | 'unknown-model'
@@ -26,10 +27,13 @@ export class ModelSelectionError extends Error {
   }
 }
 
-/** Convert a typed model failure to terminal; anything else passes through for retry. */
+/**
+ * Convert a typed model failure to terminal; anything else passes through for retry. The run's error is the plain sentence (every one of these
+ * is about the person's model choice or sign-in); the specific message stays in the metadata for the logs.
+ */
 export function toTerminalModelError(error: unknown): TerminalError | null {
   if (error instanceof ModelSelectionError) {
-    return new TerminalError(error.message, { metadata: { code: error.code } });
+    return new TerminalError(MODEL_NEEDS_SETTINGS, { metadata: { code: error.code, detail: error.message } });
   }
   return null;
 }

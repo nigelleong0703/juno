@@ -42,8 +42,8 @@ describe('parseTelegramUpdate', () => {
     expect(event?.text).toBe('what is up');
   });
 
-  it('ignores group chatter that does not address the bot', () => {
-    expect(parseTelegramUpdate(message({ chat: { id: -100, type: 'group' }, text: 'lunch?' }), BOT)).toBeNull();
+  it('marks group chatter that does not address the bot, so the agent only observes it', () => {
+    expect(parseTelegramUpdate(message({ chat: { id: -100, type: 'group' }, text: 'lunch?' }), BOT)).toMatchObject({ chatType: 'group', text: 'lunch?', addressed: false });
   });
 
   it('puts a forum topic in its own thread', () => {

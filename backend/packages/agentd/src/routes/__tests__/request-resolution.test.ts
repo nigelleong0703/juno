@@ -33,7 +33,7 @@ class RecordingEnqueuer implements Enqueuer {
   async scheduleRoutine(): Promise<void> {}
 
   async resolveAwakeable(id: string, value: unknown): Promise<void> {
-    if (this.failAwakeable) throw new Error('restate ingress unavailable');
+    if (this.failAwakeable) throw new Error('runner unavailable');
     this.awakeables.push({ id, value });
   }
 }

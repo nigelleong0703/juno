@@ -94,6 +94,21 @@ describe('task watcher', () => {
     expect(h.wakes[0]?.payload['status']).toBe('timeout');
   });
 
+  it('a silent watch ends the task row when the process exits, without waking the session', async () => {
+    const h = harness();
+    await h.ctx.store.put('backgroundTasks', { id: input.taskId, ownerId: 'owner', agentId: 'a', conversationId: 'c', runId: 'r', kind: 'shell', label: 'x', handle: 'p1', notify: false, chainId: 'c', generation: 0, status: 'running', startedAt: '2026-10-09T09:00:00.000Z' });
+    await watchTick(h.ctx, computerReading([{ state: 'exited', exitCode: 0 }]), { ...input, silent: true });
+    expect(h.wakes).toEqual([]);
+    expect(await h.ctx.store.get('backgroundTasks', input.taskId)).toMatchObject({ status: 'completed' });
+  });
+
+  it('ends at once, as failed, when the computer does not know the process (no five retries)', async () => {
+    const h = harness();
+    await watchTick(h.ctx, computerReading([new Error('process p1 is not known on this computer (it expired or never existed)')]), { ...input, silent: true });
+    expect(h.state()?.done).toBe(true);
+    expect(h.rearms).toEqual([]);
+  });
+
   it('ignores a tick addressed to another key', async () => {
     const h = harness();
     await watchTick(h.ctx, computerReading([{ state: 'exited', exitCode: 0 }]), { ...input, taskId: 'other' });

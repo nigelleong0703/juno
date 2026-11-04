@@ -5,7 +5,7 @@ import { MAX_TYPING_HOLD_MS, selfWakeAdmission, TYPING_TTL_MS } from '../logic/i
 import { defaultState, MAX_SEEN_WAKE_IDS, type Services, type SessionIo, type SessionState } from './session-state.js';
 import { armFlush, beginRun, isPrivateReplyBurst } from './session-reply.js';
 import { readChainCost } from './chain-cost.js';
-import { CHILD_SESSION_MARKER, childRunIdOfSession, docOwner, inOwnerScope } from '../../execution-owner.js';
+import { SUBAGENT_SESSION_MARKER, subagentRunIdOfSession, docOwner, inOwnerScope } from '../../execution-owner.js';
 
 async function checkGuards(event: WakeEvent, state: SessionState, store: Store, now: number): Promise<GuardVerdict> {
   const hopVerdict = checkHop(event);
@@ -21,9 +21,9 @@ function isContextOnly(event: WakeEvent): boolean {
 }
 
 /** A child_message steer (kind child_task, mode steer) addressed to the child session named by its own childRunId. */
-function isSteerIntoChild(event: WakeEvent): boolean {
-  if (event.kind !== 'child_task' || event.mode !== 'steer') return false;
-  const runId = childRunIdOfSession(event.sessionKey, event.agentId, event.conversationId);
+function isSteerIntoSubagent(event: WakeEvent): boolean {
+  if (event.kind !== 'subagent_task' || event.mode !== 'steer') return false;
+  const runId = subagentRunIdOfSession(event.sessionKey, event.agentId, event.conversationId);
   return runId !== undefined && event.payload['childRunId'] === runId;
 }
 
@@ -54,6 +54,13 @@ export async function receiveEvent(
     state.seenWakeIds = [event.id, ...state.seenWakeIds].slice(0, MAX_SEEN_WAKE_IDS);
     io.writeState(state);
     return { accepted: false, reason: admission.reason };
+  }
+
+  // An observed message never queues or wakes: it only counts towards the chat digest (session.ts).
+  if (event.kind === 'observed') {
+    state.seenWakeIds = [event.id, ...state.seenWakeIds].slice(0, MAX_SEEN_WAKE_IDS);
+    io.writeState(state);
+    return { accepted: true };
   }
 
   // A typing ping records presence and never queues or wakes. A pending private window is re-armed:
@@ -116,7 +123,7 @@ export async function receiveEvent(
   // A child's run is started by startChildRun, which never records activeRunId here. A child_message steer
   // into that running child only queues: the child drains it at its steer points. Starting a run from it
   // would create a stray run with no parent link. Every other wake starts its run as it did before.
-  if (isSteerIntoChild(event)) {
+  if (isSteerIntoSubagent(event)) {
     io.writeState(state);
     return { accepted: true };
   }
@@ -223,7 +230,7 @@ export async function runFinishedEvent(io: SessionIo, runId: string): Promise<vo
 
 /**
  * The one-hour idle timer fired: compact in the background unless a newer run or message made it stale.
- * `step` journals the compaction (Restate `ctx.run`). The agent's owner scopes it; a failure is dropped
+ * `step` journals the compaction (`ctx.run`). The agent's owner scopes it; a failure is dropped
  * rather than retried, since the next size trigger compacts anyway.
  */
 export async function idleCompactEvent(
@@ -236,12 +243,12 @@ export async function idleCompactEvent(
   if (state?.idleCompactToken !== token || state.status !== 'idle' || state.inbox.length > 0 || state.activeRunId) return;
   // The canonical key is `${agentId}:${conversationId}`; a child session adds a marker and is never compacted here.
   const split = io.key.indexOf(':');
-  if (split < 0 || io.key.includes(CHILD_SESSION_MARKER)) return;
+  if (split < 0 || io.key.includes(SUBAGENT_SESSION_MARKER)) return;
   const agentId = io.key.slice(0, split);
   const conversationId = io.key.slice(split + 1);
   const ownerId = docOwner(await services.store.get('agents', agentId));
   if (ownerId === undefined) return;
-  // The owner scope is entered inside the journaled step: Restate runs the step on its own async chain, outside the caller's scope.
+  // The owner scope is entered inside the journaled step: the runner runs the step on its own async chain, outside the caller's scope.
   await step(() => inOwnerScope(ownerId, async () => {
     await services.brain.compactIdle?.({ agentId, conversationId, sessionKey: io.key }).catch(() => undefined);
   }));

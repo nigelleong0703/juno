@@ -1,4 +1,5 @@
-import { type Hono } from 'hono';
+import { type Context, type Hono } from 'hono';
+import { VOICE_CHANNEL } from 'juno-agent/execution/voice-channel';
 import type { Doc } from '@agent-desktop/contracts';
 import {
   composerPayloadSchema,
@@ -53,9 +54,16 @@ interface BoundResume {
  * - only after every entry is bound and validated is the first decision recorded.
  */
 export function registerAguiRuns(app: Hono, deps: AgentdDeps) {
-  app.post('/v1/conversations/:id/runs', async (c) => {
+  app.post('/v1/conversations/:id/runs', startRun(deps));
+  // The voice worker's own entrance (service-authenticated like every internal route, and absent from the gateway's route list, so a
+  // client cannot reach it): the same admission, with the explicit channel the wake carries. A public body never sets a channel.
+  app.post('/v1/conversations/:id/voice/runs', startRun(deps, VOICE_CHANNEL));
+}
+
+function startRun(deps: AgentdDeps, channel?: typeof VOICE_CHANNEL) {
+  return async (c: Context) => {
     const ownerId = getOwnerId(c);
-    const convId = c.req.param('id');
+    const convId = c.req.param('id') ?? '';
     const conv = await deps.store.get('conversations', convId);
     if (!conv) {
       return c.json({ error: { code: 'CONVERSATION_NOT_FOUND', message: 'Conversation ' + convId + ' not found' } }, 404);
@@ -176,12 +184,12 @@ export function registerAguiRuns(app: Hono, deps: AgentdDeps) {
     if (!composer.success) {
       return c.json({ error: { code: 'INVALID_MESSAGE', message: 'Invalid user message content' } }, 400);
     }
-    const admitted = await admitUserMessage(deps, conv, ownerId, composer.data, { messageId: turn.id });
+    const admitted = await admitUserMessage(deps, conv, ownerId, composer.data, { messageId: turn.id, ...(channel === undefined ? {} : { channel }) });
     if (!admitted.ok) {
       return c.json({ error: { code: admitted.error.code, message: admitted.error.message } }, admitted.error.status);
     }
     return c.json({ item: admitted.item, runId: admitted.runId ?? input.runId }, 202);
-  });
+  };
 }
 
 const invalidResume = (message: string): ResumeFailure => ({ code: 'INVALID_RESUME', status: 400, message });

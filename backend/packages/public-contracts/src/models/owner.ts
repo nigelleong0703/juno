@@ -91,7 +91,7 @@ export const memoryItemViewSchema = z.object({
   saidIn: z.object({ label: z.string() }),
   audience: z.object({ kind: z.enum(['owner', 'group', 'public']), label: z.string() }),
   sensitive: z.boolean(),
-  /** Set = private to that agent. */
+  /** Set = private to that agent; absent = shared with all the owner's agents. */
   agentId: idSchema.optional(),
   status: memoryItemStatusSchema,
   createdAt: isoDateTimeSchema,
@@ -134,6 +134,8 @@ export const updateMemoryItemInputSchema = z.object({
   text: z.string().trim().min(1).max(1000).optional(),
   audience: z.enum(['owner', 'public']).optional(),
   sensitive: z.boolean().optional(),
+  /** Who keeps the item (BACKEND 5.4a): `null` shares it with all the owner's agents, an agent id makes it that agent's alone (one of the owner's agents). */
+  agentId: idSchema.nullable().optional(),
 }).refine((input) => Object.keys(input).length > 0, { message: 'nothing to change' });
 export type UpdateMemoryItemInput = z.infer<typeof updateMemoryItemInputSchema>;
 

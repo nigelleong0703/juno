@@ -92,7 +92,7 @@ export function createMemoryNoteTool(opts: { memory?: MemoryPort; computer?: Com
     replay: 'never',
     sideEffect: true,
     async execute(args: unknown, ctx: ToolContext): Promise<ToolResult> {
-      if (ctx.wake.kind === 'child_task') return result('a sub-task cannot write memory notes; report what you learned to the agent that started you.', true);
+      if (ctx.wake.kind === 'subagent_task') return result('a sub-task cannot write memory notes; report what you learned to the agent that started you.', true);
       const parsed = schema.safeParse(args);
       if (!parsed.success) return result(`"about", "kind" and "text" are required; "text" is one line of at most ${String(MAX_TEXT_CHARS)} characters.`, true);
       const { about, kind, topic, text, sensitive, private: hidden } = parsed.data;
@@ -127,6 +127,8 @@ export function createMemoryNoteTool(opts: { memory?: MemoryPort; computer?: Com
         file,
         ...(topic === undefined ? {} : { topic }),
         aboutPersonId,
+        // Private to the agent that learned it; only the owner can share it with the others (BACKEND 5.4a).
+        agentId: ctx.agentId,
         saidByPersonId: speaker.personId ?? null,
         saidByAccountId: speaker.accountId ?? null,
         saidByAgentId: ctx.agentId,

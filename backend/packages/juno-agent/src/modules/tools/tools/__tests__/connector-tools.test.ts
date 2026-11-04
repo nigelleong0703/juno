@@ -35,7 +35,10 @@ describe('connector_search', () => {
     const result = await tool.execute({ query: 'EMAIL' }, ctxFor(store));
     const out = text(result);
     expect(out).toMatch(/- gmail \| Gmail \| productivity \| connected \|/);
-    expect(out).toMatch(/- outlook-mail \| Outlook Mail \| productivity \| needs_server \|/);
+    // An app that needs an OAuth client this deployment lacks is not offered at all; with the client it is.
+    expect(out).not.toContain('outlook-mail');
+    const configured = text(await createConnectorSearchTool({ store, catalog, env: { MICROSOFT_CLIENT_ID: 'id', MICROSOFT_CLIENT_SECRET: 's' } }).execute({ query: 'EMAIL' }, ctxFor(store)));
+    expect(configured).toMatch(/- outlook-mail \| Outlook Mail \| productivity \| available \|/);
     expect(out.trim().split('\n').at(-1)).toContain('connect_request');
   });
 
@@ -51,11 +54,11 @@ describe('connector_search', () => {
 
   it('filters by category and connection, and caps the result', async () => {
     const store = createMemoryStore();
-    await seedConnected(store, 'strava');
+    await seedConnected(store, 'linear');
     const tool = createConnectorSearchTool({ store, catalog, env: {} });
-    const health = text(await tool.execute({ category: 'health', only_unconnected: true }, ctxFor(store)));
-    expect(health).toContain('hevy');
-    expect(health).not.toContain('strava');
+    const projects = text(await tool.execute({ category: 'projects', only_unconnected: true }, ctxFor(store)));
+    expect(projects).toContain('atlassian');
+    expect(projects).not.toContain('linear');
     const capped = text(await tool.execute({ limit: 2 }, ctxFor(store)));
     expect(capped.split('\n').filter((line) => line.startsWith('- '))).toHaveLength(2);
     expect(capped).toMatch(/\(\d+ more/);
@@ -182,7 +185,7 @@ describe('recommending catalog apps for a need', () => {
   it('never names an app outside the catalog: a capability nobody provides, an unknown tag, or an app this deployment cannot offer', async () => {
     const store = createMemoryStore();
     const search = createConnectorSearchTool({ store, catalog, env: {} });
-    expect(text(await search.execute({ need: 'mail.send' }, ctxFor(store)))).toContain('No app in our catalog can send email on this deployment');
+    expect(text(await search.execute({ need: 'mail.send' }, ctxFor(store)))).toContain('No app in our catalog can send email.');
     const unknown = await search.execute({ need: 'teleport' }, ctxFor(store));
     expect(unknown.isError).toBe(true);
     expect(text(unknown)).toContain('mail.send');

@@ -13,6 +13,7 @@ export type ComputerErrorCode =
   | 'aborted'
   | 'home_conflict'
   | 'computer_recovering'
+  | 'computer_asleep'
   | 'failed';
 
 /** Concrete HTTP statuses so callers accept them as a contentful status. */
@@ -26,6 +27,7 @@ const HTTP_STATUS: Record<ComputerErrorCode, ComputerHttpStatus> = {
   aborted: 408,
   home_conflict: 409,
   computer_recovering: 503,
+  computer_asleep: 503,
   failed: 500,
 };
 
@@ -71,6 +73,7 @@ export function isComputerErrorCode(value: unknown): value is ComputerErrorCode 
     value === 'aborted' ||
     value === 'home_conflict' ||
     value === 'computer_recovering' ||
+    value === 'computer_asleep' ||
     value === 'failed'
   );
 }

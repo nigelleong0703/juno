@@ -117,6 +117,13 @@ describe('the boot registry', () => {
       ['apps', '__migrations/apps-v1', 'continue'],
       ['app-labels', '__migrations/apps-labels-v1', 'continue'],
       ['self-bots', '__migrations/shared-app-only-v1', 'continue'],
+      ['keyless-no-sign-in', '__migrations/keyless-no-sign-in-v1', 'continue'],
+      ['uncertain-action-cards', '__migrations/uncertain-action-notice-v1', 'continue'],
+      ['hosted-endpoint-paths', '__migrations/hosted-endpoint-paths-v1', 'continue'],
+      ['removed-sg-connectors', '__migrations/removed-sg-connectors-v1', 'continue'],
+      ['removed-unconnectable-connectors', '__migrations/removed-unconnectable-connectors-v1', 'continue'],
+      ['orphan-shell-tasks', '__migrations/orphan-shell-tasks-v1', 'continue'],
+      ['memory-per-agent', '__migrations/memory-per-agent-v1', 'continue'],
     ]);
   });
 
@@ -134,12 +141,19 @@ describe('the boot registry', () => {
       { name: 'apps', status: 'done' },
       { name: 'app-labels', status: 'done' },
       { name: 'self-bots', status: 'done' },
+      { name: 'keyless-no-sign-in', status: 'done' },
+      { name: 'uncertain-action-cards', status: 'done' },
+      { name: 'hosted-endpoint-paths', status: 'done' },
+      { name: 'removed-sg-connectors', status: 'done' },
+      { name: 'removed-unconnectable-connectors', status: 'done' },
+      { name: 'orphan-shell-tasks', status: 'skipped' },
+      { name: 'memory-per-agent', status: 'skipped' },
     ]);
     expect(await markerDone(store, '__migrations/home-v1')).toBe(true);
     expect(await markerDone(store, '__migrations/group-notes-v1')).toBe(true);
     expect(await markerDone(store, '__migrations/identity-v1')).toBe(false);
 
     const second = await runMigrations(migrations, { store }, recorder().log);
-    expect(second.map((report) => report.status)).toEqual(['skipped', 'skipped', 'skipped', 'skipped', 'skipped', 'skipped', 'skipped', 'skipped', 'skipped']);
+    expect(second.map((report) => report.status)).toEqual(Array.from({ length: migrations.length }, () => 'skipped'));
   });
 });

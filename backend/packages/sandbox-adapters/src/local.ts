@@ -6,7 +6,7 @@
 import { DEFAULT_LOCAL_IMAGE, createDockerDriver } from './docker-driver.js';
 import type { DockerCli } from './docker-cli.js';
 import type { LinkHub } from './link-hub.js';
-import { createLinkedProvider, type StartedContext } from './linked-provider.js';
+import { createLinkedProvider, type LinkedProviderOptions, type StartedContext } from './linked-provider.js';
 import type { ComputerProvider } from './provider.js';
 import type { ComputerStorage } from './storage.js';
 
@@ -23,13 +23,16 @@ export interface LocalProviderOptions {
   /** computerd's link hub and the URL a container dials (`ws://host.docker.internal:<port>/v1/computer-link`). */
   hub: LinkHub;
   linkUrl: string;
+  /** Deployment id written on every container (see `deploymentId`); empty writes none. */
+  deployment?: string;
   onStarted?: (context: StartedContext) => Promise<void>;
   linkWaitMs?: number;
+  skills?: LinkedProviderOptions['skills'];
 }
 
 export function createLocalProvider(options: LocalProviderOptions): ComputerProvider & { dispose(): void } {
   return createLinkedProvider({
-    driver: createDockerDriver({ ownerId: options.ownerId, ...(options.docker ? { docker: options.docker } : {}), ...(options.storage ? { storage: options.storage } : {}) }),
+    driver: createDockerDriver({ ownerId: options.ownerId, ...(options.docker ? { docker: options.docker } : {}), ...(options.storage ? { storage: options.storage } : {}), ...(options.deployment ? { deployment: options.deployment } : {}) }),
     hub: options.hub,
     linkUrl: options.linkUrl,
     ownerId: options.ownerId,
@@ -37,5 +40,6 @@ export function createLocalProvider(options: LocalProviderOptions): ComputerProv
     ...(options.storage ? { storage: options.storage } : {}),
     ...(options.onStarted ? { onStarted: options.onStarted } : {}),
     ...(options.linkWaitMs === undefined ? {} : { linkWaitMs: options.linkWaitMs }),
+    ...(options.skills ? { skills: options.skills } : {}),
   });
 }

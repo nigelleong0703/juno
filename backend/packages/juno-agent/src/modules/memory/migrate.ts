@@ -94,7 +94,7 @@ export async function migrateMemoryItems(deps: HomeDeps & { memory: MemoryGraph 
           kind,
           file,
           aboutPersonId: unknownPerson ? null : personPage ?? ownerPerson,
-          agentId: personPage === undefined ? null : section ?? null,
+          agentId: section ?? null,
           saidByPersonId: ownWords || (claim !== undefined && (await ownerSaid(store, ownerId, claim.evidence))) ? ownerPerson : null,
           saidIn: 'migrated',
           audience: 'owner',

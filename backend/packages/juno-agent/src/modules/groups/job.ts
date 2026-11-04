@@ -11,7 +11,15 @@ import type { HomeDeps } from '../home/service.js';
 import { editHomeFile } from '../memory/files.js';
 import type { ChannelPort } from '../tools/tools/channelHistory.js';
 import { noteAuthorSuffix } from '../home/paths.js';
-import { ABOUT_MAX_CHARS, REFRESH_AFTER_DAYS, groupNoteTitle, noteDate, parseNote, plainBlock, renderNote, withAbout } from './note.js';
+import { ABOUT_MAX_CHARS, REFRESH_AFTER_DAYS, groupNoteTitle, noteDate, parseNote, plainBlock, renderNote, withAbout, withTeam, type Team } from './note.js';
+
+/** Writes the team picture sections the model answered with (BACKEND 6.7), keeping the About, the owner's rules and every other section. Returns whether the file was written. */
+export async function writeTeamPicture(deps: HomeDeps, input: { ownerId: string; agentId: string; conversation: object; path: string; team: Team }): Promise<boolean> {
+  return editHomeFile(deps, { ownerId: input.ownerId, agentId: input.agentId, path: input.path }, (content) => {
+    const doc = parseNote(content);
+    return renderNote(withTeam({ ...doc, title: doc.title === '' ? groupNoteTitle(input.conversation) : doc.title }, input.team));
+  });
+}
 
 /** What one read looks at: the newest this many messages inside this many days. */
 const MESSAGES = 200;

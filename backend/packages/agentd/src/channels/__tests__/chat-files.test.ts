@@ -14,6 +14,8 @@ import { clearFeishuTokenCache } from '@agent-desktop/channels/feishu/api';
 import { storeInboundFiles } from '../files.js';
 import { recordFeishuOutcome, syncFeishuGroupGrant } from '../feishu/grants.js';
 import { holdsQuietReply } from '../origin.js';
+import { planRunOutputs, sendOutputRow } from '../outputs.js';
+import { saveBlob } from '@agent-desktop/contracts';
 import { createChannelPort } from '../port.js';
 import { testChannels } from '../../__tests__/test-app.js';
 
@@ -97,6 +99,70 @@ describe('outbound files from a platform chat', () => {
     const port = createChannelPort({ store, channels: testChannels, channelFetch: fetchFn });
     expect(await port.sendFile?.({ ownerId: 'someone-else', origin: { kind: 'telegram', channelId: 'chan-1', chatId: 'C1', threadId: 'C1', chatType: 'group' }, file: { name: 'a.txt', mime: 'text/plain', bytes: new Uint8Array([1]) } })).toEqual({ status: 'unsupported' });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('what a finished run made reaches its thread (BACKEND 6.8)', () => {
+  async function runThatMadeADocument(store: Store, blobs: ReturnType<typeof createMemoryBlobStore>) {
+    const conv = { id: 'cvn-g', kind: 'room', agentIds: ['agent-1'], memberIds: [OWNER], unreadCount: 0, lastItemAt: AT, createdAt: AT, ownerId: OWNER, channel: { kind: 'telegram', channelId: 'chan-1', chatId: 'C1', threadId: 'C1' } };
+    // The owner's rows (the delivery reads them through the owner's scope).
+    const owned = store.forOwner?.(OWNER) ?? store;
+    await owned.put('conversations', conv as never);
+    await owned.put('runs', { id: 'run-1', agentId: 'agent-1', conversationId: 'cvn-g' } as never);
+    await owned.put('runs', { id: 'run-child', agentId: 'agent-1', conversationId: 'cvn-g', parentRunId: 'run-1' } as never);
+    const stored = await saveBlob(blobs, new TextEncoder().encode('# Launch checklist'), 'text/markdown');
+    await owned.put('artifactFiles', { id: 'af-1', artifactId: 'lib-1', version: 1, part: 'file', name: 'checklist.md', mimeType: 'text/markdown', sizeBytes: stored.sizeBytes, sha256: stored.sha256, blobKey: stored.blobKey, createdAt: AT } as never);
+    const version = { version: 1, fileRef: 'af-1', mimeType: 'text/markdown' };
+    // One made by the child of the run, one by another run (not this run's), and a file with no versions (send_file posts its own).
+    await owned.put('library', { id: 'lib-1', name: 'Launch checklist', kind: 'document', mimeType: 'text/markdown', conversationId: 'cvn-g', runId: 'run-child', version: 1, versions: [version] } as never, { conversationId: 'cvn-g' });
+    // A background task of this thread's earlier work that finished after that run did: its run row names this thread as the root.
+    await owned.put('runs', { id: 'run-bg', agentId: 'agent-1', conversationId: 'cvn-g', parentRunId: 'run-earlier', rootOrigin: { type: 'channel', channel: 'telegram', conversationId: 'cvn-g', speaker: 'member' } } as never);
+    await owned.put('library', { id: 'lib-bg', name: 'Background notes', kind: 'document', mimeType: 'text/markdown', conversationId: 'cvn-g', runId: 'run-bg', version: 1, versions: [version] } as never, { conversationId: 'cvn-g' });
+    await owned.put('library', { id: 'lib-other', name: 'Other', kind: 'document', mimeType: 'text/markdown', conversationId: 'cvn-g', runId: 'run-other', version: 1, versions: [version] } as never, { conversationId: 'cvn-g' });
+    await owned.put('library', { id: 'lib-plain', name: 'plain.txt', kind: 'file', conversationId: 'cvn-g', runId: 'run-1' } as never, { conversationId: 'cvn-g' });
+    await owned.put('items', { id: 'itm-a', conversationId: 'cvn-g', type: 'agent_message', at: AT, agentId: 'agent-1', markdown: 'Here you go', citations: [], runId: 'run-1', replyTo: groupOrigin('telegram') } as never, { conversationId: 'cvn-g' });
+  }
+
+  const RUN = { id: 'run-1', agentId: 'agent-1', conversationId: 'cvn-g' };
+  /** The outbox rows the run's documents became, each tried once. */
+  async function sendQueued(deps: Parameters<typeof sendOutputRow>[0]) {
+    const rows = (await deps.store.list('outbox', { where: { status: 'pending' }, orderBy: 'at', order: 'asc', limit: 20 })).items;
+    return Promise.all(rows.map((row) => sendOutputRow(deps, row)));
+  }
+
+  it('queues the documents the run (and its child) made for the thread its answer went to, once; others\' and plain files are left alone; each row posts its file', async () => {
+    const store = await setup('telegram');
+    const blobs = createMemoryBlobStore();
+    await runThatMadeADocument(store, blobs);
+    const { fetchFn, calls } = fakePlatform(() => Response.json({ ok: true, result: { message_id: 90 } }));
+    const deps = { store, blobs, channels: testChannels, channelFetch: fetchFn };
+    expect(await planRunOutputs(deps, OWNER, RUN)).toBe(2);
+    // A second run event, or a restart, queues nothing twice.
+    expect(await planRunOutputs(deps, OWNER, RUN)).toBe(0);
+    expect((await store.list('outbox', { limit: 10 })).items.map((row) => row.id).sort()).toEqual(['obx:out:lib-1:1', 'obx:out:lib-bg:1']);
+    expect(await sendQueued(deps)).toEqual([{ status: 'sent', externalId: '90' }, { status: 'sent', externalId: '90' }]);
+    expect(calls.map((call) => call.url)).toEqual(['https://api.telegram.org/bottok/sendDocument', 'https://api.telegram.org/bottok/sendDocument']);
+  });
+
+  it('queues nothing for a run that answered in no group, and a file the platform refuses is a failed attempt (the outbox retries it)', async () => {
+    const store = await setup('telegram');
+    const blobs = createMemoryBlobStore();
+    await runThatMadeADocument(store, blobs);
+    const refused = fakePlatform(() => Response.json({ ok: false, description: 'nope' }));
+    const deps = { store, blobs, channels: testChannels, channelFetch: refused.fetchFn };
+    expect(await planRunOutputs(deps, OWNER, RUN)).toBe(2);
+    expect(await sendQueued(deps)).toMatchObject([{ status: 'failed', failure: { kind: 'transient' } }, { status: 'failed' }]);
+    const empty = await setup('telegram');
+    expect(await planRunOutputs({ store: empty }, OWNER, { id: 'run-nobody', agentId: 'agent-1', conversationId: 'cvn-none' })).toBe(0);
+  });
+
+  it('a run whose words went out without an answer item (send_message) still queues its document for the thread the conversation is bound to', async () => {
+    const store = await setup('telegram');
+    const blobs = createMemoryBlobStore();
+    await runThatMadeADocument(store, blobs);
+    const owned = store.forOwner?.(OWNER) ?? store;
+    await owned.delete('items', 'itm-a');
+    expect(await planRunOutputs({ store }, OWNER, RUN)).toBe(2);
   });
 });
 

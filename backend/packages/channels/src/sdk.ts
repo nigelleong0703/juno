@@ -48,8 +48,6 @@ export interface ChannelAdapter {
 export const telegramAdapter: ChannelAdapter = {
   capabilities: telegramCapabilities,
   identity: platformIdentity('Telegram', {
-    // A Telegram mention names the bot by its username, which is the channel id.
-    addressesSelf: (row, person) => (row.botUserId !== undefined && person.id === row.botUserId) || person.handle === row.channelId,
     botLabel: (row) => '@' + row.channelId,
   }),
   inbound: { parseClick: parseTelegramClick },

@@ -7,6 +7,7 @@
  */
 import type { ChannelInstallation, ChannelRow } from '@agent-desktop/contracts';
 import type { ChannelOrigin } from '@agent-desktop/public-contracts';
+import type { SendFailure } from './failure.js';
 import type { RichMessage } from './render.js';
 
 /** The name and picture an agent speaks with on a shared app (Slack `username` / `icon_url`, Discord webhook `username` / `avatar_url`). */
@@ -25,7 +26,13 @@ export interface ChannelSendTarget {
   /** Group chat: the platform message this reply answers; the sender posts it as a reply to it (Telegram, Discord). */
   replyToMessageId?: string;
   /** The platform user whose message this reply answers (Discord names them in the reply line of a webhook post). */
-  replyToUserId?: string;  /** Shared Slack app / Discord bot: the agent's own name and picture on the message. */
+  replyToUserId?: string;
+  /**
+   * The outbox row's id: a platform that can recognise a repeat of one send uses it so a re-send after a crash makes no second message
+   * (Discord `nonce` with `enforce_nonce`, Feishu `uuid`); Telegram and Slack have no such parameter and ignore it.
+   */
+  idempotencyKey?: string;
+  /** Shared Slack app / Discord bot: the agent's own name and picture on the message. */
   identity?: SenderIdentity;
   /** The shared install behind `channel` (workspace / server), with a way to save what the sender learns (Discord webhooks). */
   installation?: ChannelInstallation;
@@ -39,7 +46,7 @@ export interface ReplyPlan {
 }
 
 /** `externalId` is the first message sent; `externalIds` is every message it was split into (Discord agent-to-agent mentions look them up). */
-export type ChannelSendResult = { ok: true; externalId?: string; externalIds?: string[] } | { ok: false; error: string };
+export type ChannelSendResult = { ok: true; externalId?: string; externalIds?: string[] } | { ok: false; error: string; failure?: SendFailure };
 
 export interface ChannelSender {
   sendText(target: ChannelSendTarget, text: string): Promise<ChannelSendResult>;
@@ -47,6 +54,8 @@ export interface ChannelSender {
   sendRich?(target: ChannelSendTarget, rich: RichMessage): Promise<ChannelSendResult>;
   /** Group reply: quote or not, and the people it may mention (see outbound.ts). Absent: no quote, no mentions. */
   planReply?(token: string, origin: ChannelOrigin, replyText: string, ours: { botUserId?: string; webhookIds: ReadonlySet<string> }): Promise<ReplyPlan>;
+  /** Open (or find) the bot's private chat with a person and return its chat id; absent where the platform needs no opening or cannot. */
+  openDirect?(token: string, userId: string): Promise<string | undefined>;
 }
 
 /**
@@ -75,6 +84,8 @@ export interface ChannelInboundEvent {
   files?: ChannelFile[];
   /** A group with people from another workspace or tenant (Slack Connect, a Feishu external group). Absent: not known. */
   external?: boolean;
+  /** `false`: a group message nobody addressed to the agent. The agent only observes it: stored, counted by the chat digest, no run (agentd BACKEND 6.8). Absent: addressed. */
+  addressed?: boolean;
 }
 
 /** A file a platform message carries. `fileId` is what the platform's `attachment` call takes: Telegram's file_id, Slack's url_private, Discord's CDN url, Feishu's file_key / image_key. */

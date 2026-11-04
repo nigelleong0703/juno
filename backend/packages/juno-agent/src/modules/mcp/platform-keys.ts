@@ -27,7 +27,6 @@ export interface PlatformKeyServer {
 export const PLATFORM_KEY_SERVERS: readonly PlatformKeyServer[] = [
   { catalogId: 'google-maps', name: 'Google Maps', url: 'https://mapstools.googleapis.com/mcp', header: 'X-Goog-Api-Key', env: 'GOOGLE_MAPS_API_KEY' },
   { catalogId: 'youtube', name: 'YouTube', url: '', hostedPath: '/mcp/google/youtube', env: 'YOUTUBE_API_KEY' },
-  { catalogId: 'sg-transport', name: 'Singapore transport', url: '', hostedPath: '/mcp/sg/sg-transport', env: 'LTA_ACCOUNT_KEY' },
 ];
 
 function originOf(url: string): string | undefined {
@@ -51,28 +50,26 @@ function entryFor(url: string, env: Record<string, string | undefined>): { heade
   return server?.header === undefined || key === undefined ? undefined : { header: server.header, key };
 }
 
+/** Header that carries the owner's Google / Microsoft token to a hosted connector; `Authorization` carries only our service credential. */
+export const UPSTREAM_AUTHORIZATION_HEADER = 'x-upstream-authorization';
+
 /**
- * A hosted platform-key server runs on this gateway's own quota, so the gateway only serves callers that hold the
- * internal service token (the one agentd and api already share). It is sent to this gateway's origin and that path only.
+ * Headers a request to a connector our gateway hosts carries (Gmail, Calendar, Drive, ..., YouTube, Singapore transport). These
+ * endpoints answer only our own backend (BACKEND 10.18.4): `Authorization` is the service credential (HOSTED_MCP_TOKEN), and the owner's
+ * upstream token (what `authorize()` yields, when the connection signed in with OAuth) rides in `X-Upstream-Authorization`, so the two
+ * audiences never share a header. The caller decides "hosted" from the stored endpoint form (`isStoredHostedEndpoint`); a third-party
+ * or custom MCP server gets neither the credential nor a rewritten header: `upstream` then stays `Authorization`.
  */
-function hostedAuthorization(url: string, env: Record<string, string | undefined>): string | undefined {
-  const token = env['INTERNAL_AGENTD_TOKEN'];
-  const own = env['BETTER_AUTH_URL'];
-  if (token === undefined || token === '' || own === undefined || own === '') return undefined;
-  let target: URL;
-  try {
-    target = new URL(url);
-  } catch {
-    return undefined;
-  }
-  const server = PLATFORM_KEY_SERVERS.find((candidate) => candidate.hostedPath !== undefined && candidate.hostedPath === target.pathname);
-  return server === undefined || keyFor(server, env) === undefined || originOf(own) !== target.origin ? undefined : `Bearer ${token}`;
+export function hostedMcpHeaders(upstream: string | undefined, env: Record<string, string | undefined> = process.env): Record<string, string> {
+  const token = env['HOSTED_MCP_TOKEN'];
+  return {
+    ...(token === undefined || token === '' ? {} : { authorization: `Bearer ${token}` }),
+    ...(upstream === undefined ? {} : { [UPSTREAM_AUTHORIZATION_HEADER]: upstream }),
+  };
 }
 
 /** The key header for a request to `url`, or none (not a keyed server, or this deployment has no key). */
 export function platformKeyHeaders(url: string, env: Record<string, string | undefined> = process.env): Record<string, string> {
-  const hosted = hostedAuthorization(url, env);
-  if (hosted !== undefined) return { authorization: hosted };
   const found = entryFor(url, env);
   return found === undefined ? {} : { [found.header]: found.key };
 }
@@ -83,11 +80,15 @@ export function platformKeyConfigured(catalogId: string, env: Record<string, str
   return server !== undefined && keyFor(server, env) !== undefined;
 }
 
-/** Where a keyed server is called: the vendor's URL, or this gateway's public origin plus the hosted path. */
+/**
+ * What a default connection stores as its endpoint: the vendor's URL, or for a server this gateway hosts only its path (the origin is
+ * added when the connection is used, so a changed BETTER_AUTH_URL never orphans the row). A hosted server is offered only where the
+ * gateway has a public origin to be called at.
+ */
 function endpointOf(server: PlatformKeyServer, env: Record<string, string | undefined>): string | undefined {
   if (server.hostedPath === undefined) return server.url;
   const own = env['BETTER_AUTH_URL'];
-  return own === undefined || own === '' ? undefined : own.replace(/\/+$/, '') + server.hostedPath;
+  return own === undefined || own === '' ? undefined : server.hostedPath;
 }
 
 /**

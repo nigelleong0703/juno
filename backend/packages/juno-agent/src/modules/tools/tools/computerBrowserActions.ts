@@ -8,6 +8,7 @@ import { requireComputerClient, type ComputerClientProvider } from '../computer/
 import { ComputerError, type BrowserInput, type BrowserResult, type ComputerTarget } from '../computer/contract.js';
 import { actionResult, computerFailure, APPROVAL_PROPERTY, noteBrowserRestart, ON_PROPERTY, ON_SCHEMA } from '../computer/shared.js';
 import { saveScreenPreview } from '../computer/preview.js';
+import { refreshScreenCard } from '../computer/screenCard.js';
 import { purchaseApprovalDoc } from '../computer/purchaseCard.js';
 import { pageLine } from './computerBrowser.js';
 import { observeBrowserSnapshot, type BrowserObservationDecision, type BrowserObservationScope } from '../computer/browser-observation.js';
@@ -366,6 +367,7 @@ export async function withSnapshot(
     if (page.action !== 'snapshot') throw new ComputerError('failed', `browser snapshot returned a ${page.action} result`);
     const moved = page.tab !== details.tab ? `\nNow on tab ${page.tab}: ${page.title} (${page.url}).` : '';
     const snapshot = { ...page };
+    refreshScreenCard(provider, ctx, page, on);
     return actionResult(`${withNotices(line, acted)}${moved}\n\n${await scopedSnapshotText(page, ctx, on)}`, {
       ...details,
       ...(moved ? { nowOn: page.tab } : {}),

@@ -9,7 +9,7 @@ export const TELEGRAM_REACTIONS: readonly string[] = [
 ];
 
 /** What a Telegram chat can do: the Bot API cannot read a chat's history, cards have no input fields, reactions are the list above. */
-export const telegramCapabilities = () => declareCapabilities({ history: NO_HISTORY, ui: { fields: false }, reactions: { mode: 'limited', allowed: TELEGRAM_REACTIONS } });
+export const telegramCapabilities = () => declareCapabilities({ history: NO_HISTORY, ui: { fields: false }, reactions: { mode: 'limited', allowed: TELEGRAM_REACTIONS }, threads: false });
 
 /**
  * `setMessageReaction` takes one of Telegram's free reactions. The Bot API cannot read a chat's history (so `history` stays

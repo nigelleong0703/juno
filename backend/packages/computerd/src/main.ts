@@ -12,6 +12,7 @@ import { dirname, join, resolve } from 'node:path';
 import postgres from 'postgres';
 import { createMemoryStore, createStore } from '@agent-desktop/db';
 import { createLogger } from '@agent-desktop/log';
+import { platformSkillsDir } from '@agent-desktop/memory-graph/skills';
 import type { Store } from '@agent-desktop/contracts';
 import {
   createE2bProvider,
@@ -20,10 +21,15 @@ import {
   computerSize,
   computerStorage,
   createComputerStorage,
+  createDockerCli,
   createLocalProvider,
+  createSkillsBundleSource,
+  createSkillsRollout,
+  deploymentId,
   loadComputerConfig,
 } from '@agent-desktop/sandbox-adapters';
 import { objectDeleter } from './infrastructure/object-storage.js';
+import { runOrphanSweep } from './modules/computers/orphan-sweep.js';
 import { createOwnerComputers } from './modules/computers/owner-computers.js';
 import { createMacComputers } from './modules/mac/mac-computer.js';
 import { createMacControlLink } from './modules/mac/control-link.js';
@@ -62,7 +68,7 @@ async function main(): Promise<void> {
   const macRegistry = createMacRegistry(resolve(process.env['MAC_REGISTRY_FILE'] ?? '.data/mac-links.json'));
   // A Mac's Stop / resume (pressed on the Mac) reaches the control gateway through the hub; `computers` is built just below and only used when a Mac speaks.
   const macControl = createMacControlLink({ registry: macRegistry, control: (owner) => computers.forOwner(owner).lifecycle.control, log: (fields, message) => log.warn(fields, message) });
-  const hub = createLinkHub({ secret: config.COMPUTERD_TOKEN, withdrawn: macRegistry.withdrawn, requireDeclaration: isMacLink, log: (fields, message) => log.info(fields, message), ...macControl });
+  const hub = createLinkHub({ secret: config.COMPUTERD_TOKEN, withdrawn: macRegistry.withdrawn, requireDeclaration: isMacLink, log: (fields, message) => log.info(fields, message), onLinkUp: (linkId) => skillsOnLinkUp(linkId), ...macControl });
   const linkUrl = config.COMPUTERD_LINK_URL || `ws://host.docker.internal:${config.COMPUTERD_LINK_PORT}/v1/computer-link`;
   if (!isLocal && config.COMPUTER_PROVIDER !== 'fake' && config.COMPUTERD_LINK_URL === '') {
     throw new Error('COMPUTERD_LINK_URL is required: the address (wss://…/v1/computer-link) computers dial to reach computerd');
@@ -73,6 +79,14 @@ async function main(): Promise<void> {
   const defaultBindingFile = isLocal ? '.data/local-computer/computerd-binding.json' : '.data/computerd-binding.json';
   const bindingFile = resolve(process.env['COMPUTER_BINDING_FILE'] ?? defaultBindingFile);
   const poolFile = config.SCREEN_REGISTRY_FILE ? resolve(config.SCREEN_REGISTRY_FILE) : join(dirname(bindingFile), 'screen-pool.json');
+  // The platform skills every computer is brought to (BACKEND §5.11b): the deployed repository's copy, the same one agentd seeds from.
+  // A deploy restarts computerd; every computer's link redials, and each stored (not Mac) computer is checked against the new version then.
+  // The providers use the same rollout for a new computer and a resume.
+  const skills = createSkillsRollout({ hub, bundle: createSkillsBundleSource(platformSkillsDir()), log: (fields, message) => log.info(fields, message) });
+  const skillsOnLinkUp = (linkId: string): void => {
+    if (computers.boundLinkIds().has(linkId)) void skills.ensure(linkId, linkId.slice(0, 12), { verify: true });
+  };
+  const deployment = deploymentId(config.COMPUTERD_DEPLOYMENT_ID, config.COMPUTERD_TOKEN);
   const computers = createOwnerComputers({
     store,
     legacyOwnerId: config.OWNER_ID,
@@ -81,7 +95,7 @@ async function main(): Promise<void> {
     legacyBinding: isLocal ? null : config.E2B_SANDBOX_ID ? { sandboxId: config.E2B_SANDBOX_ID, template: config.E2B_TEMPLATE } : null,
     providerForOwner: (owner, hooks) => {
       if (config.COMPUTER_PROVIDER === 'fake') return createFakeProvider({ sandboxId: `fake-${randomUUID()}` });
-      if (isLocal) return createLocalProvider({ ownerId: owner, image: config.LOCAL_SANDBOX_IMAGE, storage, hub, linkUrl, onStarted: hooks.onStarted });
+      if (isLocal) return createLocalProvider({ ownerId: owner, image: config.LOCAL_SANDBOX_IMAGE, storage, hub, linkUrl, deployment, onStarted: hooks.onStarted, skills });
       return createE2bProvider({
         template: config.E2B_TEMPLATE,
         apiKey: config.E2B_API_KEY,
@@ -93,6 +107,7 @@ async function main(): Promise<void> {
         hub,
         linkUrl,
         onStarted: hooks.onStarted,
+        skills,
         ...(storage.kind === 'none' ? {} : { storage: { ownerId: owner, storage } }),
       });
     },
@@ -113,6 +128,7 @@ async function main(): Promise<void> {
     computers,
     token: config.COMPUTERD_TOKEN,
     runtime: () => ({ kind: isLocal ? 'docker' : 'cloud', image: { state: 'ready' } }),
+    skills,
     mac: { registry: macRegistry, computers: createMacComputers({ hub, registry: macRegistry, control: (owner) => computers.forOwner(owner).lifecycle.control }), tokenFor: hub.tokenFor, url: macLinkUrl, drop: hub.drop },
   });
   // The public API reaches a computer's Spaces gateway through here, over the computer link (no port is published).
@@ -137,9 +153,11 @@ async function main(): Promise<void> {
   linkServer.listen(config.COMPUTERD_LINK_PORT, config.COMPUTERD_LINK_HOST, () => {
     log.info({ host: config.COMPUTERD_LINK_HOST, port: config.COMPUTERD_LINK_PORT }, 'computer link listening');
   });
+  // Links that were up before this point (none after a restart; the check is cheap) get the same version check as a redial.
+  for (const linkId of hub.linked()) skillsOnLinkUp(linkId);
 
-  // An open, WRITABLE user stream renews the sandbox inside its idle window, so active control is
-  // never mistaken for idleness. 0 when idle pausing is off.
+  // An open screen stream (watching or driving) renews its hold on the computer this often, so a screen someone looks at is never
+  // mistaken for idleness (BACKEND §7.3b). 0 when idle pausing is off.
   const idleWindow = config.COMPUTER_IDLE_PAUSE_MINUTES > 0
     ? Math.min(config.COMPUTER_IDLE_PAUSE_MINUTES * 60_000, config.COMPUTER_TIMEOUT_MS)
     : 0;
@@ -153,6 +171,20 @@ async function main(): Promise<void> {
     log: (fields, message) => log.info(fields, message),
   });
   server.on('upgrade', (request, socket, head) => (gatewayProxy.matches(request.url) ? gatewayProxy.handleUpgrade(request, socket, head) : proxy.handleUpgrade(request, socket, head)));
+
+  // Local Docker only: containers outlive a computerd that is gone, so each start (and every ten minutes) cleans up after the dead ones.
+  if (isLocal) {
+    const accountsSql = databaseUrl.startsWith('postgres') ? postgres(databaseUrl, { max: 1 }) : undefined;
+    const accountOwners = async (): Promise<string[] | null> => {
+      if (!accountsSql) return null;
+      const rows = await accountsSql<{ id: string }[]>`select id from auth_user`;
+      return [...rows.map((row) => row.id), ...(config.OWNER_ID === '' ? [] : [config.OWNER_ID])];
+    };
+    const cli = createDockerCli();
+    const sweep = () => runOrphanSweep({ cli, computers, deployment, accountOwners, log: (fields, message) => log.info(fields, message) }).catch((error) => log.warn({ err: error }, 'orphan sweep failed'));
+    void sweep();
+    setInterval(() => void sweep(), 10 * 60_000).unref();
+  }
 
   const shutdown = () => {
     log.info('computerd shutting down');

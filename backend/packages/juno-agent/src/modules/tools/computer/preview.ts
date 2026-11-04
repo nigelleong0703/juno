@@ -13,6 +13,7 @@ export async function saveScreenPreview(
   provider: ComputerClientProvider | undefined,
   ctx: ApprovalDetailsContext,
   on?: ComputerTarget,
+  label: 'approval' | 'screen' = 'approval',
 ): Promise<{ libraryId: string; capturedAt: string } | undefined> {
   const scoped = ctx.store.forOwner?.(ctx.ownerId);
   const conversation = await ctx.store.get('conversations', ctx.conversationId);
@@ -24,7 +25,7 @@ export async function saveScreenPreview(
   const stored = await saveBlob(ctx.blobs, bytes, shot.mimeType);
   const document: LibraryDocument = {
     id: newId('lib'),
-    name: `approval-preview-${capturedAt.replace(/[:.]/g, '-')}.${shot.mimeType === 'image/jpeg' ? 'jpg' : 'png'}`,
+    name: `${label}-preview-${capturedAt.replace(/[:.]/g, '-')}.${shot.mimeType === 'image/jpeg' ? 'jpg' : 'png'}`,
     kind: 'image',
     mimeType: shot.mimeType,
     sizeBytes: bytes.length,

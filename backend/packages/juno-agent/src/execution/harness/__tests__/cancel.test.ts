@@ -1,6 +1,6 @@
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, it, expect } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type {
   AssistantTurn,
@@ -27,7 +27,7 @@ function cancelSource(): { source: CancelSource; cancel: () => void } {
     resolveSignal = resolve;
   });
   return {
-    source: { peek: async () => cancelled, get: () => RestatePromise.resolve(deferred) },
+    source: { peek: async () => cancelled, get: () => DurablePromise.resolve(deferred) },
     cancel: () => {
       cancelled = true;
       resolveSignal(true);
@@ -35,20 +35,20 @@ function cancelSource(): { source: CancelSource; cancel: () => void } {
   };
 }
 
-/** RunContext returning SDK-branded promises, so cancels race through RestatePromise.race. The unit
+/** RunContext returning SDK-branded promises, so cancels race through DurablePromise.race. The unit
  * mock does not replay heterogeneous cached results (no casts); durable replay is covered by the
  * lead's real crash checks. */
 function runContext(): RunContext {
   let seq = 0;
   return {
     rand: { uuidv4: () => `id-${seq++}` },
-    run<T>(_name: string, action: () => Promise<T>): RestatePromise<T> {
-      return RestatePromise.resolve(action());
+    run<T>(_name: string, action: () => Promise<T>): DurablePromise<T> {
+      return DurablePromise.resolve(action());
     },
-    awakeable<T>(): { id: string; promise: RestatePromise<T> } {
-      return { id: 'awake', promise: RestatePromise.resolve(new Promise<T>(() => {})) };
+    awakeable<T>(): { id: string; promise: DurablePromise<T> } {
+      return { id: 'awake', promise: DurablePromise.resolve(new Promise<T>(() => {})) };
     },
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
 }
 

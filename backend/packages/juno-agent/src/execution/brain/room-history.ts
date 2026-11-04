@@ -98,7 +98,7 @@ function personLabel(message: StoredMessage, ownerId: string): string {
   if (message.sender !== undefined) return quoteLabel(message.sender.name === '' ? 'someone' : message.sender.name) + (message.sender.owner ? " (the person you're helping)" : " (not the person you're helping)");
   return message.authorId === ownerId ? "the person you're helping" : 'a room member';
 }
-async function renderLines(store: Store, ownerId: string, messages: StoredMessage[]): Promise<string[]> {
+async function renderLines(store: Store, ownerId: string, selfId: string, messages: StoredMessage[]): Promise<string[]> {
   const names = new Map<string, string>();
   const lines: string[] = [];
   for (const message of messages) {
@@ -111,7 +111,7 @@ async function renderLines(store: Store, ownerId: string, messages: StoredMessag
       name = await agentDisplayName(store, message.authorId, ownerId);
       names.set(message.authorId, name);
     }
-    lines.push('- ' + message.at + ' ' + name + ': ' + JSON.stringify(message.text));
+    lines.push('- ' + message.at + ' ' + (message.authorId === selfId ? name + ' (you)' : name) + ': ' + JSON.stringify(message.text));
   }
   return lines;
 }
@@ -193,5 +193,5 @@ export async function buildRoomHistory(store: Store, input: RoomHistoryInput): P
   } catch {
     return denied('Refused to read room ' + quoteId(input.conversationId) + ': the room history is unreadable.');
   }
-  return windowed(input.conversationId, await renderLines(scoped, ownerId, collected.messages), collected.messages.length, !collected.exhausted, fromRaw, toRaw);
+  return windowed(input.conversationId, await renderLines(scoped, ownerId, input.agentId, collected.messages), collected.messages.length, !collected.exhausted, fromRaw, toRaw);
 }

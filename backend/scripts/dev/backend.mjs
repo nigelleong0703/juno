@@ -79,6 +79,9 @@ if (!INTERNAL_AGENTD_TOKEN) {
   fail('INTERNAL_AGENTD_TOKEN is not set. Copy .env.example to .env and set a value.');
 }
 
+if (!process.env['HOSTED_MCP_TOKEN']) {
+  fail('HOSTED_MCP_TOKEN is not set (the credential of the connectors the api hosts). Add it to .env: `openssl rand -hex 32`.');
+}
 
 if (!process.env['SECRETS_KEY']) {
   fail('SECRETS_KEY is not set. Generate one with `openssl rand -base64 32` and put it in .env.');
@@ -127,8 +130,10 @@ const services = [
 
 // Execution workers: the same entry point and env, a stable lease identity each, and no HTTP port (a worker never listens).
 // A worker that exits is restarted like any service; its runs are taken over by the others once its lease runs out.
+// They start only once the coordinator answers /healthz: a worker started earlier refuses to run ("no active worker-lease coordinator").
+const workerServices = [];
 for (let index = 1; index <= WORKERS; index += 1) {
-  services.push({
+  workerServices.push({
     name: `agentd-worker-${index}`,
     dir: join(rootDir, 'packages', 'agentd'),
     env: { ...agentdEnv, AGENTD_ROLE: 'worker', AGENTD_WORKER_ID: `dev-worker-${index}`, AGENTD_EXPECTED_WORKERS: String(WORKERS) },
@@ -154,6 +159,25 @@ if (process.env['TTS_ENABLED'] === '1') {
       ...(process.env['TTS_ESPEAK_LIBRARY'] ? { TTS_ESPEAK_LIBRARY: process.env['TTS_ESPEAK_LIBRARY'] } : {}),
       ...(process.env['TTS_ESPEAK_DATA'] ? { TTS_ESPEAK_DATA: process.env['TTS_ESPEAK_DATA'] } : {}),
     },
+  });
+}
+
+// The voice agent is opt-in: provider credentials and a LiveKit deployment are required.
+if (process.env['VOICE_ENABLED'] === '1') {
+  const python = process.env['VOICE_PYTHON'];
+  if (!python) {
+    fail('VOICE_ENABLED=1 needs VOICE_PYTHON with services/voice/requirements.txt installed.');
+  }
+  for (const name of ['LIVEKIT_URL', 'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET', 'LIVEKIT_VOICE_AGENT_NAME', 'ELEVENLABS_API_KEY', 'FISH_API_KEY', 'FISH_VOICE_ID']) {
+    if (!process.env[name]) fail(`VOICE_ENABLED=1 needs ${name}.`);
+  }
+  services.push({
+    name: 'voice',
+    dir: join(rootDir, 'services', 'voice'),
+    command: python,
+    args: ['worker.py', 'start'],
+    optional: true,
+    env: { JUNO_AGENTD_URL: process.env['JUNO_AGENTD_URL'] ?? AGENTD_URL, INTERNAL_AGENTD_TOKEN },
   });
 }
 
@@ -264,6 +288,21 @@ for (const service of services) {
     break;
   }
   startService(service);
+}
+
+if (workerServices.length > 0) {
+  void (async () => {
+    // Poll the coordinator agentd; if it never comes up the launcher's normal restart handling of agentd applies and the workers stay off.
+    while (!shuttingDown) {
+      const healthy = await fetch(`http://127.0.0.1:${AGENTD_PORT}/healthz`, { signal: AbortSignal.timeout(1000) }).then((response) => response.ok, () => false);
+      if (healthy) break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    for (const worker of workerServices) {
+      if (shuttingDown) break;
+      startService(worker);
+    }
+  })();
 }
 
 console.log(`[backend] api :${API_PORT} (public), agentd :${AGENTD_PORT} (loopback), computerd :${COMPUTERD_PORT}, memoryd :${MEMORYD_PORT} (loopback)${WORKERS > 0 ? `, ${WORKERS} execution workers (agentd is the coordinator)` : ''}${process.env['TTS_ENABLED'] === '1' ? `, tts :${TTS_PORT} (loopback)` : ''}`);

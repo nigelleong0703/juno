@@ -14,6 +14,14 @@ import type {
   DocumentConversationInput,
   DocumentDraftContent,
   DocumentView,
+  FileHistory,
+  OutboxFreeze,
+  OutboxFreezeInput,
+  OutboxList,
+  OutboxQuery,
+  FileHistoryQuery,
+  RestoreFileInput,
+  RestoredFile,
   SaveDocumentDraftInput,
   Space,
   SpaceHosted,
@@ -113,6 +121,8 @@ import type {
   ToolPermission,
   UpdateAgentInput,
   UpdateConversationInput,
+  GroupSettings,
+  UpdateGroupSettingsInput,
   UpdateGoalInput,
   UpdateRoutineInput,
   UpdateDelegationInput,
@@ -359,6 +369,10 @@ export interface ConversationsApi {
   delete(id: Id): Promise<void>;
   /** Typing activity: boolean only, never draft text. Best-effort 204. */
   typing(id: Id, active: boolean): Promise<void>;
+  /** The owner's settings for the platform group this conversation belongs to (404 for a conversation that is not a group; owner only). */
+  groupSettings(id: Id): Promise<GroupSettings>;
+  /** Change them: listening to the whole channel and the categories a teammate may use without the owner being asked. */
+  updateGroupSettings(id: Id, input: UpdateGroupSettingsInput): Promise<GroupSettings>;
 }
 
 export interface ItemsApi {
@@ -605,6 +619,30 @@ export interface DocumentsApi {
   conversation(id: Id, input: DocumentConversationInput): Promise<Conversation>;
 }
 
+/**
+ * Undo for an agent's file writes (BACKEND 5.2d; contracts changed, version chosen at merge). Before `files.write` / `files.edit` overwrites a text file on the agent's sandbox or the
+ * owner's Mac, the old bytes are kept (last 20 per path, 14 days). Shell commands are not covered. Owner only.
+ */
+export interface FilesApi {
+  /** `GET /v1/files/history?path=&agentId=&on=`: the kept versions of one path, newest first. */
+  history(query: FileHistoryQuery): Promise<FileHistory>;
+  /** `POST /v1/files/restore`: put a kept version back. The bytes it replaces are kept too, so a restore can be undone. 404 for a snapshot that is not yours or was pruned; 409 when the computer is not available. */
+  restore(input: RestoreFileInput): Promise<RestoredFile>;
+}
+
+/**
+ * The outbox (BACKEND 5.7.11; contracts changed, version chosen at merge): every delivery to a platform chat or a phone is a durable row that is retried
+ * and never silently lost. Owner only.
+ */
+export interface OutboxApi {
+  /** `GET /v1/outbox?status=pending|dropped&conversationId=`: the owner's deliveries, newest first, keyset paged; `frozen` says whether sending is switched off. */
+  list(query?: OutboxQuery): Promise<OutboxList>;
+  /** `POST /v1/outbox/:id/retry`: a dropped delivery goes back to pending once (404 for another owner's or a delivery that is not dropped). */
+  retry(id: Id): Promise<{ id: Id }>;
+  /** `POST /v1/outbox/freeze`: stop (or resume) all sending for this owner; app chat is unaffected, pending rows wait and go out in order on resume. */
+  freeze(input: OutboxFreezeInput): Promise<OutboxFreeze>;
+}
+
 export interface SpacesApi {
   /** `GET /v1/spaces`: published apps, newest first, each with its live status. */
   list(): Promise<{ items: Space[] }>;
@@ -685,6 +723,8 @@ export interface ApiClient {
   library: LibraryApi;
   artifacts: ArtifactsApi;
   documents: DocumentsApi;
+  files: FilesApi;
+  outbox: OutboxApi;
   spaces: SpacesApi;
   usage: UsageApi;
   settings: SettingsApi;

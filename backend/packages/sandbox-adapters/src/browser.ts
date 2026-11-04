@@ -18,6 +18,7 @@ import {
 } from 'juno-agent/computer';
 import { BrowserDownError, failed } from './errors.js';
 import { screenPorts } from './ports.js';
+import { inAgentNetns } from './isolation-user.js';
 import { rootDir, shq } from './screen-boot.js';
 import { modelToScreenShell } from './model-screen.js';
 
@@ -30,9 +31,10 @@ export const BROWSER_HELPER = '/usr/local/bin/agent-browser';
 /**
  * The helper runs as ROOT (BACKEND 8.7), never as the agent's user: it holds the sandbox's secure-input private key
  * and the values of secure fills, and it is the only process allowed to reach the browser's debugging port
- * (`isolation.ts`). Its ref/watch state therefore lives in a root-only tmpfs directory, one file set per CDP port.
+ * (`netns.ts`: the port is on the loopback of the agent's own network namespace, which the helper enters). Its ref/watch state therefore
+ * lives in a root-only tmpfs directory, one file set per CDP port.
  */
-const HELPER = `AGENT_BROWSER_STATE=/run/juno/browser ${BROWSER_HELPER}`;
+const helperOf = (agentId: string) => `${inAgentNetns(agentId)} env AGENT_BROWSER_STATE=/run/juno/browser ${BROWSER_HELPER}`;
 /** Upper bound for one helper call; the helper itself must finish well inside this. */
 export const BROWSER_TIMEOUT_MS = 15_000;
 
@@ -40,8 +42,9 @@ export const BROWSER_TIMEOUT_MS = 15_000;
  * The exact program for one helper call: the display's CDP port plus the single-quoted request. A `fill_secret`
  * request carries only ciphertext sealed to the sandbox's own key, so nothing secret is in the program text.
  */
-export function browserCommand(displayNo: number, input: BrowserInput): string {
+export function browserCommand(agentId: string, displayNo: number, input: BrowserInput): string {
   const port = screenPorts(displayNo).cdp;
+  const HELPER = helperOf(agentId);
   if (input.action === 'point' && input.x !== undefined && input.y !== undefined) {
     // Model coordinates (the screenshot's pixels) become framebuffer pixels in the sandbox, with the same
     // live-display scale as computer.click (model-screen.ts), so the check looks where the click lands. The helper

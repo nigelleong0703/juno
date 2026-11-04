@@ -6,7 +6,7 @@ import { meaningfulRole } from '../../brain/social-format.js';
 import { emitItemAdded } from '../../conversation-activity.js';
 import { harnessText } from '../../../modules/harness/loader.js';
 import { jsonObjectIn } from '../../../modules/memory/jobs/model-json.js';
-import { putRunPreservingChild } from './run-reservation.js';
+import { putRunPreservingSubagent } from './run-reservation.js';
 import { runUpdatedEvent } from './agui-events.js';
 import type { RunInput, RunServices } from './run-types.js';
 
@@ -21,10 +21,11 @@ const roleReplySchema = z.object({
 });
 
 /**
- * Start the auxiliary calls for one run without awaiting them: the run never waits on, or fails
- * because of, a model call. Call it from a journaled step so a Restate replay does not repeat it.
+ * Start the once-per-agent role suggestion without awaiting it: the run never waits on, or fails
+ * because of, a model call. Call it from the journaled step that finishes a run (after its reply), so a replay does not repeat it;
+ * the card is only written while no run of that chat is working (an unfinished one retries at its own end).
  */
-export function startRunAuxiliaries(services: RunServices, input: RunInput, runId: string): void {
+export function startRoleSuggestion(services: RunServices, input: RunInput): void {
   const brain = services.brain;
   const ask = brain.quickText?.bind(brain);
   if (ask === undefined) return;
@@ -40,7 +41,7 @@ export async function nameRunByAgent(store: Store, runId: string, title: string)
   await store.tx(async (tx) => {
     const run = await tx.get('runs', runId);
     if (run === null || run.parentRunId !== undefined || run.titleGenerated === true) return;
-    const saved = await putRunPreservingChild(tx, { ...run, title: title.slice(0, 120), titleGenerated: true }, false);
+    const saved = await putRunPreservingSubagent(tx, { ...run, title: title.slice(0, 120), titleGenerated: true }, false);
     await tx.emit(runUpdatedEvent(saved));
     await emitAgentStatus(tx, saved.agentId);
   });
@@ -94,6 +95,11 @@ async function suggestRole(
     if (tx.getForUpdate === undefined) throw new Error('role suggestion needs a row lock');
     const current = await tx.getForUpdate('agents', input.agentId);
     if (current === null || !roleEligible(current)) return;
+    // The model call takes seconds: a message that arrived meanwhile has a run working for the person, and the card waits for that run's end.
+    for (const status of ['running', 'queued'] as const) {
+      const active = await tx.list('runs', { where: { agentId: input.agentId, conversationId: input.conversationId, status }, limit: 1 });
+      if (active.items.length > 0) return;
+    }
     const now = new Date().toISOString();
     const stored = await tx.put('agents', { ...current, roleSuggestion: { ...suggestion, createdAt: now }, updatedAt: now });
     await tx.emit({ type: 'agent.updated', agent: await withLiveStatus(tx, stored) });
@@ -166,6 +172,6 @@ async function summarizeSteps(store: Store, quickText: (prompt: string, agentId?
     const current = await tx.get('runs', runId);
     const updated = current === null ? undefined : applyStepSummaries(current, text);
     if (updated === undefined) return;
-    await tx.emit(runUpdatedEvent(await putRunPreservingChild(tx, updated, false)));
+    await tx.emit(runUpdatedEvent(await putRunPreservingSubagent(tx, updated, false)));
   });
 }

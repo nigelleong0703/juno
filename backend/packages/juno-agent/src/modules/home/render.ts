@@ -4,7 +4,6 @@
  */
 import { z } from 'zod';
 import type { AgentHomeRow } from '../../contracts/storage.js';
-import type { PlatformSkill } from '../../ports/computer/index.js';
 import { ALIGNMENT_FILE, AGENT_USER_FILES, USER_FILE, agentFilePath } from './paths.js';
 
 /** What `buildContext` reads from the home: trimmed texts, journaled with the context so a step can reuse them. */
@@ -20,19 +19,16 @@ export interface HomeView {
   alignment: string;
   /** Today's daily log of this agent (home-relative), created for it at the sync; '' when the computer is not reachable. */
   dailyLog: string;
-  /** The skills the image carries (`/opt/juno/skills`), read at the sync; empty when the computer was not reached. */
-  platformSkills: PlatformSkill[];
   /** Highest transcript seq when this was built; later file-changing tool calls make it stale. */
   seq: number;
 }
 
 export const homeViewSchema = z.object({
   persona: z.string(), principles: z.string(), instructions: z.string(), toolNotes: z.string(), reachOut: z.string(),
-  aboutUser: z.string(), alignment: z.string(), dailyLog: z.string().default(''),
-  platformSkills: z.array(z.object({ name: z.string(), description: z.string(), path: z.string() })).default([]), seq: z.number(),
+  aboutUser: z.string(), alignment: z.string(), dailyLog: z.string().default(''), seq: z.number(),
 });
 
-export const EMPTY_HOME_VIEW: HomeView = { persona: '', principles: '', instructions: '', toolNotes: '', reachOut: '', aboutUser: '', alignment: '', dailyLog: '', platformSkills: [], seq: -1 };
+export const EMPTY_HOME_VIEW: HomeView = { persona: '', principles: '', instructions: '', toolNotes: '', reachOut: '', aboutUser: '', alignment: '', dailyLog: '', seq: -1 };
 
 const REACH_OUT_HEADING = /^##[ \t]+When to reach out[ \t]*$/im;
 
@@ -71,7 +67,7 @@ export function alignmentFor(text: string, agentId: string): string {
 }
 
 /** The view for one agent from its mirror rows. The memory items are read from the database, not from the files (memory/section.ts). */
-export function renderHomeView(rows: ReadonlyMap<string, AgentHomeRow>, agentId: string, seq: number, dailyLog = '', platformSkills: PlatformSkill[] = []): HomeView {
+export function renderHomeView(rows: ReadonlyMap<string, AgentHomeRow>, agentId: string, seq: number, dailyLog = ''): HomeView {
   const text = (path: string): string => rows.get(path)?.content.trim() ?? '';
   const [identity, soul, agents, tools] = AGENT_USER_FILES.map((file) => text(agentFilePath(agentId, file)));
   const { instructions, reachOut } = splitAgentsFile(agents ?? '');
@@ -84,7 +80,6 @@ export function renderHomeView(rows: ReadonlyMap<string, AgentHomeRow>, agentId:
     aboutUser: text(USER_FILE),
     alignment: alignmentFor(text(ALIGNMENT_FILE), agentId),
     dailyLog,
-    platformSkills,
     seq,
   };
 }

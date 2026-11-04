@@ -75,15 +75,16 @@ describe('run computer section', () => {
     expect(systemText(ctx)).toContain('no sandbox for this run');
   });
 
-  it('reports an unavailable computer with its reason and keeps building context', async () => {
-    const ctx = await buildContext(fakeStore(), {
-      ...base,
-      environment: async () => {
-        throw new Error('no computer is bound for this owner yet');
-      },
-    });
-    expect(systemText(ctx)).toContain('Sandbox unavailable');
-    expect(systemText(ctx)).toContain('no computer is bound for this owner yet');
+  it('shows a paused computer, or a failed passive read, as simply starting on the first call (the model never learns about pausing)', async () => {
+    for (const error of [
+      Object.assign(new Error('computer abc is paused; reconnect to resume it'), { code: 'computer_asleep' }),
+      new Error('could not read the computer environment: boom'),
+    ]) {
+      const ctx = await buildContext(fakeStore(), { ...base, environment: async () => { throw error; } });
+      expect(systemText(ctx)).toContain(harnessText('computer.sandbox.not_started'));
+      expect(systemText(ctx)).not.toContain('Sandbox unavailable');
+      expect(systemText(ctx)).not.toMatch(/paused|reconnect|resume/i);
+    }
   });
 
   it('says the screen starts on the first call (not unavailable) when the agent has no screen yet', async () => {

@@ -6,7 +6,7 @@
  */
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import type { RestatePromise } from '@agent-desktop/durable';
+import type { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { BackgroundCallStart, BackgroundTask, Doc, Store, Tool, ToolRegistry, ToolResult, WakeEvent } from '../../../contracts/index.js';
 import { abortBackgroundCall, endBackgroundTask } from '../../../modules/tasks/background-registry.js';
@@ -21,8 +21,8 @@ const wake: WakeEvent = {
 const input: RunInput = { agentId: 'a', conversationId: 'c', sessionKey: 'a:c', wakeEvents: [wake] };
 const step: Doc<'steps'> = { id: 'stp_1', runId: 'run-1', index: 0, kind: 'mcp', verb: 'Executed', target: 'mcp.github.search', status: 'running', startedAt: AT, durationMs: 0, input: { summary: '{}' } };
 
-const lift = <T>(value: T): RestatePromise<T> => Promise.resolve(value) as unknown as RestatePromise<T>;
-const runInline = <T>(_name: string, fn: () => Promise<T>): RestatePromise<T> => fn() as unknown as RestatePromise<T>;
+const lift = <T>(value: T): DurablePromise<T> => Promise.resolve(value) as unknown as DurablePromise<T>;
+const runInline = <T>(_name: string, fn: () => Promise<T>): DurablePromise<T> => fn() as unknown as DurablePromise<T>;
 
 function ownedStore(): Store {
   const raw = createMemoryStore();
@@ -110,16 +110,18 @@ describe('background MCP calls', () => {
     const { tool, calls } = countingTool({ content: [{ type: 'text', text: 'should not run' }] });
     const h = objectCtx('mcp-stp_1');
     // Replay semantics: the fence step is journaled, so its body does not run again (claimed stays false).
-    const replayRun = <T>(name: string, fn: () => Promise<T>): RestatePromise<T> => {
+    const replayRun = <T>(name: string, fn: () => Promise<T>): DurablePromise<T> => {
       if (name.endsWith(':fence')) { return lift(undefined as unknown as T); }
-      return fn() as unknown as RestatePromise<T>;
+      return fn() as unknown as DurablePromise<T>;
     };
     await runBackgroundCall({ ...h.ctx, run: replayRun }, { store, blobs: createMemoryBlobStore(), enqueuer: new NoopEnqueuer(), toolRegistry: registryWith(tool) }, callInput('mcp-stp_1'));
     expect(await store.get('steps', step.id)).toMatchObject({ execution: { fencedAt: AT, intent: { tool: 'mcp.github.search' } } });
     expect(calls).toEqual([]);
     expect(h.wakes[0]?.payload).toMatchObject({ status: 'failed' });
-    expect((await store.list('requests')).items).toHaveLength(1);
-    expect((await store.list('requests')).items[0]).toMatchObject({ interrupted: true, reconciliation: { state: 'pending', stepId: step.id } });
+    // The agent is told through the task's result; the person is not asked anything.
+    expect((await store.list('requests')).items).toHaveLength(0);
+    expect(await store.get('steps', step.id)).toMatchObject({ execution: { notice: { runId: 'run-1' } } });
+    expect(JSON.stringify(h.wakes[0]?.payload)).toContain('may or may not have happened');
   });
 
   it('aborts an in-flight call once it is stopped, and stays silent', async () => {

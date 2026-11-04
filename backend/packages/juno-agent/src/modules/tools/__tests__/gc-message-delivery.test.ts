@@ -103,7 +103,7 @@ describe('gc2 group delivery', () => {
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     const before = (await store.list('conversations', { limit: 50 })).items.length;
     const result = await needTool(registry.get('send_message'), 'send_message').execute(
-      { kind: 'text', text: 'Please verify the result.', targetAgentIds: ['agent-b'] },
+      { kind: 'text', purpose: 'result', text: 'Please verify the result.', targetAgentIds: ['agent-b'] },
       ctxFor(store, enqueuer, 'agent-a', 'room-1'));
     expect(result.isError).not.toBe(true);
     const markdowns = await roomMarkdowns(store, 'room-1');
@@ -121,21 +121,21 @@ describe('gc2 group delivery', () => {
   it('every agent-to-agent wake carries the sender\'s name and role, so the receiver sees "[from agent Ada (Role)]" and not an id', async () => {
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     const ctx = ctxFor(store, enqueuer, 'agent-a', 'room-1');
-    await needTool(registry.get('send_message'), 'send_message').execute({ kind: 'text', text: 'Please verify.', targetAgentIds: ['agent-b'] }, ctx);
+    await needTool(registry.get('send_message'), 'send_message').execute({ kind: 'text', purpose: 'result', text: 'Please verify.', targetAgentIds: ['agent-b'] }, ctx);
     await needTool(registry.get('post_to_room'), 'post_to_room').execute({ roomId: 'room-1', message: 'Look at this', mentions: ['agent-b'] }, ctx);
     await needTool(registry.get('handoff'), 'handoff').execute({ roomId: 'room-1', to: 'agent-b', task: 'Take it from here' }, ctx);
     expect(enqueuer.events).toHaveLength(3);
     for (const event of enqueuer.events) {
       expect(event.origin).toEqual({ type: 'agent', id: 'agent-a' });
       expect(event.payload).toMatchObject({ fromAgentName: 'Ada', fromAgentRole: 'Role' });
-      expect(String(wakeMessage(event).content)).toMatch(/^\[from agent Ada \(Role\)\] /);
+      expect(String(wakeMessage(event).content)).toMatch(/^Ada \(Role\) \[agent in this chat\]: /);
     }
   });
 
   it('send_message dedupes repeated targets into a single wake', async () => {
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     const result = await needTool(registry.get('send_message'), 'send_message').execute(
-      { kind: 'text', text: 'Hello both.', targetAgentIds: ['agent-b', 'agent-b', 'agent-c'] },
+      { kind: 'text', purpose: 'result', text: 'Hello both.', targetAgentIds: ['agent-b', 'agent-b', 'agent-c'] },
       ctxFor(store, enqueuer, 'agent-a', 'room-1'));
     expect(result.isError).not.toBe(true);
     expect(enqueuer.events.length).toBe(2);
@@ -147,7 +147,7 @@ describe('gc2 group delivery', () => {
   it('send_message addressed only to self fails without writing', async () => {
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     const result = await needTool(registry.get('send_message'), 'send_message').execute(
-      { kind: 'text', text: 'Talking to myself.', targetAgentIds: ['agent-a'] },
+      { kind: 'text', purpose: 'result', text: 'Talking to myself.', targetAgentIds: ['agent-a'] },
       ctxFor(store, enqueuer, 'agent-a', 'room-1'));
     expect(result.isError).toBe(true);
     expect(await roomMarkdowns(store, 'room-1')).toEqual([]);
@@ -157,7 +157,7 @@ describe('gc2 group delivery', () => {
   it('send_message denies a target outside the room without writing', async () => {
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     const result = await needTool(registry.get('send_message'), 'send_message').execute(
-      { kind: 'text', text: 'Sneaky join.', targetAgentIds: ['agent-out'] },
+      { kind: 'text', purpose: 'result', text: 'Sneaky join.', targetAgentIds: ['agent-out'] },
       ctxFor(store, enqueuer, 'agent-a', 'room-1'));
     expect(result.isError).toBe(true);
     expect(await roomMarkdowns(store, 'room-1')).toEqual([]);
@@ -167,7 +167,7 @@ describe('gc2 group delivery', () => {
   it('send_message with targets outside a room is refused', async () => {
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     const result = await needTool(registry.get('send_message'), 'send_message').execute(
-      { kind: 'text', text: 'Wrong place.', targetAgentIds: ['agent-b'] },
+      { kind: 'text', purpose: 'result', text: 'Wrong place.', targetAgentIds: ['agent-b'] },
       ctxFor(store, enqueuer, 'agent-a', 'conv-a'));
     expect(result.isError).toBe(true);
     expect(enqueuer.events.length).toBe(0);
@@ -176,7 +176,7 @@ describe('gc2 group delivery', () => {
   it('plain text never wakes from @names in the body', async () => {
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     const result = await needTool(registry.get('send_message'), 'send_message').execute(
-      { kind: 'text', text: '@ghost please help' },
+      { kind: 'text', purpose: 'result', text: '@ghost please help' },
       ctxFor(store, enqueuer, 'agent-a', 'room-1'));
     expect(result.isError).not.toBe(true);
     expect(enqueuer.events.length).toBe(0);
@@ -185,7 +185,7 @@ describe('gc2 group delivery', () => {
   it('stored display names are escaped so markdown cannot be injected', async () => {
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     const result = await needTool(registry.get('send_message'), 'send_message').execute(
-      { kind: 'text', text: 'Heads up.', targetAgentIds: ['agent-c'] },
+      { kind: 'text', purpose: 'result', text: 'Heads up.', targetAgentIds: ['agent-c'] },
       ctxFor(store, enqueuer, 'agent-a', 'room-1'));
     expect(result.isError).not.toBe(true);
     const markdowns = await roomMarkdowns(store, 'room-1');
@@ -203,7 +203,9 @@ describe('gc2 group delivery', () => {
       ctxFor(store, enqueuer, 'agent-a', 'room-1'));
     expect(result.isError).not.toBe(true);
     const markdowns = await roomMarkdowns(store, 'room-1');
-    expect(markdowns.some((m) => m.includes('Please double-check.') && m.includes('@Juno'))).toBe(true);
+    // The mention leads the message (no trailing @Name line) and the call is the agent's whole turn: no final reply follows.
+    expect(markdowns).toContain('@Juno Please double-check.');
+    expect(result.endsTurn).toBe(true);
     expect(enqueuer.events.length).toBe(1);
     expect(enqueuer.events[0]?.conversationId).toBe('room-1');
     expect(enqueuer.events[0]?.sessionKey).toBe('agent-b:room-1');
@@ -270,7 +272,7 @@ describe('gc2 group delivery', () => {
   it('send_message with an explicit room id posts and wakes there, off the current conversation', async () => {
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     const result = await needTool(registry.get('send_message'), 'send_message').execute(
-      { kind: 'text', text: 'Room update.', conversationId: 'room-1', targetAgentIds: ['agent-b'] },
+      { kind: 'text', purpose: 'result', text: 'Room update.', conversationId: 'room-1', targetAgentIds: ['agent-b'] },
       ctxFor(store, enqueuer, 'agent-a', 'conv-a'));
     expect(result.isError).not.toBe(true);
     expect(detailString(result, 'deliveredConversationId')).toBe('room-1');
@@ -287,7 +289,7 @@ describe('gc2 group delivery', () => {
   it('send_message with an explicit room and no targets posts a plain message with no wake', async () => {
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     const result = await needTool(registry.get('send_message'), 'send_message').execute(
-      { kind: 'text', text: 'First message.', conversationId: 'room-1' },
+      { kind: 'text', purpose: 'result', text: 'First message.', conversationId: 'room-1' },
       ctxFor(store, enqueuer, 'agent-a', 'conv-a'));
     expect(result.isError).not.toBe(true);
     expect(await roomMarkdowns(store, 'room-1')).toEqual(['First message.']);
@@ -302,7 +304,7 @@ describe('gc2 group delivery', () => {
     });
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     const result = await needTool(registry.get('send_message'), 'send_message').execute(
-      { kind: 'text', text: 'Hidden join.', conversationId: 'room-out', targetAgentIds: ['agent-b'] },
+      { kind: 'text', purpose: 'result', text: 'Hidden join.', conversationId: 'room-out', targetAgentIds: ['agent-b'] },
       ctxFor(store, enqueuer, 'agent-a', 'conv-a'));
     expect(result.isError).toBe(true);
     expect(await roomMarkdowns(store, 'room-out')).toEqual([]);
@@ -312,7 +314,7 @@ describe('gc2 group delivery', () => {
   it('send_message refuses an explicit conversationId that is not a room (room-only destination)', async () => {
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     const result = await needTool(registry.get('send_message'), 'send_message').execute(
-      { kind: 'text', text: 'Wrong place.', conversationId: 'conv-a' },
+      { kind: 'text', purpose: 'result', text: 'Wrong place.', conversationId: 'conv-a' },
       ctxFor(store, enqueuer, 'agent-a', 'conv-a'));
     expect(result.isError).toBe(true);
     expect(enqueuer.events.length).toBe(0);
@@ -322,7 +324,7 @@ describe('gc2 group delivery', () => {
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     enqueuer.refuseNext = true;
     const result = await needTool(registry.get('send_message'), 'send_message').execute(
-      { kind: 'text', text: 'Please verify.', targetAgentIds: ['agent-b'] },
+      { kind: 'text', purpose: 'result', text: 'Please verify.', targetAgentIds: ['agent-b'] },
       ctxFor(store, enqueuer, 'agent-a', 'room-1'));
     expect(result.isError).toBe(true);
     const markdowns = await roomMarkdowns(store, 'room-1');
@@ -336,9 +338,9 @@ describe('gc2 group delivery', () => {
   it('send_message rejects blank text without writing or marking a delivery', async () => {
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     const send = needTool(registry.get('send_message'), 'send_message');
-    const plain = await send.execute({ kind: 'text', text: '   \n  ' }, ctxFor(store, enqueuer, 'agent-a', 'room-1'));
+    const plain = await send.execute({ kind: 'text', purpose: 'result', text: '   \n  ' }, ctxFor(store, enqueuer, 'agent-a', 'room-1'));
     const targeted = await send.execute(
-      { kind: 'text', text: '  ', targetAgentIds: ['agent-b'] },
+      { kind: 'text', purpose: 'result', text: '  ', targetAgentIds: ['agent-b'] },
       ctxFor(store, enqueuer, 'agent-a', 'room-1'));
     expect(plain.isError).toBe(true);
     expect(targeted.isError).toBe(true);
@@ -352,7 +354,7 @@ describe('gc2 group delivery', () => {
   it('send_message rejects a blank question without creating a request', async () => {
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     const result = await needTool(registry.get('send_message'), 'send_message').execute(
-      { kind: 'question', text: '   ' },
+      { kind: 'question', purpose: 'decision', text: '   ' },
       ctxFor(store, enqueuer, 'agent-a', 'room-1'));
     expect(result.isError).toBe(true);
     expect(result.suspend).toBeUndefined();
@@ -369,11 +371,11 @@ describe('gc2 group delivery', () => {
     const registry = await createToolRegistry({ store, enqueuer, config: {} });
     const send = needTool(registry.get('send_message'), 'send_message');
     const plain = await send.execute(
-      { kind: 'text', text: 'Plain bubble.' },
+      { kind: 'text', purpose: 'result', text: 'Plain bubble.' },
       ctxFor(store, enqueuer, 'agent-a', 'room-1'));
     expect(plain.isError).not.toBe(true);
     const targeted = await send.execute(
-      { kind: 'text', text: 'Room nudge.', targetAgentIds: ['agent-b'], runId: 'spoofed-run' },
+      { kind: 'text', purpose: 'result', text: 'Room nudge.', targetAgentIds: ['agent-b'], runId: 'spoofed-run' },
       ctxFor(store, enqueuer, 'agent-a', 'room-1'));
     expect(targeted.isError).not.toBe(true);
     const stored = (await store.list('items', { limit: 100 })).items;

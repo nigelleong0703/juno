@@ -6,7 +6,7 @@
  *  2. stop       live runs of every conversation; every channel disconnected on its platform and its row removed (no wake can arrive)
  *  3. forget     the durable runner's rows for the owner's sessions, runs and timers
  *  4. blobs      uploaded / produced / screenshot bytes in the blob store, except bytes another account's rows still name
- *  5. agents     each agent with its chat, goals, calendar, feed, routines and home mirror, and `agent.deleted` for every open device
+ *  5. agents     each agent with all its data (chat, runs, goals, calendar, feed, routines, apps, artifacts, spaces, audit, home mirror), and `agent.deleted` for every open device
  *  6. conversations  what is left (groups, system chats) with `conversation.deleted`
  *  7. computer   computerd removes the computers, the durable storage (volumes / JuiceFS objects and metadata), state files, paired Mac
  *  8. rows       every remaining row of the owner in every collection, and the owner's event log (the delete events stay)
@@ -16,14 +16,16 @@
  * run again, a failure is retried with a growing delay for as long as it takes, and a restart finishes whatever the marker still lists
  * (`resume`). Everything runs for one owner id given by the caller; nothing here reads an owner from a request body.
  */
-import type { BlobStore, Collection, Doc, Enqueuer, EventBus, Store } from '@agent-desktop/contracts';
-import { blobKeysUsedByOthers, closeAuthAccount, deleteAuthUser, deleteOwnerEvents, deleteOwnerRows, type DbStore } from '@agent-desktop/db';
+import type { BlobStore, Enqueuer, EventBus, Store } from '@agent-desktop/contracts';
+import { closeAuthAccount, deleteAuthUser, deleteOwnerEvents, deleteOwnerRows, type DbStore } from '@agent-desktop/db';
 import type { DurableDb, Runner } from '@agent-desktop/durable';
 import { createLogger } from '@agent-desktop/log';
 import type { ChannelRegistry } from '../channels/registry.js';
 import type { ComputerdClient } from '../computerd.js';
 import { runWithOwner } from '../owner-scope.js';
+import { collectBlobKeys, deleteUnnamedBlobs } from './blobs.js';
 import { deleteAgentCascade } from '../routes/agents.js';
+import { rowsOf } from '../routes/relationships.js';
 import { deleteConversationCascade, stopLiveRuns } from '../routes/conversation-delete.js';
 import type { AgentdDeps } from '../routes/index.js';
 
@@ -63,29 +65,6 @@ export interface AccountEraserOptions {
   retryDelayMs?: (attempt: number) => number;
 }
 
-/** Every row of one collection of a scoped store, page by page (the store only ever returns its owner's rows). */
-async function* rowsOf<C extends Collection>(store: Store, collection: C): AsyncGenerator<Doc<C>> {
-  let cursor: string | undefined;
-  do {
-    const page = await store.list(collection, { limit: 200, ...(cursor === undefined ? {} : { cursor }) });
-    yield* page.items;
-    cursor = page.nextCursor;
-  } while (cursor !== undefined);
-}
-
-/** Every `blobKey` string anywhere in a stored document (uploads, artifact files, transcript image blocks). */
-export function collectBlobKeys(value: unknown, into: Set<string>, depth = 0): void {
-  if (depth > 12 || typeof value !== 'object' || value === null) return;
-  if (Array.isArray(value)) {
-    for (const item of value) collectBlobKeys(item, into, depth + 1);
-    return;
-  }
-  for (const [key, item] of Object.entries(value)) {
-    if (key === 'blobKey' && typeof item === 'string' && item.startsWith('blobs/')) into.add(item);
-    else collectBlobKeys(item, into, depth + 1);
-  }
-}
-
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms).unref());
 
 export function createAccountEraser(options: AccountEraserOptions): AccountEraser {
@@ -98,6 +77,7 @@ export function createAccountEraser(options: AccountEraserOptions): AccountErase
     if (ownerId.trim() === '' || !store.forOwner) throw new Error('an owner id and an owner-scoped store are required');
     return store.forOwner(ownerId);
   };
+  // No `blobs` / `raw` here on purpose: the blobs step has already removed the bytes, so the agent cascade leaves them alone.
   const depsFor = (ownerId: string): AgentdDeps => ({
     store: scoped(ownerId),
     bus: options.bus,
@@ -163,17 +143,10 @@ export function createAccountEraser(options: AccountEraserOptions): AccountErase
       name: 'blobs',
       async run(ownerId, deps) {
         const keys = new Set<string>();
-        for (const collection of ['library', 'artifactFiles', 'documentDrafts', 'transcripts'] as const) {
+        for (const collection of ['library', 'artifactFiles', 'documentDrafts', 'fileSnapshots', 'transcripts'] as const) {
           for await (const row of rowsOf(deps.store, collection)) collectBlobKeys(row, keys);
         }
-        const sharedWithOthers = await blobKeysUsedByOthers(raw, ownerId, [...keys]);
-        let deleted = 0;
-        for (const key of keys) {
-          if (sharedWithOthers.has(key)) continue;
-          await options.blobs.delete(key);
-          deleted += 1;
-        }
-        return { found: keys.size, deleted, keptBecauseShared: sharedWithOthers.size };
+        return deleteUnnamedBlobs(raw, options.blobs, keys, ownerId);
       },
     },
     {

@@ -20,7 +20,8 @@ import { checkHop, defaultResolve, type ResolvedAddress } from './safeFetch.js';
 export const MCP_ALLOW_PRIVATE_HOSTS = 'MCP_ALLOW_PRIVATE_HOSTS';
 const REDIRECT_STATUS: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
 const NULL_BODY_STATUS: ReadonlySet<number> = new Set([204, 205, 304]);
-const CREDENTIAL_HEADERS = ['authorization', 'cookie', 'proxy-authorization'] as const;
+/** `x-upstream-authorization` is the caller's Google/Microsoft token on a hosted connector request (modules/mcp/platform-keys.ts); like `authorization` it never follows a cross-origin redirect. */
+const CREDENTIAL_HEADERS = ['authorization', 'x-upstream-authorization', 'cookie', 'proxy-authorization'] as const;
 const DEFAULT_MAX_REDIRECTS = 5;
 
 export function privateHostsAllowed(env: Record<string, string | undefined> = process.env): boolean {
@@ -29,24 +30,68 @@ export function privateHostsAllowed(env: Record<string, string | undefined> = pr
 
 /** Where the gateway serves the MCP servers it hosts (api modules/google-mcp.ts). */
 export const HOSTED_MCP_PATH = '/mcp/google/';
-/** Where it serves the Singapore data servers (api modules/sg-mcp.ts). */
-export const SG_MCP_PATH = '/mcp/sg/';
-/** Hevy (api modules/hevy-mcp.ts): hosted here too, under its own path. */
-const HEVY_MCP_PATH = '/mcp/hevy';
 
-/** A URL of an MCP server our own gateway hosts, or its resource metadata: exactly its public origin and the hosted path. */
-export function isOwnHostedMcp(url: URL, env: Record<string, string | undefined> = process.env): boolean {
+/** Exactly our own public origin (BETTER_AUTH_URL). */
+function isOwnOrigin(url: URL, env: Record<string, string | undefined>): boolean {
   const own = env['BETTER_AUTH_URL'];
   if (own === undefined || own === '') return false;
   try {
-    return url.origin === new URL(own).origin && (url.pathname === HEVY_MCP_PATH || [HOSTED_MCP_PATH, SG_MCP_PATH].some((path) => url.pathname.startsWith(path) || url.pathname.startsWith('/.well-known/oauth-protected-resource' + path)));
+    return url.origin === new URL(own).origin;
   } catch {
     return false;
   }
 }
 
-/** Refused before any request: a non-http(s) URL, or a private host by name (no DNS). Used at creation time. */
+function isHostedPath(path: string): boolean {
+  return path.startsWith(HOSTED_MCP_PATH);
+}
+
+/**
+ * The stored form of an MCP endpoint our own gateway hosts (BACKEND 10.18.5): the path alone, never an origin, so a changed public
+ * origin (BETTER_AUTH_URL) cannot orphan it. This is the one test that decides where the hosted credential (HOSTED_MCP_TOKEN) is sent:
+ * a custom server's endpoint is always an absolute http(s) URL and can never have this form.
+ */
+export function isStoredHostedEndpoint(endpoint: string): boolean {
+  return endpoint.startsWith('/') && !endpoint.startsWith('//') && isHostedPath(endpoint);
+}
+
+/** The stored form of a URL that points at a hosted path on any origin (an install, a migration); undefined for every other URL. */
+export function hostedPathOfUrl(raw: string): string | undefined {
+  try {
+    const { pathname } = new URL(raw);
+    return isHostedPath(pathname) ? pathname : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The URL a stored hosted endpoint is called at: the current public origin plus its path. Absent without a public origin. */
+export function hostedEndpointUrl(endpoint: string, publicOrigin: string | undefined): string | undefined {
+  if (publicOrigin === undefined || publicOrigin === '') return undefined;
+  return publicOrigin.replace(/\/+$/, '') + endpoint;
+}
+
+/** A stored endpoint or OAuth `resource` as the URL it is used at: a hosted path gets the current public origin, any other value is already a URL. */
+export function storedEndpointUrl(stored: string, publicOrigin: string | undefined): string | undefined {
+  return isStoredHostedEndpoint(stored) ? hostedEndpointUrl(stored, publicOrigin) : stored;
+}
+
+/** A URL of an MCP server our own gateway hosts, or its resource metadata: exactly its public origin and the hosted path. */
+export function isOwnHostedMcp(url: URL, env: Record<string, string | undefined> = process.env): boolean {
+  return isOwnOrigin(url, env) && (isHostedPath(url.pathname) || url.pathname.startsWith('/.well-known/oauth-protected-resource' + HOSTED_MCP_PATH));
+}
+
+/**
+ * Refused before any request: a non-http(s) URL, a private host by name (no DNS), or a hosted connector path on any origin (those are
+ * internal and only their catalog entries use them; a custom server pointing there is refused, like any other URL this refuses).
+ * Used at creation time and when a custom server is probed.
+ */
 export function mcpUrlRefused(raw: string, env: Record<string, string | undefined> = process.env): boolean {
+  try {
+    if (isHostedPath(new URL(raw).pathname)) return true;
+  } catch {
+    return true;
+  }
   if (!privateHostsAllowed(env)) return targetsPrivateNetwork(raw);
   try {
     const url = new URL(raw);
@@ -86,10 +131,18 @@ export interface GuardedFetchDeps {
   request?: (hop: PinnedHop, init: PinnedInit) => Promise<RawStreamResponse>;
   allowPrivate?: () => boolean;
   maxRedirects?: number;
+  /** Keep sockets between requests (the model client): the address was vetted when the request was made, and every request is vetted again. */
+  agents?: PinnedAgents;
 }
 
-/** The real transport: node http/https, no agent pooling, lookup pinned to the vetted address. */
-function pinnedRequest(hop: PinnedHop, init: PinnedInit): Promise<RawStreamResponse> {
+/** Connection pools for a transport that keeps its sockets between requests. */
+export interface PinnedAgents {
+  http: http.Agent;
+  https: https.Agent;
+}
+
+/** The real transport: node http/https, lookup pinned to the vetted address; no pooling unless `agents` are given (every request then opens its own socket). */
+function pinnedRequest(hop: PinnedHop, init: PinnedInit, agents?: PinnedAgents): Promise<RawStreamResponse> {
   return new Promise<RawStreamResponse>((resolvePromise, reject) => {
     const lib = hop.url.protocol === 'https:' ? https : http;
     const address = hop.address;
@@ -97,7 +150,7 @@ function pinnedRequest(hop: PinnedHop, init: PinnedInit): Promise<RawStreamRespo
     const options: https.RequestOptions = {
       method: init.method,
       headers: init.headers,
-      agent: false,
+      agent: agents === undefined ? false : hop.url.protocol === 'https:' ? agents.https : agents.http,
       ...(init.signal === undefined ? {} : { signal: init.signal }),
     };
     if (address !== undefined) {
@@ -136,7 +189,7 @@ function toResponse(raw: RawStreamResponse): Response {
 
 export function createGuardedFetch(deps: GuardedFetchDeps = {}): typeof fetch {
   const resolve = deps.resolve ?? defaultResolve;
-  const send = deps.request ?? pinnedRequest;
+  const send = deps.request ?? ((hop: PinnedHop, init: PinnedInit) => pinnedRequest(hop, init, deps.agents));
   const allowPrivate = deps.allowPrivate ?? (() => privateHostsAllowed());
   const maxRedirects = deps.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
 
@@ -182,5 +235,12 @@ export const guardedFetch: typeof fetch = createGuardedFetch();
 
 /** The client for a model provider's endpoint: guarded like MCP. */
 export function createModelFetch(): typeof fetch {
-  return createGuardedFetch();
+  return createGuardedFetch({ agents: modelAgents });
 }
+
+/** Shared by every model client: a voice turn seconds after the last one finds the TLS connection still open (a handshake is ~0.4 s). */
+const MODEL_SOCKET_IDLE_MS = 30_000;
+const modelAgents: PinnedAgents = {
+  http: new http.Agent({ keepAlive: true, maxFreeSockets: 8, timeout: MODEL_SOCKET_IDLE_MS }),
+  https: new https.Agent({ keepAlive: true, maxFreeSockets: 8, timeout: MODEL_SOCKET_IDLE_MS }),
+};

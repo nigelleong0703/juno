@@ -2,11 +2,11 @@ import { createHash } from 'node:crypto';
 import {
   SendOpts,
   type AnyDefinition,
-  type DurablePromise,
   type HandlersOf,
   type ObjectClient,
   type ObjectSendClient,
   type WorkflowContext,
+  type WorkflowPromise,
 } from './api.js';
 import { JournalMismatchError, TerminalError } from './errors.js';
 import { LeaseLostError } from './lease.js';
@@ -248,7 +248,7 @@ export class InvocationContext implements WorkflowContext {
     this.effect(() => this.init.host.resolveWait(id, 'awakeable', value));
   }
 
-  promise<T = void>(name: string): DurablePromise<T> {
+  promise<T = void>(name: string): WorkflowPromise<T> {
     const id = `promise:${this.init.service}:${this.init.key}:${name}`;
     const kind = name === 'cancel' ? 'cancel' : 'promise';
     const host = this.init.host;

@@ -15,7 +15,7 @@ const budgetLimitsSchema = z.object({ steps: z.number().min(0).optional(), token
 const budgetSnapshotSchema = z.object({ limits: budgetLimitsSchema, parentSteps: z.number(), parentTokens: z.number(), parentCostUsd: z.number(), parentActiveSeconds: z.number(), parentMeasured: z.boolean().optional(), parentCostKnown: z.boolean().optional(), explicitCost: z.boolean().optional(), inheritedAt: z.string() });
 
 /** Canonical reservation fields, parsed from the STORED row, never the raw wake payload. */
-const reservedChildSchema = z.object({
+const reservedSubagentSchema = z.object({
   parentRunId: z.string().min(1).optional(),
   rootRunId: z.string().min(1).optional(),
   depth: z.number().int().min(0).optional(),
@@ -44,17 +44,17 @@ const reservedChildSchema = z.object({
 });
 
 /** Markers meaning the row was reserved; any present requires a valid parent link. */
-const CHILD_MARKERS = ['parentRunId', 'childSessionKey', 'planId', 'dispatch', 'dispatchError', 'budgetSnapshot', 'childPrompt'];
+const SUBAGENT_MARKERS = ['parentRunId', 'childSessionKey', 'planId', 'dispatch', 'dispatchError', 'budgetSnapshot', 'childPrompt'];
 
 /** True when the stored row claims a reservation, even when its link is invalid. */
 function claimsReservation(stored: unknown): boolean {
   if (typeof stored !== 'object' || stored === null) return false;
-  return CHILD_MARKERS.some((marker) => Reflect.get(stored, marker) !== undefined);
+  return SUBAGENT_MARKERS.some((marker) => Reflect.get(stored, marker) !== undefined);
 }
 
 /** Overlay reservation fields plus canonical frozen state; an invalid claimed link refuses loudly. */
-function withReservedChild(created: Run, stored: unknown, strict: boolean): Run {
-  const parsed = reservedChildSchema.safeParse(stored);
+function withReservedSubagent(created: Run, stored: unknown, strict: boolean): Run {
+  const parsed = reservedSubagentSchema.safeParse(stored);
   const child = parsed.success ? parsed.data : undefined;
   const snapshot = snapshotOfRun(stored);
   const frozen = {
@@ -91,9 +91,9 @@ function withReservedChild(created: Run, stored: unknown, strict: boolean): Run 
   return { ...created, ...frozen };
 }
 
-export async function putRunPreservingChild(store: Store, row: Run, strict: boolean): Promise<Run> {
+export async function putRunPreservingSubagent(store: Store, row: Run, strict: boolean): Promise<Run> {
   const stored = await store.get('runs', row.id);
   // A run writer holding a stale copy must not undo the model-written title (BACKEND §10.11).
   const kept = stored?.titleGenerated === true ? { ...row, title: stored.title, titleGenerated: true } : row;
-  return store.put('runs', withReservedChild(kept, stored, strict));
+  return store.put('runs', withReservedSubagent(kept, stored, strict));
 }

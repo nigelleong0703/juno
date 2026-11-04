@@ -13,7 +13,7 @@ export { createMemoryBlobStore } from './memory-store.js';
 export { UNKNOWN_OWNER, ownerCollisionMessage, resolveEventOwner, docOwnerId } from './owner-events.js';
 export { createPostgresStore };
 export { createBlobStore, createLocalBlobStore, createS3BlobStore, deleteS3Prefix, type S3BlobSettings } from './blobs.js';
-export { blobKeysUsedByOthers, closeAuthAccount, deleteAuthUser, deleteOwnerEvents, deleteOwnerRows, type AuthClosed } from './owner-erase.js';
+export { blobKeysStillNamed,closeAuthAccount, deleteAuthUser, deleteOwnerEvents, deleteOwnerRows, type AuthClosed } from './owner-erase.js';
 export { acquireInstanceLock, type InstanceLock } from './instance-lock.js';
 export {
   assertConnectionBudget, plannedConnections, ConnectionBudgetError,

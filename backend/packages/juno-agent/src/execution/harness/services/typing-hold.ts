@@ -17,11 +17,11 @@ export async function holdWhileTyping(
   input: RunInput,
   stepIndex: number,
   cancellation: RunCancellation,
-  isChild: boolean,
+  isSubagent: boolean,
 ): Promise<typeof CANCELLED | 'go'> {
   const read = ctx.typingState;
   const sleep = ctx.sleep;
-  if (read === undefined || sleep === undefined || isChild) return 'go';
+  if (read === undefined || sleep === undefined || isSubagent) return 'go';
   const kind = await ctx.run(`hold-kind:${stepIndex}`, async (): Promise<ConversationKind | undefined> =>
     (await services.store.get('conversations', input.conversationId))?.kind);
   if (!isPrivateConversation(kind)) return 'go';

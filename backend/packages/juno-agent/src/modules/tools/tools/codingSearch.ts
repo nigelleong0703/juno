@@ -65,7 +65,7 @@ export function createFileSearchTool(opts: FileToolOptions): Tool {
         const given = parsed.path ?? '.';
         const path = given.startsWith('~') ? resolveEnvPath(env, given) : given;
         const root = resolveEnvPath(env, path);
-        const refused = refuseServerReports(root) ?? (parsed.on === 'mac' ? undefined : await refuseHomeRead(opts, ctx, root));
+        const refused = refuseServerReports(root) ?? (parsed.on === 'mac' ? undefined : await refuseHomeRead(opts, ctx, root, { search: true }));
         if (refused !== undefined) return refused;
         const command = buildSearchCommand(mode, parsed.query, path, parsed.glob, limit);
         const output = await client.runShell(ctx.agentId, { command, timeoutMs: SEARCH_TIMEOUT_MS, cwd: env.workingDirectory }, ctx.signal, parsed.on);

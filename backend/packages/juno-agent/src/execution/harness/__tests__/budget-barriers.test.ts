@@ -9,7 +9,7 @@
  */
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import { LIMITS, type AssistantTurn, type Brain, type BrainContext, type Doc, type Store, type Tool, type ToolRegistry, type ToolResult, type WakeEvent } from '../../../contracts/index.js';
 import { appSettingsSchema, type Run } from '@agent-desktop/public-contracts';
@@ -49,13 +49,13 @@ function directContext(): RunContext {
   let seq = 0;
   return {
     rand: { uuidv4: () => 'id-' + String(seq++) },
-    run: <T>(name: string, action: () => Promise<T>): RestatePromise<T> => {
+    run: <T>(name: string, action: () => Promise<T>): DurablePromise<T> => {
       if (used.has(name)) throw new Error('duplicate durable step: ' + name);
       used.add(name);
-      return RestatePromise.resolve(action());
+      return DurablePromise.resolve(action());
     },
-    awakeable: <T>() => ({ id: 'awake-' + String(seq++), promise: RestatePromise.resolve(new Promise<T>(() => {})) }),
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    awakeable: <T>() => ({ id: 'awake-' + String(seq++), promise: DurablePromise.resolve(new Promise<T>(() => {})) }),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
 }
 
@@ -310,7 +310,7 @@ describe('PH11 fence cached duration', () => {
     };
     const fence: ToolRunContext = {
       rand: { uuidv4: () => 'fence-1' },
-      run: <T>(name: string, inner: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(inner()),
+      run: <T>(name: string, inner: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(inner()),
     };
     const cached = await runFencedTool(fence, store, plain, 'effect', action);
     expect(executions).toBe(0);
@@ -358,8 +358,8 @@ describe('PH11 real spawn freeze', () => {
       budgetSnapshot: { limits: { steps: 3 }, parentSteps: 2, parentTokens: 0, parentCostUsd: 0, parentActiveSeconds: 0, inheritedAt: AT },
     };
     await raw.put('runs', child, { conversationId: CONV });
-    const childBudget = await loadRunBudget(directContext(), budgetServices(store), OWNER, { runId: 'run-child-1', parentRunId: 'run-1' });
-    expect(childBudget.limits.steps).toBe(3);
+    const subagentBudget = await loadRunBudget(directContext(), budgetServices(store), OWNER, { runId: 'run-child-1', parentRunId: 'run-1' });
+    expect(subagentBudget.limits.steps).toBe(3);
   });
 
   it('fails closed when the parent snapshot is malformed instead of rereading settings', async () => {
@@ -429,86 +429,5 @@ describe('PH11 real spawn freeze', () => {
     const budget = await loadRunBudget(directContext(), budgetServices(store), OWNER, { runId: 'run-child-legacy', parentRunId: 'run-1' });
     expect(budget.limits.costUsd).toBe(LIMITS.run.maxCostUsd);
     expect(budget.check().ok).toBe(true);
-  });
-});
-
-describe('PH11 child wait through the core driver', () => {
-  function childRunDoc(id: string, status: Run['status']): Run & { parentRunId: string } {
-    return { ...runDoc(), id, parentRunId: 'run-1', status };
-  }
-
-  /** The exact result shape the production child_wait tool returns (suspend + private details). */
-  function childWaitTool(runIds: string[]): Tool {
-    const until = new Date(Date.now() + 600_000).toISOString();
-    const suspend: NonNullable<ToolResult['suspend']> = { reason: 'child', until };
-    const details = { child: true, waiting: runIds, parentRunId: 'run-1', runIds, timeoutMs: 5000, until };
-    return {
-      name: 'child_wait', description: 'child wait', parameters: { type: 'object' }, replay: 'safe', sideEffect: false,
-      async execute() {
-        return { content: [{ type: 'text', text: 'child wait started' }], suspend, details };
-      },
-    };
-  }
-
-  function singleToolTurn(name: string): AssistantTurn {
-    return { text: '', usage: USAGE, stopReason: 'tool_calls', toolCalls: [{ id: 'c1', name, arguments: {} }] };
-  }
-
-  /** A context with a durable clock/sleep and a scripted steering inbox for the same-run wait. */
-  function waitContext(drain: () => WakeEvent[]): RunContext {
-    let clock = 0;
-    let seq = 0;
-    return {
-      rand: { uuidv4: () => 'id-' + String(seq++) },
-      date: { now: () => { clock += 1000; return RestatePromise.resolve(clock); } },
-      sleep: () => RestatePromise.resolve(undefined),
-      run: <T>(name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
-      awakeable: <T>() => ({ id: 'awake-' + String(seq++), promise: RestatePromise.resolve(new Promise<T>(() => {})) }),
-      drainInbox: () => RestatePromise.resolve(drain()),
-    };
-  }
-
-  async function transcriptJson(raw: ReturnType<typeof createMemoryStore>): Promise<string> {
-    const entries = (await raw.list('transcripts', { limit: 300 })).items.slice().sort((a, b) => a.seq - b.seq);
-    return JSON.stringify(entries.map((entry) => entry.message));
-  }
-
-  it('waits only the selected terminal child while another child stays pending', async () => {
-    const { store, raw } = await world();
-    await raw.put('runs', childRunDoc('run-child-a', 'completed'), { conversationId: CONV });
-    await raw.put('runs', childRunDoc('run-child-b', 'running'), { conversationId: CONV });
-    const brain = new ScriptedTurns([singleToolTurn('child_wait'), finalTurn()]);
-    const outcome = await runLoop(waitContext(() => []), servicesFor(store, brain, [childWaitTool(['run-child-a'])]), input, 'run-1', { sessionKey: input.sessionKey, agentId: AGENT }, NEVER_CANCELLED);
-    // CT-boundary: the finished child was observed, but the run may not end while run-child-b
-    // stays live — repeated no-progress finals stall the run truthfully to a blocked terminal.
-    expect(outcome).toBe('blocked');
-    expect(brain.calls).toBe(5);
-    const json = await transcriptJson(raw);
-    expect(json).toContain('run-child-a completed');
-    // The pending sibling was never waited on and the hold names it truthfully.
-    expect((await raw.get('runs', 'run-child-b'))?.status).toBe('running');
-    expect((await raw.get('runs', 'run-1'))?.error).toContain('run-child-b');
-  });
-
-  it('resumes a child wait steered by same-run input and observes the correction', async () => {
-    const { store, raw } = await world();
-    await raw.put('runs', childRunDoc('run-child-b', 'running'), { conversationId: CONV });
-    const steer = { ...wake(), id: 'steer-1', payload: { text: 'switch direction', addressed: 'direct' } };
-    let drains = 0;
-    const brain = new ScriptedTurns([singleToolTurn('child_wait'), { text: 'reply after steer', toolCalls: [], usage: USAGE, stopReason: 'stop' }]);
-    const outcome = await runLoop(
-      waitContext(() => { drains += 1; return drains === 2 ? [steer] : []; }),
-      servicesFor(store, brain, [childWaitTool(['run-child-b'])]), input, 'run-1', { sessionKey: input.sessionKey, agentId: AGENT }, NEVER_CANCELLED,
-    );
-    // CT-boundary: the steer is observed and the fresh turn is kept internally, but the live
-    // child run-child-b holds the run open — repeated finals stall to the truthful block.
-    expect(outcome).toBe('blocked');
-    // Actual turn count: one wait tool step, one steered (unpublished) final, then three finals
-    // whose settle counter reaches the stall bound (0 -> 1 -> 2 -> 3 = blocked).
-    expect(brain.calls).toBe(5);
-    const json = await transcriptJson(raw);
-    expect(json).toContain('steered: new input arrived');
-    expect(json).toContain('switch direction');
-    expect(json).toContain('reply after steer');
   });
 });

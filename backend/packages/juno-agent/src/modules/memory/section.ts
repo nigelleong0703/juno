@@ -11,9 +11,8 @@ import { groupNotePathOfKey, parseNote } from '../groups/note.js';
 import { getRow } from '../home/mirror.js';
 import { HOME_DISPLAY } from '../home/paths.js';
 import { harnessText } from '../harness/loader.js';
-import type { Embedder } from './embedder.js';
 import type { MemoryGraph } from './graph.js';
-import { rankItems } from './search.js';
+import { rankItems, vectorSearchFor, type VectorSearch } from './search.js';
 
 /** Up to this many items are all listed. */
 export const SECTION_ALL_MAX = 40;
@@ -53,11 +52,11 @@ export function sectionItems(items: readonly VisibleItem[]): VisibleItem[] {
  * Past SECTION_ALL_MAX: the SECTION_RELEVANT items, not listed in the section, that rank best for the wake's text, skipping the ids the
  * session has already delivered. Ranked among the candidates that are left, so the block fills up with new items while there are any.
  */
-export async function relevantItems(embedder: Embedder | undefined, items: readonly VisibleItem[], wakeText: string, delivered: ReadonlySet<string>): Promise<VisibleItem[]> {
+export async function relevantItems(vectors: VectorSearch | undefined, items: readonly VisibleItem[], wakeText: string, delivered: ReadonlySet<string>): Promise<VisibleItem[]> {
   if (items.length <= SECTION_ALL_MAX) return [];
   const listed = new Set(sectionItems(items).map((item) => item.id));
   const candidates = items.filter((item) => !listed.has(item.id) && !delivered.has(item.id));
-  return (await rankItems(embedder, candidates, wakeText, SECTION_RELEVANT)).map((hit) => hit.item);
+  return (await rankItems(vectors, candidates, wakeText, SECTION_RELEVANT)).map((hit) => hit.item);
 }
 
 /** One line: the text on one line, who said it and where. `- text (said by <name> in <place>)`. */
@@ -178,12 +177,9 @@ export interface MemorySection {
 export async function memorySectionFor(run: MemorySectionRun): Promise<MemorySection> {
   const { store, memory, ownerId, agentId, presence } = run;
   const owner = presence.kind === 'owner';
-  let visible = await memory.items.memoryFor(ownerId, presence, agentId);
-  // Vectors are read only when they are needed for ranking: a long list at a run's start, with an embedder.
-  const rankNow = run.runStart && visible.length > SECTION_ALL_MAX && memory.embedder !== undefined && wakeTextOf(run.wake).trim() !== '';
-  if (rankNow) visible = await memory.items.memoryFor(ownerId, presence, agentId, { vectors: true });
+  const visible = await memory.items.memoryFor(ownerId, presence, agentId);
   const picked = sectionItems(visible);
-  const relevant = run.runStart ? await relevantItems(memory.embedder, visible, wakeTextOf(run.wake), run.delivered) : [];
+  const relevant = run.runStart ? await relevantItems(vectorSearchFor(memory, { ownerId, presence, agentId }), visible, wakeTextOf(run.wake), run.delivered) : [];
   const people = await memory.identity.listPeople(ownerId);
   const ownerPersonId = people.find((person) => person.isOwner)?.id;
   const labels = await labelsFor(store, ownerId, people, [...picked, ...relevant]);

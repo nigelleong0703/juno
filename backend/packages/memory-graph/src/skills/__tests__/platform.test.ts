@@ -102,8 +102,12 @@ describe('what a run reads', () => {
       expect(view?.canary).toBe(canaryServes(run, id));
       if (view?.canary) canary += 1;
     }
-    expect(canary / runs.length).toBeGreaterThan(CANARY_PERCENT / 100 - 0.07);
-    expect(canary / runs.length).toBeLessThan(CANARY_PERCENT / 100 + 0.07);
+    // The skill id is random per test run, so the share varies run to run: allow ~5 standard deviations of a 400-sample binomial
+    // (CI saw 0.2775 against a 0.27 bound on 2026-11-02).
+    const p = CANARY_PERCENT / 100;
+    const spread = 5 * Math.sqrt((p * (1 - p)) / runs.length);
+    expect(canary / runs.length).toBeGreaterThan(p - spread);
+    expect(canary / runs.length).toBeLessThan(p + spread);
     // The same run asks again and gets the same version.
     expect((await platform.resolve(id, 'run_7'))?.versionId).toBe((await platform.resolve(id, 'run_7'))?.versionId);
   });

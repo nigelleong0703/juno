@@ -3,9 +3,9 @@
  * rebuild is needed. Three pieces:
  *  - `prepareComputer`: the one-time, idempotent migration of a computer (marker `/etc/juno/isolation-v1`): group,
  *    no sudo, /workspace and /juno ownership, screens booted the old way are stopped.
- *  - `prepareAgent` / `prepareScreen`: this agent's Linux user and private home, its Chromium profile moved in, the
- *    firewall rules for its screen's ports, `/proc` hidepid. Run every time a screen is (re)booted.
- *  - `agentRuntime`: wraps a ROOT runtime so every command and file call runs as the agent's user.
+ *  - `prepareAgent` / `prepareScreen`: this agent's Linux user and private home, its Chromium profile moved in, its network
+ *    namespace (`netns.ts`: separate loopback, guarded egress), `/proc` hidepid. Run every time a screen is (re)booted.
+ *  - `agentRuntime`: wraps a ROOT runtime so every command and file call runs as the agent's user, inside its namespace.
  * `isolation-user.ts` has the pure naming, wrapper and ownership rules.
  */
 import { randomUUID } from 'node:crypto';
@@ -27,30 +27,22 @@ import {
   homeAgentOf,
   homeOwnership,
 } from './isolation-user.js';
-import { FIRST_SCREEN_DISPLAY, MAX_LIVE_SCREENS, screenPorts } from './ports.js';
+import { FIRST_SCREEN_DISPLAY, MAX_LIVE_SCREENS } from './ports.js';
+import { SCRIPT_TIMEOUT_MS, runLocked } from './locked.js';
+import { prepareNetns } from './netns.js';
 import type { SandboxRuntime } from './runtime.js';
 import { PROFILE_ROOT_FILE, homeProfile, legacyChromiumProfile, legacyStopScreenCommand, shq } from './screen-boot.js';
 
 export { agentUser, agentHome, homeOwnership, homeAgentOf, ISOLATION_MARKER } from './isolation-user.js';
+export { runLocked } from './locked.js';
 
 const log = createLogger({ service: 'sandbox-isolation' });
 
-const LOCK = '/tmp/.juno-isolate.lock';
-const SCRIPT_TIMEOUT_MS = 300_000;
 /** Paths per chown/chmod command, so one line stays far below the argument-size limit. */
 const PATHS_PER_COMMAND = 200;
 
 const WORKSPACE = '/workspace';
 const PROC_ROOT = '/tmp/vomu-proc';
-
-/** Run a script as root under the isolation lock (two prepares never interleave). */
-export async function runLocked(root: SandboxRuntime, script: string, what: string): Promise<string> {
-  const result = await root.run(`flock ${LOCK} /bin/sh -c ${shq(script)}`, { timeoutMs: SCRIPT_TIMEOUT_MS });
-  if (result.exitCode !== 0) {
-    throw failed(`could not ${what}: ${(result.stderr || result.stdout).trim().slice(0, 500)}`);
-  }
-  return result.stdout;
-}
 
 const displays = (): number[] => Array.from({ length: MAX_LIVE_SCREENS }, (_, index) => FIRST_SCREEN_DISPLAY + index);
 
@@ -69,11 +61,6 @@ function migrationScript(): string {
     `chmod 0700 ${ISOLATION_TMP}`,
     // Sticky and write+search only: an agent can create its own scope directory but cannot list the others.
     `chmod 1733 ${PROC_ROOT}`,
-    // iptables (the CDP and VNC port rules) is not in the current image: install it once, or say why not.
-    'if ! command -v iptables >/dev/null 2>&1; then',
-    '  export DEBIAN_FRONTEND=noninteractive',
-    '  { apt-get update -qq && apt-get install -y -qq --no-install-recommends iptables; } >/dev/null 2>&1 || { echo "isolation needs iptables and apt-get could not install it (no network?)" >&2; exit 1; }',
-    'fi',
     // /workspace stays the agents\' shared place (-n: do not recompute the ACL mask, so a rerun on durable files, BACKEND 7.10, changes no mode): group juno may read and write, new files inherit the group.
     `mkdir -p ${WORKSPACE}`,
     `chgrp -R ${SHARED_GROUP} ${WORKSPACE}`,
@@ -147,78 +134,12 @@ export function userScript(agentId: string): string {
   ].join('\n');
 }
 
-const LOCAL_TCP = '-p tcp --dport';
-
-/** Wrap rule lines (written for `$t`, iptables or ip6tables) in the shared JUNO_ISO setup and apply them to IPv4 and IPv6. */
-export function firewallScript(body: string[]): string {
-  return [
-    'rules() ( set -e; t=$1',
-    '  $t -w -N JUNO_ISO 2>/dev/null || true',
-    '  $t -w -C OUTPUT -j JUNO_ISO 2>/dev/null || $t -w -I OUTPUT 1 -j JUNO_ISO',
-    ...body,
-    ')',
-    'rules iptables || { echo "isolation: iptables rules failed (the kernel needs the owner match; the container needs NET_ADMIN)" >&2; exit 1; }',
-    // IPv6 loopback is a second way in; a host without ip6tables or IPv6 simply has nothing to close.
-    'if command -v ip6tables >/dev/null 2>&1; then rules ip6tables 2>/dev/null || true; fi',
-  ].join('\n');
-}
-
-/** Connections to these local ports from any uid but root are refused. */
-export function rootOnlyPortRules(ports: readonly number[]): string[] {
-  return [
-    `  for p in ${ports.join(' ')}; do`,
-    `    $t -w -C JUNO_ISO ${LOCAL_TCP} $p -m addrtype --dst-type LOCAL -m owner ! --uid-owner 0 -j REJECT --reject-with tcp-reset 2>/dev/null || $t -w -A JUNO_ISO ${LOCAL_TCP} $p -m addrtype --dst-type LOCAL -m owner ! --uid-owner 0 -j REJECT --reject-with tcp-reset`,
-    '  done',
-  ];
-}
-
-/** Only root and `user` may connect to the local `port`; everyone else is refused. One chain per port. */
-export function ownerOnlyPortRules(chain: string, port: number, user: string): string[] {
-  return [
-    `  if ! { $t -w -C ${chain} -m owner --uid-owner ${user} -j ACCEPT && $t -w -C ${chain} -p tcp -j REJECT --reject-with tcp-reset; } 2>/dev/null; then`,
-    `    $t -w -N ${chain} 2>/dev/null || $t -w -F ${chain}`,
-    `    $t -w -A ${chain} -m owner --uid-owner 0 -j ACCEPT`,
-    `    $t -w -A ${chain} -m owner --uid-owner ${user} -j ACCEPT`,
-    `    $t -w -A ${chain} -p tcp -j REJECT --reject-with tcp-reset`,
-    '  fi',
-    `  $t -w -C JUNO_ISO ${LOCAL_TCP} ${port} -m addrtype --dst-type LOCAL -j ${chain} 2>/dev/null || $t -w -A JUNO_ISO ${LOCAL_TCP} ${port} -m addrtype --dst-type LOCAL -j ${chain}`,
-  ];
-}
-
 /**
- * The screen's CDP port is also open to its own agent's Linux user (owner decision, 2026-10-27): the agent's shell drives its own
- * browser over CDP, so the browser tools' approval gates rely on the agent's instructions, not on this port. The rule is an ACCEPT for
- * that one uid placed ahead of the root-only REJECT of the same port. An ACCEPT an earlier boot put for another agent on this port is
- * removed first, so the port belongs to one agent at a time. Other uids (other agents included) are still refused.
+ * What a screen needs on top of the agent's user and namespace. Ports need no rule any more: an agent's Chromium debugging port is on
+ * its namespace's loopback and the VNC ports are on root's, where no agent can connect (`netns.ts`).
  */
-export function ownAgentCdpRules(port: number, user: string): string[] {
+export function screenHardeningScript(): string {
   return [
-    `  $t -w -S JUNO_ISO 2>/dev/null | grep -- "--dport ${port} " | grep -- "-j ACCEPT" | while IFS= read -r rule; do spec=\${rule#-A JUNO_ISO }; eval "$t -w -D JUNO_ISO $spec" 2>/dev/null || true; done`,
-    `  uid=$(id -u ${user} 2>/dev/null) || uid=""`,
-    `  if [ -n "$uid" ]; then $t -w -C JUNO_ISO ${LOCAL_TCP} ${port} -m addrtype --dst-type LOCAL -m owner --uid-owner "$uid" -j ACCEPT 2>/dev/null || $t -w -I JUNO_ISO 1 ${LOCAL_TCP} ${port} -m addrtype --dst-type LOCAL -m owner --uid-owner "$uid" -j ACCEPT; fi`,
-  ];
-}
-
-/**
- * Firewall rules for one screen: VNC and noVNC ports are root-only; CDP ports are root-only too, except this screen's own, which its
- * agent's user may use (`ownAgentCdpRules`). The browser helper runs as root (BACKEND 8.7), so the root-run helpers (the platform's
- * browser tools) reach any screen. A rule set by an older release that let the agent's user through (a per-port JUNO_CDP_<port> chain)
- * is removed.
- */
-export function netScript(displayNo: number, agentId: string): string {
-  const rootOnly = displays().flatMap((d) => {
-    const ports = screenPorts(d);
-    return [ports.vnc, ports.readOnlyVnc, ports.web, ports.readOnlyWeb, ports.cdp];
-  });
-  const cdp = screenPorts(displayNo).cdp;
-  const retiredChain = `JUNO_CDP_${cdp}`;
-  return [
-    firewallScript([
-      `  $t -w -D JUNO_ISO ${LOCAL_TCP} ${cdp} -m addrtype --dst-type LOCAL -j ${retiredChain} 2>/dev/null || true`,
-      `  $t -w -F ${retiredChain} 2>/dev/null || true; $t -w -X ${retiredChain} 2>/dev/null || true`,
-      ...rootOnlyPortRules(rootOnly),
-      ...ownAgentCdpRules(cdp, agentUser(agentId)),
-    ]),
     // Execute-only Chromium (BACKEND 8.7): a process whose binary its user cannot read is non-dumpable, so the agent's shell (the
     // browser's own Linux user) cannot ptrace it or read its memory. The image bakes this in; older computers get it here
     // (it applies to the next Chromium start).
@@ -228,9 +149,10 @@ export function netScript(displayNo: number, agentId: string): string {
   ].join('\n');
 }
 
-/** Make sure this agent's user and home exist and its identity directory is private to it. */
+/** Make sure this agent's user, network namespace and home exist and its identity directory is private to it. */
 export async function prepareAgent(root: SandboxRuntime, agentId: string): Promise<void> {
   await runLocked(root, userScript(agentId), `create the user for agent ${agentId}`);
+  await prepareNetns(root, agentId);
   await applyHomeOwnership(root, `agents/${agentId}`);
 }
 
@@ -242,12 +164,12 @@ export async function prepareForAgent(root: SandboxRuntime, key: string, agentId
 }
 
 /**
- * Everything a screen needs before it boots: the computer is migrated, the agent has its user, the firewall rules
- * and `/proc` are in place. Returns true when the migration just ran (the caller drops its booted-screens cache).
+ * Everything a screen needs before it boots: the computer is migrated, the agent has its user and namespace, and `/proc` is hidden.
+ * Returns true when the migration just ran (the caller drops its booted-screens cache).
  */
 export async function prepareScreen(root: SandboxRuntime, key: string, agentId: string, displayNo: number): Promise<boolean> {
   const migrated = await prepareForAgent(root, key, agentId);
-  const out = await runLocked(root, netScript(displayNo, agentId), `close the screen :${displayNo} ports to other agents`);
+  const out = await runLocked(root, screenHardeningScript(), `harden the computer for screen :${displayNo}`);
   for (const line of out.split('\n')) if (line.startsWith('isolation:')) log.info({ displayNo }, line);
   return migrated;
 }

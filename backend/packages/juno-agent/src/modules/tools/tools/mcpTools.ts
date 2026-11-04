@@ -11,6 +11,7 @@ import type { McpManager } from '../../mcp/index.js';
 import { currentOwnerId } from '../../../owner-context.js';
 import { BACKGROUND_OPTIONS } from '../../tasks/background-registry.js';
 import { APPROVAL_ARG, approvalSchema } from '../../../execution/harness/services/decision/approval-arg.js';
+import { shownSchema } from '../toolArguments.js';
 
 /**
  * The owner an MCP catalog must be authorized against: the trusted async-chain owner wins, otherwise
@@ -69,7 +70,7 @@ function takesInjectedApproval(tool: Tool): boolean {
 }
 
 function withBackgroundOption(tool: Tool): Tool {
-  const params = tool.parameters;
+  const params = shownSchema(tool.parameters);
   const props: unknown = Reflect.get(params, 'properties');
   const properties = typeof props === 'object' && props !== null ? props : {};
   // An action tool also takes `approval` (BACKEND 8.1): the agent's sentence, reason and "if denied" for the decision card. A

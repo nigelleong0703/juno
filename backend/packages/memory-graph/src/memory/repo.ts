@@ -43,7 +43,7 @@ export type Db = DurableDb;
 export interface Assignment {
   column: string;
   value: string | number | null;
-  cast?: '::text::boolean' | '::text::jsonb';
+  cast?: '::text::boolean' | '::text::jsonb' | '::text::vector';
 }
 
 export const COLUMNS = `id, owner_id, text, kind, file, topic, about_person_id, agent_id, said_by_person_id, said_by_account_id, said_by_agent_id,
@@ -148,13 +148,13 @@ export async function deleteItemRow(db: Db, ownerId: string, id: string): Promis
  * or the ranking. Agent-private rows (agent_id set) are left out unless they are this agent's; the owner's app (no agent) sees all.
  * A non-owner presence reads only unsensitive rows of its own group, or public ones.
  */
-export async function listVisibleRows(
-  db: Db,
-  ownerId: string,
-  presence: Presence,
-  agentId: string | undefined,
-  withVectors: boolean,
-): Promise<Array<ItemRow & { embedding?: number[] | null; embed_model?: string | null }>> {
+export async function listVisibleRows(db: Db, ownerId: string, presence: Presence, agentId: string | undefined): Promise<ItemRow[]> {
+  const { where, params } = visibleWhere(ownerId, presence, agentId);
+  return db.query(`SELECT ${COLUMNS} FROM memory_items WHERE ${where} ORDER BY created_at, id`, params);
+}
+
+/** The read rules of `memoryFor` as a WHERE clause (BACKEND §5.3, §5.4a); the one place they are written, shared by the list and the vector search. */
+function visibleWhere(ownerId: string, presence: Presence, agentId: string | undefined): { where: string; params: string[] } {
   const clauses: string[] = ["owner_id = ?", "status = 'active'"];
   const params: string[] = [ownerId];
   if (presence.kind !== 'owner' || agentId !== undefined) {
@@ -167,17 +167,69 @@ export async function listVisibleRows(
   } else if (presence.kind === 'other') {
     clauses.push("sensitive = false AND audience = 'public'");
   }
-  const vectors = withVectors ? ', embedding, embed_model' : '';
-  return db.query(`SELECT ${COLUMNS}${vectors} FROM memory_items WHERE ${clauses.join(' AND ')} ORDER BY created_at, id`, params);
+  return { where: clauses.join(' AND '), params };
 }
 
-/** Store the vector of one row, only while its text is still the one that was embedded; false when the text has changed since. */
+/** Store the vector of one row, only while its text is still the one that was embedded; false when the text has changed since. A vector of another length than the column's is refused by Postgres ("expected N dimensions"). */
 export async function setVectorRow(db: Db, ownerId: string, id: string, text: string, vector: { embedding: number[]; embedModel: string }): Promise<boolean> {
   const updated = await db.query<{ id: string }>(
-    `UPDATE memory_items SET embedding = ?::text::jsonb, embed_model = ? WHERE owner_id = ? AND id = ? AND text = ? RETURNING id`,
+    `UPDATE memory_items SET embedding = ?::text::vector, embed_model = ? WHERE owner_id = ? AND id = ? AND text = ? RETURNING id`,
     [JSON.stringify(vector.embedding), vector.embedModel, ownerId, id, text],
   );
   return updated.length > 0;
+}
+
+/**
+ * The rows nearest to `query` by cosine, closest first, among the rows `memoryFor` would return (same WHERE) that carry a vector from
+ * `model`; with `ids` only among those. `ORDER BY embedding <=> q LIMIT k` is what the HNSW index answers. The owner/visibility filter
+ * is applied to the index's candidates, so the scan is iterative (pgvector 0.8): it keeps going until `limit` rows pass the filter.
+ */
+export async function nearestRows(
+  db: Db,
+  ownerId: string,
+  presence: Presence,
+  agentId: string | undefined,
+  query: { embedding: number[]; embedModel: string },
+  options: { limit: number; ids?: readonly string[] },
+): Promise<Array<{ id: string; cosine: number }>> {
+  const { where, params } = visibleWhere(ownerId, presence, agentId);
+  const vector = JSON.stringify(query.embedding);
+  const restrict = options.ids === undefined ? '' : ' AND id IN (SELECT jsonb_array_elements_text(?::text::jsonb))';
+  const rows = await db.transaction(async (tx) => {
+    await tx.query(`SET LOCAL hnsw.iterative_scan = strict_order`);
+    return tx.query<{ id: string; cosine: number | string }>(
+      `SELECT id, 1 - (embedding <=> ?::text::vector) AS cosine FROM memory_items
+       WHERE ${where} AND embedding IS NOT NULL AND embed_model = ?${restrict}
+       ORDER BY embedding <=> ?::text::vector LIMIT ?`,
+      [vector, ...params, query.embedModel, ...(options.ids === undefined ? [] : [JSON.stringify(options.ids)]), vector, options.limit],
+    );
+  });
+  return rows.map((row) => ({ id: row.id, cosine: Number(row.cosine) }));
+}
+
+/** The dimension of the embedding column (`vector(n)`), read from the catalog. */
+export async function embeddingDimension(db: Db): Promise<number | undefined> {
+  const [row] = await db.query<{ type: string }>(
+    `SELECT format_type(atttypid, atttypmod) AS type FROM pg_attribute WHERE attrelid = 'memory_items'::regclass AND attname = 'embedding'`,
+  );
+  const match = /^vector\((\d+)\)$/.exec(row?.type ?? '');
+  return match === null ? undefined : Number(match[1]);
+}
+
+/**
+ * Makes the column hold `dimension`-long vectors. A different length means another model: every stored vector is dropped (the backfill
+ * embeds them again), the column is retyped and the HNSW index rebuilt, in one transaction. False when nothing had to change.
+ */
+export async function alignEmbeddingDimension(db: Db, dimension: number): Promise<boolean> {
+  if (!Number.isInteger(dimension) || dimension < 1) throw new Error(`invalid embedding dimension: ${String(dimension)}`);
+  return db.transaction(async (tx) => {
+    if ((await embeddingDimension(tx)) === dimension) return false;
+    await tx.query(`DROP INDEX IF EXISTS memory_items_embedding_hnsw`);
+    await tx.query(`UPDATE memory_items SET embedding = NULL, embed_model = NULL WHERE embedding IS NOT NULL`);
+    await tx.query(`ALTER TABLE memory_items ALTER COLUMN embedding TYPE vector(${String(dimension)})`);
+    await tx.query(`CREATE INDEX memory_items_embedding_hnsw ON memory_items USING hnsw (embedding vector_cosine_ops)`);
+    return true;
+  });
 }
 
 /** Rows that have no vector from `model` yet (retracted ones never need one), across owners, oldest first. For the boot backfill. */

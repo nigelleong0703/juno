@@ -16,9 +16,12 @@ export interface MemoryGraphFixture {
 
 export async function startMemoryGraph(): Promise<MemoryGraphFixture> {
   const database = await startTestDatabase();
+  const items = createMemoryItems(database.db);
+  // The tests use two-number vectors; production aligns the column to its model the same way at boot.
+  await items.alignVectorDimension(2);
   return {
     db: database.db,
-    graph: { items: createMemoryItems(database.db), identity: createIdentity(database.db), relations: createRelations(database.db) },
+    graph: { items, identity: createIdentity(database.db), relations: createRelations(database.db) },
     close: database.close,
   };
 }

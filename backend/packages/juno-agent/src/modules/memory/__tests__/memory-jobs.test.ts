@@ -135,7 +135,8 @@ describe('chat digest: memory claims', () => {
     expect(claims.map((entry) => entry.text).sort()).toEqual(['Alice likes being greeted by name.', 'Has a sister called Noor.', 'Lives in Leiden.']);
     const sheet = s.computer.files.get('MEMORY.md') ?? '';
     const lived = claims.find((entry) => entry.text === 'Lives in Leiden.');
-    expect(sheet).toBe('# Memory\n\n- Lives in Leiden. [claim:' + lived?.id + ']\n');
+    // What the digest of this agent's chat learns is the agent's own, under its section of the view.
+    expect(sheet).toBe('# Memory\n\n## Juno（agt-1）\n- Lives in Leiden. [claim:' + lived?.id + ']\n');
     expect(s.computer.files.get('people/' + s.noor + '.md')).toContain('# Noor');
     // A stranger's words reach only a person's page, in the section of the agent that dealt with them; and only that agent's search sees it.
     expect(s.computer.files.get('people/' + s.alice + '.md')).toMatch(/^# Alice\n\n## Juno（agt-1）\n- Alice likes being greeted by name\. \[claim:/);
@@ -179,7 +180,7 @@ describe('chat digest: memory claims', () => {
     expect(bob).toBeDefined();
     const items = await s.inOwner(() => graph.graph.items.listItems(s.owner, { status: 'active' }));
     expect(items.find((item) => item.text === 'Is vegetarian.')).toMatchObject({ file: 'person', aboutPersonId: bob?.id, saidByPersonId: bob?.id });
-    expect(s.computer.files.get('people/' + bob?.id + '.md')).toMatch(/^# Bob\n\n- Is vegetarian\. \[claim:/);
+    expect(s.computer.files.get('people/' + bob?.id + '.md')).toMatch(/^# Bob\n\n## Juno（agt-1）\n- Is vegetarian\. \[claim:/);
   });
 
   it('does not make a person from a name that is not the sender\'s: the claim names someone else and is not written', async () => {
@@ -201,7 +202,7 @@ describe('chat digest: memory claims', () => {
     // The person is made once, with no account, and the claim lands on her page, headed by her name.
     const lily = (await graph.graph.identity.listPeople(s.owner)).find((person) => person.name === 'Lily');
     expect(lily).toBeDefined();
-    expect(s.computer.files.get('people/' + lily?.id + '.md')).toMatch(/^# Lily\n\n- Lily loves sushi\. \[claim:/);
+    expect(s.computer.files.get('people/' + lily?.id + '.md')).toMatch(/^# Lily\n\n## Juno（agt-1）\n- Lily loves sushi\. \[claim:/);
   });
 
   it('keeps the checkpoint when the model fails, replaces a superseded item, and never writes a forgotten claim again', async () => {

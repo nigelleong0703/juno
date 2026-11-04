@@ -11,7 +11,7 @@ import { parseEatenAt } from '../../meals/index.js';
 import { nowIso } from '../util.js';
 import { invalidArguments } from '../toolArguments.js';
 
-const MAX_OPEN = 100;
+export const MAX_OPEN = 100;
 const text = (value: string, isError = false): ToolResult => ({ content: [{ type: 'text', text: isError ? 'Error: ' + value : value }], ...(isError ? { isError } : {}) });
 
 const addSchema = z.object({

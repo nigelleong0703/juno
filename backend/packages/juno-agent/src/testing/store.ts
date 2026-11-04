@@ -6,7 +6,7 @@
  * store and live in contracts/owner-events.ts; this file imports nothing outside the package (no db,
  * log, or service packages). Not a production adapter: there is no Postgres here.
  */
-import type { EventBus, StoredEvent } from '../contracts/events.js';
+import type { EventBus, LiveRunEvent, StoredEvent } from '../contracts/events.js';
 import type { AgentEvent } from '@agent-desktop/public-contracts';
 import type { Collection, Doc, IndexedFields, ListPage, ListQuery, Store } from '../contracts/storage.js';
 import { NotFoundError } from '../contracts/storage.js';
@@ -177,6 +177,7 @@ export function createMemoryStore(): Store & { eventBus: EventBus } {
   const events: Map<number, StoredEvent> = new Map();
   const eventOwners: Map<number, string> = new Map();
   const subscribers: Set<(e: StoredEvent) => void> = new Set();
+  const liveSubscribers: Set<(e: LiveRunEvent) => void> = new Set();
 
   const collectionFor = (name: Collection): Map<string, InMemoryDoc> => {
     let col = collections.get(name);
@@ -397,6 +398,13 @@ export function createMemoryStore(): Store & { eventBus: EventBus } {
         }
       }
       return result.sort((a, b) => a.id - b.id);
+    },
+    async publishLive(batch: LiveRunEvent[]): Promise<void> {
+      for (const event of batch) liveSubscribers.forEach((cb) => cb(event));
+    },
+    async subscribeLive(onEvent: (e: LiveRunEvent) => void): Promise<() => void> {
+      liveSubscribers.add(onEvent);
+      return () => { liveSubscribers.delete(onEvent); };
     },
     async subscribe(onEvent: (e: StoredEvent) => void): Promise<() => void> {
       subscribers.add(onEvent);

@@ -18,7 +18,6 @@ import { createToolNameAliases } from '../../../execution/brain/toolNames.js';
 import { selectDiscoveryScope } from './discoveryScope.js';
 import type { ToolScope } from '../scope.js';
 import { toolTurn } from './mcpTools.js';
-import { scopeQuietExit } from './finishQuietly.js';
 
 const MAX_QUERY_CHARS = 2_000;
 const GREETINGS = [
@@ -125,7 +124,7 @@ export function createToolPreparer(source: ToolPreparationSource): (query: strin
     const mode = disclosureMode();
     if (mode !== 'compact') return emptyResult(mode, mode === 'legacy' ? 'legacy-baseline' : 'disclosure-off');
 
-    const { all } = await scopeQuietExit(ctx, await source.all(ctx.agentId, ctx.signal, ctx.toolScope, toolTurn(ctx)));
+    const all = await source.all(ctx.agentId, ctx.signal, ctx.toolScope, toolTurn(ctx));
     ctx.signal.throwIfAborted();
     await recheckSkills(source.skills, ctx, all);
     const groups: NamespaceGroup[] = groupNamespaces(all);

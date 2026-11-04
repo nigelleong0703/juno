@@ -6,7 +6,7 @@
 import type { Store } from '../../contracts/index.js';
 import { McpConnectionError } from './client.js';
 import { clientOf, McpOAuthError, openOAuth, refreshTokens, serverOf, sealOAuth, type OAuthRecord } from './oauth.js';
-import { guardedFetch } from '../tools/net/guardedFetch.js';
+import { guardedFetch, storedEndpointUrl } from '../tools/net/guardedFetch.js';
 import { loadConnection } from './manager-support.js';
 
 const REFRESH_MARGIN_MS = 60_000;
@@ -61,13 +61,16 @@ async function refresh(store: Store, input: OAuthAuthorizerInput): Promise<strin
   if (record.refreshToken === undefined) {
     throw new McpReauthorizationError('MCP connection ' + JSON.stringify(input.connectionId) + ' has no refresh token; connect it again');
   }
+  // A hosted server's resource is stored as its path; the audience is the URL at the current public origin.
+  const resource = storedEndpointUrl(record.resource, process.env['BETTER_AUTH_URL']);
+  if (resource === undefined) throw new McpConnectionError('MCP connection ' + JSON.stringify(input.connectionId) + ' needs BETTER_AUTH_URL to refresh its sign-in');
   let tokens;
   try {
     tokens = await refreshTokens({
       server: serverOf(record),
       client: clientOf(record),
       refreshToken: record.refreshToken,
-      resource: record.resource,
+      resource,
       fetchImpl: input.fetchImpl ?? guardedFetch,
     });
   } catch (error) {

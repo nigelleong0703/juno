@@ -12,21 +12,11 @@ export interface HomeFileStat {
   mtime: number;
 }
 
-/** A platform skill shipped in the image (`/opt/juno/skills/<name>/SKILL.md`), as its frontmatter names it. */
-export interface PlatformSkill {
-  name: string;
-  description: string;
-  /** Absolute path of its SKILL.md in the computer. */
-  path: string;
-}
-
 export interface HomeSnapshot {
   /** The computer carries the `.juno-sync` marker; false means a new or reset computer (§5.2 rule 2). */
   synced: boolean;
   /** Stats of USER.md, PROACTIVE_PREFERENCES.md, MEMORY.md, ALIGNMENT_SYNTHESIS.md, the agent's four files and its `skills/`, and everything under `memory/`, `dreams/`, `people/`, `groups/`, `self_improvement/` and `docs/`. */
   files: HomeFileStat[];
-  /** The platform skills the image carries; empty or absent when the computer has none. */
-  platformSkills?: PlatformSkill[];
 }
 
 export interface HomeContent {
@@ -57,12 +47,17 @@ export interface HomeComputer {
   delete(agentId: string | undefined, path: string, expectedHash: string | undefined, signal: AbortSignal): Promise<void>;
   /** Creates the agent's daily log (an empty file the agent user may append to) when it is missing; an existing file is left alone. */
   ensure(agentId: string | undefined, path: string, signal: AbortSignal): Promise<void>;
+  /**
+   * The same calls, but each is served only by a computer that is already running (BACKEND 7.3a): no computer yet, a suspended or
+   * stopped one, or a lost one fails with `unavailable`, and nothing is created, resumed, replaced or kept awake. A context build
+   * uses this, so chatting never wakes a paused computer. Absent: the computer is always awake (tests).
+   */
+  whileRunning?(): HomeComputer;
 }
 
 export const homeSnapshotSchema = z.object({
   synced: z.boolean(),
   files: z.array(z.object({ path: z.string().min(1), hash: z.string().min(1), mtime: z.number() })),
-  platformSkills: z.array(z.object({ name: z.string().min(1), description: z.string(), path: z.string().min(1) })).optional(),
 });
 
 export const homePutResultSchema = z.object({ hash: z.string().min(1), written: z.boolean() });

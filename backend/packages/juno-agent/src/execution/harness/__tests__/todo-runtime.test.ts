@@ -8,7 +8,7 @@
  */
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import {
   LIMITS,
@@ -34,6 +34,7 @@ import { runWorkflowBody, type RunBodyContext } from '../services/run.js';
 import { createEngineRegistry, type EngineAdapter, type EngineOutcome } from '../engines/registry.js';
 import { blockedReason, continueHint, reconcileHint } from '../services/task-hooks.js';
 import type { RunContext, RunInput, RunServices } from '../services/run-types.js';
+import { SOMETHING_WENT_WRONG } from '../logic/plain-errors.js';
 
 const at = '2026-10-08T00:00:00.000Z';
 const usage = { inputTokens: 1, outputTokens: 1, costUsd: 0 };
@@ -91,7 +92,7 @@ function toolTurn(name: string): AssistantTurn {
 }
 
 function sendText(id: string, text: string): AssistantTurn {
-  return { text: '', toolCalls: [{ id, name: 'send_message', arguments: { kind: 'text', text } }], usage, stopReason: 'tool_calls' };
+  return { text: '', toolCalls: [{ id, name: 'send_message', arguments: { kind: 'text', purpose: 'progress', text } }], usage, stopReason: 'tool_calls' };
 }
 
 /** Replaces the canonical plan with the given todos (merge:false), like a fresh todo_write. */
@@ -162,12 +163,12 @@ function runContext(): RunContext {
   let ids = 0;
   return {
     rand: { uuidv4: () => 'id' + String(ids++) },
-    run: <T>(_name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
-    awakeable: <T>(): { id: string; promise: RestatePromise<T> } => ({
+    run: <T>(_name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()),
+    awakeable: <T>(): { id: string; promise: DurablePromise<T> } => ({
       id: 'awake',
-      promise: RestatePromise.resolve(new Promise<T>(() => {})),
+      promise: DurablePromise.resolve(new Promise<T>(() => {})),
     }),
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
 }
 
@@ -292,7 +293,7 @@ describe('GC13 runtime todo hooks', () => {
     );
 
     expect(outcome).toBe('blocked');
-    expect((await raw.get('runs', RUN))?.error).toContain('task state unreadable');
+    expect((await raw.get('runs', RUN))?.error).toBe(SOMETHING_WENT_WRONG);
     expect(await postedMessages(raw)).toEqual(['Ready when you are.']);
   });
 
@@ -357,7 +358,7 @@ describe('GC13 runtime todo hooks', () => {
     const queued: WakeEvent[] = [];
     const inboxCtx: RunContext = {
       ...runContext(),
-      drainInbox: () => RestatePromise.resolve<WakeEvent[]>(queued.splice(0, queued.length)),
+      drainInbox: () => DurablePromise.resolve<WakeEvent[]>(queued.splice(0, queued.length)),
     };
     const services: RunServices = { store, blobs: createMemoryBlobStore(), enqueuer: new NoopEnqueuer(), brain, toolRegistry: registryWith(store) };
 
@@ -394,7 +395,7 @@ describe('GC13 runtime todo hooks', () => {
       plan: { id: 'p', conversationId: CONV, agentId: AGENT, type: 'plan' as const, runId: RUN, todos: [blockedTask, doneTask], at },
     };
     expect(blockedReason(waiting, 'waiting')).toContain('waiting for the user to approve the release');
-    expect(blockedReason({ kind: 'unreadable', reason: 'boom' }, 'unreadable')).toContain('task state unreadable (boom)');
+    expect(blockedReason({ kind: 'unreadable', reason: 'boom' }, 'unreadable')).toBe(SOMETHING_WENT_WRONG);
   });
 });
 
@@ -467,11 +468,11 @@ function bodyHarness(runId: string): { ctx: RunBodyContext; finished: Array<{ se
     ctx: {
       key: runId,
       rand: { uuidv4: () => runId + '-' + String((counter += 1)) },
-      run: <T>(_name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
-      awakeable: <T>() => ({ id: runId + '-awake', promise: RestatePromise.resolve(new Promise<T>(() => {})) }),
-      drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
-      // Real Restate keeps the cancel promise pending until a stop fires (see tool-policy.test.ts).
-      cancel: { peek: async () => false, get: () => RestatePromise.resolve(new Promise<boolean>(() => {})) },
+      run: <T>(_name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()),
+      awakeable: <T>() => ({ id: runId + '-awake', promise: DurablePromise.resolve(new Promise<T>(() => {})) }),
+      drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
+      // The real runner keeps the cancel promise pending until a stop fires (see tool-policy.test.ts).
+      cancel: { peek: async () => false, get: () => DurablePromise.resolve(new Promise<boolean>(() => {})) },
       runFinished: async (key: string, failedRunId: string) => {
         finished.push({ sessionKey: key, runId: failedRunId });
       },

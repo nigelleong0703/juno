@@ -21,6 +21,7 @@ import {
   discoverAuthorizationServer,
   exchangeCode,
   HttpMcpTransport,
+  isStoredHostedEndpoint,
   loopbackRedirectBase,
   McpClient,
   McpOAuthError,
@@ -30,6 +31,7 @@ import {
   probeMcpServer,
   registerClient,
   sealOAuth,
+  storedEndpointUrl,
   type OAuthRecord,
 } from '@agent-desktop/contracts/mcp';
 
@@ -165,10 +167,13 @@ export async function startMcpAuthorization(
   const scoped = ownerScoped(deps.store, ownerId);
   const doc = await scoped.get('connections', connectionId);
   if (doc === null || doc.kind !== 'mcp') throw new McpAuthorizationError(404, 'NOT_FOUND', 'connections ' + connectionId + ' not found');
-  const endpoint = doc.endpoint;
-  if (Reflect.get(doc, 'transport') !== 'http' || endpoint === undefined) {
+  const stored = doc.endpoint;
+  if (Reflect.get(doc, 'transport') !== 'http' || stored === undefined) {
     throw new McpAuthorizationError(400, 'MCP_AUTH_HTTP_ONLY', 'Only a remote http MCP server can be authorized');
   }
+  // A server our own gateway hosts is stored as its path; the address used now is the current public origin plus that path.
+  const endpoint = storedEndpointUrl(stored, deps.publicUrl);
+  if (endpoint === undefined) throw unavailable('MCP authorization (PUBLIC_URL)');
 
   let probe;
   try {
@@ -238,7 +243,7 @@ export async function startMcpAuthorization(
     issuer: server.issuer,
     authorizationEndpoint: server.authorizationEndpoint,
     tokenEndpoint: server.tokenEndpoint,
-    resource: endpoint,
+    resource: stored,
     clientId: client.clientId,
     redirectUri,
     ...(client.clientSecret === undefined ? {} : { clientSecret: client.clientSecret }),
@@ -258,9 +263,12 @@ export async function startMcpAuthorization(
   return { connection: connectionSchema.parse(updated), authorizationUrl };
 }
 
-async function verifyServer(url: string, accessToken: string, fetchImpl: typeof fetch): Promise<boolean> {
+/** `resource` is the connection's stored endpoint form (a path for a hosted server); the address called is built from the current public origin. */
+async function verifyServer(resource: string, publicUrl: string | undefined, accessToken: string, fetchImpl: typeof fetch): Promise<boolean> {
+  const url = storedEndpointUrl(resource, publicUrl);
+  if (url === undefined) return false;
   const client = new McpClient(
-    () => new HttpMcpTransport({ url, fetchImpl, authorize: async () => 'Bearer ' + accessToken }),
+    () => new HttpMcpTransport({ url, fetchImpl, hosted: isStoredHostedEndpoint(resource), authorize: async () => 'Bearer ' + accessToken }),
   );
   try {
     await client.connect();
@@ -314,7 +322,7 @@ export async function completeMcpAuthorization(
       code: input.code,
       verifier: pending.verifier,
       redirectUri: pending.redirectUri,
-      resource: record.resource,
+      resource: storedEndpointUrl(record.resource, deps.publicUrl) ?? record.resource,
       fetchImpl: deps.fetchImpl,
     });
   } catch (error) {
@@ -328,7 +336,7 @@ export async function completeMcpAuthorization(
     ...(tokens.expiresAt === undefined ? {} : { expiresAt: tokens.expiresAt }),
     ...(tokens.scope === undefined ? {} : { scope: tokens.scope }),
   };
-  const connected = await verifyServer(record.resource, tokens.accessToken, deps.fetchImpl);
+  const connected = await verifyServer(record.resource, deps.publicUrl, tokens.accessToken, deps.fetchImpl);
   // enabled is set by the user's own authorization; a previous disconnect must not block the new session.
   await scoped.patch('connections', parsed.connectionId, {
     auth: sealOAuth(authorized),

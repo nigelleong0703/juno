@@ -9,9 +9,9 @@
  */
 import type { Store } from '../../contracts/index.js';
 import { z } from 'zod';
-import { canonicalPlanId, isChildPlan, readTaskPlan, type TaskPlan } from './state.js';
-import { childPlanId } from './childRead.js';
-import { childSessionKey } from './child.js';
+import { canonicalPlanId, isSubagentPlan, readTaskPlan, type TaskPlan } from './state.js';
+import { subagentPlanId } from './subagentRead.js';
+import { subagentSessionKey } from './subagent.js';
 
 export interface PlanBinding {
   planId: string;
@@ -38,7 +38,7 @@ const storedRunSchema = z.object({
  * none). A present doc with the wrong scope, owners, run or parent throws unreadable so the
  * caller blocks fail-closed instead of pretending the child has no tasks.
  */
-export async function childPlanFor(
+export async function subagentPlanFor(
   store: Store,
   planId: string,
   agentId: string,
@@ -49,7 +49,7 @@ export async function childPlanFor(
   const doc = await store.get('items', planId);
   if (doc === null) return null;
   if (doc.type !== 'plan') throw new Error('child plan unreadable for run ' + childRunId);
-  if (!isChildPlan(doc)) throw new Error('child plan scope mismatch for run ' + childRunId);
+  if (!isSubagentPlan(doc)) throw new Error('child plan scope mismatch for run ' + childRunId);
   if (doc.agentId !== agentId) throw new Error('child plan agent mismatch for run ' + childRunId);
   if (doc.conversationId !== conversationId) throw new Error('child plan conversation mismatch for run ' + childRunId);
   if (doc.runId !== childRunId) throw new Error('child plan run mismatch for run ' + childRunId);
@@ -81,9 +81,9 @@ export async function readRunBinding(
   const parentRunId = parsed.data.parentRunId;
   if (parsed.data.agentId !== agentId) throw new Error('child run agent mismatch for run ' + runId);
   if (parsed.data.conversationId !== conversationId) throw new Error('child run conversation mismatch for run ' + runId);
-  const expectedPlanId = childPlanId(agentId, conversationId, runId);
+  const expectedPlanId = subagentPlanId(agentId, conversationId, runId);
   if (parsed.data.planId !== expectedPlanId) throw new Error('child run plan mismatch for run ' + runId);
-  const expectedSession = childSessionKey(agentId, conversationId, runId);
+  const expectedSession = subagentSessionKey(agentId, conversationId, runId);
   if (parsed.data.childSessionKey !== expectedSession) throw new Error('child run session mismatch for run ' + runId);
   const parentRaw = await store.get('runs', parentRunId);
   if (parentRaw === null) throw new Error('child parent run missing for run ' + runId);
@@ -107,7 +107,7 @@ export async function readBoundTaskPlan(
   const binding = await readRunBinding(store, agentId, conversationId, runId);
   if (binding.scope === 'child') {
     if (binding.parentRunId === undefined) throw new Error('child binding missing parent for run ' + runId);
-    return childPlanFor(store, binding.planId, agentId, conversationId, runId, binding.parentRunId);
+    return subagentPlanFor(store, binding.planId, agentId, conversationId, runId, binding.parentRunId);
   }
   return readTaskPlan(store, agentId, conversationId);
 }

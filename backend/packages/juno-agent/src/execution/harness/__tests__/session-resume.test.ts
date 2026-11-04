@@ -9,10 +9,9 @@
  * a finished run followed by a new message starts a second run in the same chat with the plan and the
  * messages intact and every write still inside the wake owner's scope.
  */
-import { createHash } from 'node:crypto';
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { Doc,
   AssistantTurn,
@@ -89,20 +88,20 @@ function bodyHarness(runId: string, journal = new Map<string, unknown>(), ownerD
     names,
     key: runId,
     rand: { uuidv4: () => runId + '-' + String((counter += 1)) },
-    run: <T>(name: string, action: () => Promise<T>): RestatePromise<T> => {
+    run: <T>(name: string, action: () => Promise<T>): DurablePromise<T> => {
       if (used.has(name)) throw new Error('duplicate durable step: ' + name);
       used.add(name);
       names.push(name);
-      if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-      return RestatePromise.resolve(action().then((value) => {
+      if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+      return DurablePromise.resolve(action().then((value) => {
         journal.set(name, structuredClone(value));
         return value;
       }));
     },
-    awakeable: <T>() => ({ id: runId + '-awake', promise: RestatePromise.resolve(ownerDecision === undefined ? new Promise<T>(() => {}) : ownerDecision as Promise<T>) }),
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
-    // Real Restate keeps the cancel promise pending until a stop fires.
-    cancel: { peek: async () => false, get: () => RestatePromise.resolve(new Promise<boolean>(() => {})) },
+    awakeable: <T>() => ({ id: runId + '-awake', promise: DurablePromise.resolve(ownerDecision === undefined ? new Promise<T>(() => {}) : ownerDecision as Promise<T>) }),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
+    // The real runner keeps the cancel promise pending until a stop fires.
+    cancel: { peek: async () => false, get: () => DurablePromise.resolve(new Promise<boolean>(() => {})) },
     runFinished: async () => {},
   };
 }
@@ -227,33 +226,18 @@ describe('durable run resume', () => {
     const fencedOnly: Doc<'steps'> & { execution: { fencedAt: string } } = { ...step, execution: { fencedAt: AT } };
     await scoped(raw, OWNER).put('steps', fencedOnly, { runId: 'run-1' });
 
-    // The restart replays the fence without re-running the action and waits on the durable owner request.
+    // The restart replays the fence without re-running the action. Nobody is asked: the agent is told, as the tool result, and the run goes on.
     const restarted = scriptedBrain([toolTurn('c1', 'effect'), final('recovered')]);
-    let answerOwner!: (value: unknown) => void;
-    const ownerDecision = new Promise<unknown>((resolve) => { answerOwner = resolve; });
-    const resuming = runWorkflowBody(bodyHarness('run-1', crashed, ownerDecision), services(facade, restarted.brain, [effectTool(executions)]), input);
-    let recoveryRequest: Doc<'requests'> | null = null;
-    for (let attempt = 0; attempt < 100 && recoveryRequest === null; attempt += 1) {
-      recoveryRequest = await scoped(raw, OWNER).get('requests', 'req_recovery_' + createHash('sha256').update(fencedOnly.id).digest('hex').slice(0, 32));
-      if (recoveryRequest === null) await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    expect(recoveryRequest).toMatchObject({ status: 'pending', reconciliation: { state: 'pending', stepId: fencedOnly.id } });
+    await runWorkflowBody(bodyHarness('run-1', crashed), services(facade, restarted.brain, [effectTool(executions)]), input);
     expect(executions.count).toBe(1);
-    if (recoveryRequest === null) throw new Error('expected the durable owner reconciliation request');
-    await scoped(raw, OWNER).patch('requests', recoveryRequest.id, {
-      status: 'answered',
-      resolution: { action: 'answer', answers: { recovery_outcome: 'still_unknown' } },
-      reconciliation: { ...recoveryRequest.reconciliation!, state: 'still_unknown', source: 'owner_report' },
-    });
-    answerOwner({ action: 'answer' });
-    await resuming;
-    const transcripts = JSON.stringify((await scoped(raw, OWNER).list('transcripts', { limit: 100 })).items.map((entry) => entry.message));
-    expect(transcripts).toContain('interrupted');
+    expect((await scoped(raw, OWNER).list('requests', { limit: 10 })).items).toEqual([]);
+    expect((await scoped(raw, OWNER).get('steps', fencedOnly.id))).toMatchObject({ execution: { notice: { runId: 'run-1' } } });
     const toolResults = (await scoped(raw, OWNER).list('transcripts', { limit: 100 })).items
       .slice()
       .sort((a, b) => a.seq - b.seq)
       .filter((entry) => entry.message.role === 'toolResult');
-    expect(JSON.stringify(toolResults.at(-1))).toContain('interrupted');
+    expect(JSON.stringify(toolResults.at(-1))).toContain('may or may not have happened');
+    expect((await scoped(raw, OWNER).get('runs', 'run-1'))?.status).toBe('completed');
   });
 
   it('restores an older build raw model turn journaled under the first key', async () => {
@@ -432,11 +416,11 @@ describe('session resume', () => {
     const raw = createMemoryStore();
     await seedWorld(raw);
     const store = requestScopedStore(raw);
-    const childKey = AGENT + ':' + CONV + '::child:run_child_x';
-    const harness = sessionHarness(childKey);
+    const subagentKey = AGENT + ':' + CONV + '::child:run_child_x';
+    const harness = sessionHarness(subagentKey);
     // A child run is started by startChildRun, so its session never records an active run.
     await receiveEvent(harness.io, { store, brain: forbiddenBrain, toolRegistry: registry([]) }, wake({
-      id: 'steer-1', sessionKey: childKey, kind: 'child_task', origin: { type: 'system', id: 'run-parent' }, trusted: false, priority: 'background',
+      id: 'steer-1', sessionKey: subagentKey, kind: 'subagent_task', origin: { type: 'system', id: 'run-parent' }, trusted: false, priority: 'background',
       payload: { prompt: 'also check X', parentRunId: 'run-parent', childRunId: 'run_child_x' }, mode: 'steer',
     }));
     expect(harness.started).toEqual([]);
@@ -447,15 +431,15 @@ describe('session resume', () => {
     const raw = createMemoryStore();
     await seedWorld(raw);
     const store = requestScopedStore(raw);
-    const childKey = AGENT + ':' + CONV + '::child:run_child_x';
-    const harness = sessionHarness(childKey);
+    const subagentKey = AGENT + ':' + CONV + '::child:run_child_x';
+    const harness = sessionHarness(subagentKey);
     // A wake that is not a child_message steer (here a task_done) still starts its run on the child session.
     await receiveEvent(harness.io, { store, brain: forbiddenBrain, toolRegistry: registry([]) }, wake({
-      id: 'done-1', sessionKey: childKey, kind: 'task_done', origin: { type: 'system', id: 'run-parent' }, trusted: false, priority: 'background',
+      id: 'done-1', sessionKey: subagentKey, kind: 'task_done', origin: { type: 'system', id: 'run-parent' }, trusted: false, priority: 'background',
       payload: { taskId: 'shell-1', parentRunId: 'run-parent', childRunId: 'run_child_x' },
     }));
     expect(harness.started).toHaveLength(1);
-    expect(harness.started[0]!.input.sessionKey).toBe(childKey);
+    expect(harness.started[0]!.input.sessionKey).toBe(subagentKey);
     expect(harness.started[0]!.input.wakeEvents[0]!.payload['parentRunId']).toBe('run-parent');
   });
 });

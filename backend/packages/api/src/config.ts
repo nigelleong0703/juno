@@ -35,6 +35,8 @@ const apiEnvSchema = z.object({
   INTERNAL_AGENTD_TOKEN: z.string().default(''),
   /** Bearer of the operator's app catalog path (`/admin/v1/apps`, BACKEND 10.18). A secret of its own, never the service bearer. Empty switches the path off (404). */
   ADMIN_TOKEN: z.string().default(''),
+  /** The credential of the connectors this gateway hosts (Gmail, Calendar, Drive, ...; BACKEND 10.18): agentd's MCP client sends it, the hosted endpoints answer nobody without it. Shared with agentd; not INTERNAL_AGENTD_TOKEN, so a hosted connector moved to a Worker never holds the key to agentd. */
+  HOSTED_MCP_TOKEN: z.string().default(''),
   /** Better Auth base URL (public URL of this gateway). Validated by resolveAuthMode. */
   BETTER_AUTH_URL: z.string().default(''),
   /** Postgres connection string for durable auth sessions. Validated by resolveAuthMode. */
@@ -83,6 +85,9 @@ export function parseApiConfig(env: Record<string, string | undefined> = process
   const parsed = apiEnvSchema.parse(env);
   if (!parsed.INTERNAL_AGENTD_TOKEN) {
     throw new Error('INTERNAL_AGENTD_TOKEN is required (service bearer for the private agentd)');
+  }
+  if (!parsed.HOSTED_MCP_TOKEN) {
+    throw new Error('HOSTED_MCP_TOKEN is required: the connectors this gateway hosts answer only callers that present it (agentd gets the same value)');
   }
   if (!parsed.ARTIFACT_URL_SECRET) {
     throw new Error('ARTIFACT_URL_SECRET is required: it signs the URLs of published HTML pages');

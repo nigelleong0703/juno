@@ -127,7 +127,7 @@ export function createMonitorCreateTool(opts: MonitorToolOptions): Tool {
       if (!made.ok) return text('The test check failed, so no monitor was created: ' + made.error + '. Fix the tool, its arguments or the items/id/pattern fields and try again.', true);
       return text(
         `Monitor created: ${made.id} ("${input.name}"). ${trigger.human.toLowerCase()}. The first look found ${String(made.existing)} item(s) that already match; they are recorded as seen and will never wake you. ` +
-        'From now on you are woken only when something new matches, and your final reply then is posted in this chat. It stops after ' + String(MONITOR_LIFETIME_DAYS) + ' days and you will ask the person to renew. Tell the person what you are watching and how often.',
+        'From now on you are woken only when something new matches, and then you decide what to tell the person. It stops after ' + String(MONITOR_LIFETIME_DAYS) + ' days and you will ask the person to renew. Tell the person what you are watching and how often.',
       );
     },
   };

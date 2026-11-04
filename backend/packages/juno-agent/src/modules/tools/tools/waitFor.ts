@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { sessionKey, type Enqueuer, type Store, type Tool, type ToolContext, type ToolResult, type WakeEvent } from '../../../contracts/index.js';
 import { newId, nowIso } from '../util.js';
 import { durationMs } from '../duration.js';
-import { BACKGROUND_LIMIT_TEXT, backgroundCapRefusal, backgroundSpawnOf } from '../../tasks/child-background.js';
+import { BACKGROUND_LIMIT_TEXT, backgroundCapRefusal, backgroundSpawnOf } from '../../tasks/subagent-background.js';
 import { recordBackgroundTask, taskLabel } from '../../tasks/background-registry.js';
 
 const waitForSchema = z.object({
@@ -58,7 +58,7 @@ export function createWaitForTool(opts: { store: Store; enqueuer: Enqueuer }): T
           kind: 'wait', label: taskLabel(JSON.stringify(parsed.filter)), notify: true, chainId: spawn.chainId, generation,
           status: 'running', startedAt: nowIso(),
         }));
-        // H-85: also schedule the expiry notice. Its id differs from the delivery's (Restate dedupes
+        // H-85: also schedule the expiry notice. Its id differs from the delivery's (the runner dedupes
         // sends by id); the Session drops it if the subscription was already consumed by an event.
         const expiry = expiryWake(ctx, awakeableId, expiresAt, generation);
         await ctx.step('schedule_expiry', async () => {

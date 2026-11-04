@@ -8,7 +8,7 @@
  */
 import { createMemoryBlobStore } from '@agent-desktop/db';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '@agent-desktop/db';
 import type { Store, Tool, ToolContext, ToolRegistry, ToolResult, WakeEvent } from '@agent-desktop/contracts';
 import { todoCheckSchema, type Agent } from '@agent-desktop/public-contracts';
@@ -40,7 +40,7 @@ function wake(): WakeEvent {
 
 const input: RunInput = { agentId: AGENT, conversationId: CONV, sessionKey: AGENT + ':' + CONV, wakeEvents: [wake()] };
 
-/** A journaling run context, like Restate's: a completed step replays instead of re-running. */
+/** A journaling run context, like the production one: a completed step replays instead of re-running. */
 function runContext(): { ctx: RunContext; journal: Map<string, unknown> } {
   const journal = new Map<string, unknown>();
   let next = 0;
@@ -48,15 +48,15 @@ function runContext(): { ctx: RunContext; journal: Map<string, unknown> } {
     journal,
     ctx: {
       rand: { uuidv4: () => 'id-' + String(next++) },
-      run<T>(name: string, action: () => Promise<T>): RestatePromise<T> {
-        if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-        return RestatePromise.resolve(action().then((value) => {
+      run<T>(name: string, action: () => Promise<T>): DurablePromise<T> {
+        if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+        return DurablePromise.resolve(action().then((value) => {
           journal.set(name, structuredClone(value));
           return value;
         }));
       },
-      awakeable: <T>() => ({ id: 'awk', promise: RestatePromise.resolve(new Promise<T>(() => {})) }),
-      drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+      awakeable: <T>() => ({ id: 'awk', promise: DurablePromise.resolve(new Promise<T>(() => {})) }),
+      drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
     },
   };
 }
@@ -263,7 +263,7 @@ describe('configured completion checks in the run gate', () => {
     const services = servicesFor(store, registryOf([sandboxTool(seen, () => ({ content: [{ type: 'text', text: 'ok' }] }))]));
     const cancellation = createRunCancellation({
       peek: async () => true,
-      get: () => RestatePromise.resolve(new Promise<boolean>(() => {})),
+      get: () => DurablePromise.resolve(new Promise<boolean>(() => {})),
     });
     cancellation.abort();
     expect(await createTodoGate(runContext().ctx, services, input, 'run-1', cancellation).settleFinal('final:0')).toBe('blocked');
@@ -281,7 +281,7 @@ describe('configured completion checks in the run gate', () => {
     });
     const cancellation = createRunCancellation({
       peek: () => cancelPromise,
-      get: () => RestatePromise.resolve(cancelPromise.then(() => true)),
+      get: () => DurablePromise.resolve(cancelPromise.then(() => true)),
     });
     const seen: string[] = [];
     const hung: Tool = {

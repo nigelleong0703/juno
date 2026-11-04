@@ -45,8 +45,11 @@ export function summaryPrompt(query: string, results: WebSearchResult[]): string
   return `${SUMMARY_INSTRUCTIONS}\n\nQuery: ${JSON.stringify(query)}\n\n<search_results>\n${blocks.join('\n')}\n</search_results>`;
 }
 
+/** A standard search hands the model the results themselves (the model is already about to read them); only the snippet is capped. */
+const SNIPPET_MAX_CHARS = 700;
+
 function rawList(results: WebSearchResult[]): string {
-  return results.map((row, index) => `${index + 1}. ${row.title}${row.publishedDate ? ` (${row.publishedDate.slice(0, 10)})` : ''}\n   ${row.url}${row.snippet ? `\n   ${row.snippet}` : ''}${row.image ? `\n   image: ${row.image}` : ''}`).join('\n');
+  return results.map((row, index) => `${index + 1}. ${row.title}${row.publishedDate ? ` (${row.publishedDate.slice(0, 10)})` : ''}\n   ${row.url}${row.snippet ? `\n   ${row.snippet.slice(0, SNIPPET_MAX_CHARS)}` : ''}${row.image ? `\n   image: ${row.image}` : ''}`).join('\n');
 }
 
 export function createWebSearchTool(opts: { provider: WebSearchProvider }): Tool {
@@ -90,10 +93,11 @@ export function createWebSearchTool(opts: { provider: WebSearchProvider }): Tool
       let text = 'No results.';
       if (results.length > 0) {
         const links = JSON.stringify(results.map((row) => ({ title: row.title, url: row.url })));
-        // The platform's fast model writes the answer; any failure keeps the raw list so the search never fails on it.
+        // A standard search returns the list at once (the summary model call cost ~8 s per search, measured 2026-11-02 against a
+        // 0.3-3 s search); an extended search's long pages are condensed by the fast model. Any failure keeps the raw list.
         let summary: string | null;
         try {
-          summary = ctx.quickText ? await ctx.quickText(summaryPrompt(parsed.query, results), ctx.agentId) : null;
+          summary = extended && ctx.quickText ? await ctx.quickText(summaryPrompt(parsed.query, results), ctx.agentId) : null;
         } catch {
           summary = null;
         }

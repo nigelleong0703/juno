@@ -26,9 +26,9 @@ class RecordingEnqueuer {
 
   async enqueue(event: WakeEvent): Promise<{ accepted: boolean; reason?: string }> {
     this.wakes.push(event);
-    if (this.throwOnEnqueue) throw new Error('restate connection reset');
+    if (this.throwOnEnqueue) throw new Error('runner connection reset');
     if (this.accepted) return { accepted: true };
-    return { accepted: false, reason: 'restate unavailable' };
+    return { accepted: false, reason: 'runner unavailable' };
   }
 
   async stopRun(): Promise<void> {}

@@ -18,6 +18,7 @@
  * execution/coordination.ts for the rollback boundary.
  */
 
+import { keepOutboundConnectionsWarm } from './outbound.js';
 import { serve } from '@hono/node-server';
 import { forgetPresence, startPresenceHeartbeat } from 'juno-agent/execution/presence';
 import { createRemoteVoicePort, serveVoiceCalls } from 'juno-agent/modules/tools/tools/discordVoiceRemote';
@@ -26,6 +27,8 @@ import {
   COORDINATOR_EXTRA_CONNECTIONS, DEFAULT_API_POOL, DEFAULT_COORDINATOR_POOL, DEFAULT_MEMORYD_POOL, DEFAULT_WORKER_POOL, WORKER_EXTRA_CONNECTIONS,
   type DbStore,
 } from '@agent-desktop/db';
+import { wireLive } from './live-wiring.js';
+import type { LiveRunSink, LiveRuns } from 'juno-agent/execution/live-runs';
 import { createLogger } from '@agent-desktop/log';
 import { requireSecretsKey } from '@agent-desktop/contracts/secrets';
 import { getConfig } from './config.js';
@@ -44,15 +47,14 @@ import { bootHarnessVersions } from 'juno-agent/modules/harness/store';
 import { createPostgresHarnessStore } from './harness/versions.js';
 import { runMigrations } from './migrations/runner.js';
 import { migrations } from './migrations/registry.js';
-import { createExecutionComputer, startExecution } from './execution/start.js';
+import { createExecutionComputer, startExecution, type ExecutionRuntime } from './execution/start.js';
 import { armMissingTimers } from './execution/arm-timers.js';
 import { requireWorkerLeaseCoordination, startWorkerLeaseCoordination, type WorkerLeaseCoordination } from './execution/coordination.js';
 import { createPluginHost, type PluginHost } from './plugins/host.js';
 import { pluginRowsFromEnv } from './plugins/config.js';
 import { builtinPlugins } from './plugins/builtin.js';
 import type { Services } from './plugins/services.js';
-import { startPushNotifications } from './push/notifier.js';
-import { startChannelDelivery } from './channels/delivery.js';
+import { startOutbox } from './outbox/index.js';
 import { startControlNotices } from './routes/control-notices.js';
 import { channelRegistryOf, type ChannelRegistry } from './channels/registry.js';
 import { startChannelRunners } from './channels/runners.js';
@@ -136,11 +138,12 @@ export interface RunningAgentd {
 }
 
 export async function startAgentd(options: AgentdOptions = {}): Promise<RunningAgentd> {
+  keepOutboundConnectionsWarm();
   const config = getConfig();
   const role: AgentdRole = options.role ?? config.AGENTD_ROLE;
   // E39: no built-in secrets. agentd always wires computerd (COMPUTERD_URL has a default),
   // signs screen tickets and calls it with these, so both are required at boot.
-  for (const name of ['COMPUTERD_TOKEN', 'SCREEN_TICKET_SECRET'] as const) {
+  for (const name of ['COMPUTERD_TOKEN', 'SCREEN_TICKET_SECRET', 'HOSTED_MCP_TOKEN'] as const) {
     if (!config[name]) throw new Error(name + ' is required: agentd has no built-in default');
   }
   if (config.MEMORYD_URL !== '' && config.MEMORYD_TOKEN === '') throw new Error('MEMORYD_TOKEN is required when MEMORYD_URL is set: agentd has no built-in default');
@@ -195,6 +198,10 @@ interface Core {
   channels: ChannelRegistry;
   catalog: StoredCatalog;
   voice: ReturnType<ChannelRegistry['voice']>;
+  /** The in-process live-text hub the HTTP stream reads. */
+  live: LiveRuns;
+  /** Where this process's runs publish live text: `live` itself, or (a worker of a split deployment) the cross-process sink. */
+  liveSink: LiveRunSink;
   monitorChecks: boolean;
   runner: Runner | undefined;
   enqueuer: RunnerEnqueuer | NoopEnqueuer;
@@ -220,14 +227,14 @@ async function buildCore(options: AgentdOptions, config: ReturnType<typeof getCo
   if (platformSkills !== undefined && mode.coordinator) {
     await seedPlatformSkills(platformSkills)
       .then((seeded) => log.info({ created: seeded.created.length, updated: seeded.updated.length, unchanged: seeded.unchanged.length }, 'Platform skills seeded'))
-      .catch((error: unknown) => log.error({ err: error }, 'Platform skills could not be seeded; skill_read reads the computer\'s files'));
+      .catch((error: unknown) => log.error({ err: error }, 'Platform skills could not be seeded; skill_read cannot serve them until the next boot'));
   }
   // The harness package (BACKEND §11.2): the repository seed becomes the active version of its store (migration 0053). An invalid seed
   // throws here, so the process does not start; without a database the seed is validated and served directly. Only the
   // coordinator writes the seed: workers read the versions it published.
   const harnessVersions = raw === undefined ? undefined : createPostgresHarnessStore(raw);
   if (harnessVersions === undefined) harnessSeedVersion();
-  else if (mode.coordinator) await bootHarnessVersions(harnessVersions);
+  else if (mode.coordinator) await bootHarnessVersions(harnessVersions, (fields, message) => log.info(fields, message));
   // The computer's home is where the memory views are written, so the client is made before the memory module (it holds no state of its own).
   const computerd = createComputerdClient({
     baseUrl: config.COMPUTERD_URL,
@@ -242,9 +249,11 @@ async function buildCore(options: AgentdOptions, config: ReturnType<typeof getCo
   // The memory items are the source of truth (BACKEND §5.4): the memory module exists only with Postgres. An item is embedded soon after
   // it is written (the module's writer); its start-up backfill embeds the rest.
   const memory = createMemoryModule({ store, ...(raw === undefined ? {} : { raw }), ...(embedder === undefined ? {} : { embedder }), home: computerd.home, log });
+  // The agents' sandbox client: the boot migrations read processes through it, then the execution service uses it.
+  const computer = raw === undefined ? undefined : createExecutionComputer({ store, config, computerd });
   if (mode.coordinator) {
     // The one-time data moves, in order, each with its marker row (migrations/registry.ts). A failure is logged, and the entry says what it stops.
-    await runMigrations(migrations, { store, ...(raw === undefined ? {} : { raw }), ...(memory === undefined ? {} : { identity: memory.graph.identity, memory: memory.graph }) }, log);
+    await runMigrations(migrations, { store, ...(raw === undefined ? {} : { raw }), ...(computer === undefined ? {} : { computer }), ...(memory === undefined ? {} : { identity: memory.graph.identity, memory: memory.graph }) }, log);
     memory?.start();
   }
   // memoryd (BACKEND §2.4): with MEMORYD_URL the runtime reads and writes memory through that service. This process keeps the graph
@@ -271,7 +280,6 @@ async function buildCore(options: AgentdOptions, config: ReturnType<typeof getCo
   // Plugins (docs/BACKEND.md "Plugins") load once the core services exist and before the runners, the HTTP server and the
   // execution service start. Their statuses are logged here; the tools they added are handed to execution below. An
   // execution-only worker skips process singletons (watchers, pollers): the coordinator already runs exactly one.
-  const computer = runner === undefined ? undefined : createExecutionComputer({ store, config, computerd });
   const plugins = createPluginHost<Services>({ log, rows: pluginRowsFromEnv(process.env), singletons: mode.coordinator });
   plugins.provide('store', store);
   plugins.provide('enqueuer', enqueuer);
@@ -307,6 +315,7 @@ async function buildCore(options: AgentdOptions, config: ReturnType<typeof getCo
   // It is not an exclusive external effect (no gateway, poller or push), so it is not a coordinator singleton.
   // Permission revocation still happens at effect time: the tool call re-reads the current rows before acting.
   const stopCatalogWatch = connectorCatalog.watch(CATALOG_REFRESH_MS);
+  const liveWiring = await wireLive(bus, mode);
   return {
     store, ownsStore, blobs, bus, raw, skills, platformSkills, harnessVersions, computerd, memory, memoryPort, computer, plugins, channels,
     catalog: connectorCatalog,
@@ -316,9 +325,11 @@ async function buildCore(options: AgentdOptions, config: ReturnType<typeof getCo
     // Monitors run while their plugin is active; a disabled plugin pauses them (their routines stay).
     monitorChecks: plugins.status().some((status) => status.name === 'monitors' && status.state === 'active'),
     runner, enqueuer,
+    live: liveWiring.live, liveSink: liveWiring.sink,
     stopCatalogWatch,
     close: async () => {
       stopCatalogWatch();
+      await liveWiring.stop();
       memory?.stop();
       runner?.stop();
       await plugins.stop();
@@ -327,14 +338,15 @@ async function buildCore(options: AgentdOptions, config: ReturnType<typeof getCo
   };
 }
 
-async function startExecutionOf(core: Core, config: ReturnType<typeof getConfig>): Promise<{ stop: () => Promise<void> }> {
+async function startExecutionOf(core: Core, config: ReturnType<typeof getConfig>): Promise<ExecutionRuntime> {
   const { runner, enqueuer } = core;
-  if (runner === undefined) return { stop: async () => undefined };
+  if (runner === undefined) return { stop: async () => undefined, warm: async () => 'unsupported', prepare: async () => 'failed' };
   return startExecution({
     store: core.store, blobs: core.blobs, config, runner, enqueuer,
     ...(core.voice === undefined ? {} : { voice: core.voice }),
     channels: core.channels,
     connectorCatalog: core.catalog,
+    live: core.liveSink,
     monitorChecks: core.monitorChecks,
     ...(core.memoryPort === undefined ? {} : { memory: core.memoryPort }),
     ...(core.skills === undefined ? {} : { skills: core.skills }),
@@ -404,10 +416,10 @@ async function bootCoordinator(options: AgentdOptions, config: ReturnType<typeof
     };
     const stopEvolution = evolutionDeps === undefined ? () => undefined : startSkillEvolution(evolutionDeps);
     const stopEvaluation = (): void => { stopWeekly(); stopEvolution(); };
-    const stopPush = await startPushNotifications({ store, bus, env: process.env });
+    // Every delivery to a platform chat or a phone is an outbox row, retried until it is sent or given up on (BACKEND 5.7.11); the coordinator is the only sender.
+    const outbox = await startOutbox({ store, bus, senders: channels.senders(), channels, blobs: core.blobs, enqueuer: core.enqueuer, env: process.env });
     // The thumbnail backfill (BACKEND 5.11): only with Postgres (raw SQL over the library) and a sandbox; it probes owners' computers passively.
     const stopThumbnails = raw === undefined ? () => undefined : startThumbnailBackfill({ store, blobs: core.blobs, computer, computerd, candidates: rawThumbnailCandidates(raw), log });
-    const stopChannelDelivery = await startChannelDelivery({ store, bus, senders: channels.senders() });
     // A change of who holds a screen or the Mac (computerd's control gateway) becomes a note to the agent; a Mac Stop has no agentd route, only this event.
     const stopControlNotices = await startControlNotices({ deps: { store, enqueuer: core.enqueuer }, bus, computerd });
     const stopChannelRunners = startChannelRunners({ store, enqueuer: core.enqueuer, channels, blobs: core.blobs, ...(memory === undefined ? {} : { identity: memory.graph.identity }), ...(computerd.home === undefined ? {} : { home: computerd.home }) });
@@ -415,15 +427,23 @@ async function bootCoordinator(options: AgentdOptions, config: ReturnType<typeof
     // Account deletion needs raw SQL for its bulk deletes; only the in-memory test store lacks it.
     const accountEraser = store.raw === undefined ? undefined : createAccountEraser({ store, raw: store.raw, bus, enqueuer: core.enqueuer, config, computerd, blobs: core.blobs, channels, ...(core.runner === undefined ? {} : { runner: core.runner }) });
 
+    // The execution runtime starts after the HTTP server (below); the warm route reaches it through this holder.
+    const execution: { current?: ExecutionRuntime } = {};
     const app = createInternalAgentApp({
       store,
       bus,
+      live: core.live,
+      warm: async (target, signal) => (execution.current === undefined ? 'unsupported' : execution.current.warm(target, signal)),
+      prepare: async (target, signal) => (execution.current === undefined ? 'failed' : execution.current.prepare(target, signal)),
       enqueuer: core.enqueuer,
       config,
       channels,
       blobs: core.blobs,
+      ...(raw === undefined ? {} : { raw }),
       appCatalog: catalog,
+      outbox: outbox.sender,
       computerd,
+      ...(computer === undefined ? {} : { computer }),
       pluginRoutes: plugins.routes(),
       ...(accountEraser === undefined ? {} : { accountEraser }),
       // LEAK: the channel ingress records speakers on the identity graph; it is not behind the memory port yet.
@@ -448,7 +468,7 @@ async function bootCoordinator(options: AgentdOptions, config: ReturnType<typeof
 
     // Both roles register the services (the routes enqueue work by service name). In `all` mode this process also claims and runs
     // it; a `coordinator`'s runner has `execute: false`, so it only stores the work for the workers.
-    const execution = await startExecutionOf(core, config).catch(async (error: unknown) => {
+    execution.current = await startExecutionOf(core, config).catch(async (error: unknown) => {
       log.error({ err: error }, 'Execution failed to start');
       await new Promise<void>((resolve) => server.close(() => resolve()));
       throw error;
@@ -480,11 +500,10 @@ async function bootCoordinator(options: AgentdOptions, config: ReturnType<typeof
       stopVoiceCalls();
       stopEvaluation();
       stopThumbnails();
-      stopPush?.();
-      stopChannelDelivery();
+      outbox.stop();
       stopControlNotices();
       stopChannelRunners();
-      await Promise.allSettled([stopHttp, execution.stop()]);
+      await Promise.allSettled([stopHttp, execution.current?.stop()]);
       // Executors are stopped before the drain marker: no worker claims new work while the coordinator leaves.
       await coordination?.stop();
       await core.close();

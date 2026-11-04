@@ -13,7 +13,7 @@
 // match this run's owner, agent and conversation.
 import type { Store, ToolContext } from '../../contracts/index.js';
 import { isRoutineWake } from '../../contracts/index.js';
-import { isChildRun } from '../tasks/childDelivery.js';
+import { hasSubagentParent } from '../tasks/subagentDelivery.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -78,14 +78,14 @@ async function isUserOriginAsyncCompletion(store: Store, ctx: ToolContext): Prom
   const claimedOrigin: unknown = ctx.wake.payload['originRunId'];
   if (typeof claimedOrigin === 'string' && claimedOrigin.length > 0 && claimedOrigin !== parentRunId) return false;
   const current = await store.get('runs', ctx.runId);
-  if (isChildRun(current)) return false;
+  if (hasSubagentParent(current)) return false;
   if (await isBoundTopLevelParent(store, ctx, link.chainId)) return true;
   return isBoundTopLevelParent(store, ctx, parentRunId);
 }
 
 export async function shouldAddFeedCard(store: Store, ctx: ToolContext): Promise<boolean> {
   const current = await store.get('runs', ctx.runId);
-  if (isChildRun(current)) return false;
+  if (hasSubagentParent(current)) return false;
   if (isRoutineWake(ctx.wake)) return false;
   if (ctx.wake.kind === 'user_message' && ctx.wake.origin.type === 'user') return true;
   return isUserOriginAsyncCompletion(store, ctx);

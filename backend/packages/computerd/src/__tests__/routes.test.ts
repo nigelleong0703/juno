@@ -56,7 +56,7 @@ async function build() {
     secret: TOKEN,
   });
   const app = createComputerApp({ lifecycle, provider, token: TOKEN, requireAuth: true });
-  return { app };
+  return { app, provider };
 }
 
 function post(app: Awaited<ReturnType<typeof build>>['app'], path: string, agentId: string | null, body: unknown = {}) {
@@ -73,8 +73,22 @@ function post(app: Awaited<ReturnType<typeof build>>['app'], path: string, agent
 
 describe('computerd routes', () => {
   let app: Awaited<ReturnType<typeof build>>['app'];
+  let provider: Awaited<ReturnType<typeof build>>['provider'];
   beforeEach(async () => {
-    ({ app } = await build());
+    ({ app, provider } = await build());
+  });
+
+  it('places and releases a hold on the computer, behind the bearer, and refuses a bad ttl', async () => {
+    const put = (body: unknown, auth = true) => app.request('/v1/computer/holds/run-1', { method: 'PUT', headers: { 'content-type': 'application/json', ...(auth ? { authorization: `Bearer ${TOKEN}` } : {}) }, body: JSON.stringify(body) });
+    expect((await put({ ttlMs: 90_000 }, false)).status).toBe(403);
+    expect((await put({ ttlMs: 0 })).status).toBe(400);
+    expect(provider.holds.size).toBe(0);
+    expect((await put({ ttlMs: 90_000 })).status).toBe(200);
+    expect([...provider.holds]).toEqual(['run-1']);
+    expect((await app.request('/v1/computer/holds/run-1', { method: 'DELETE', headers: { authorization: `Bearer ${TOKEN}` } })).status).toBe(200);
+    expect(provider.holds.size).toBe(0);
+    // A hold is passive: it did not connect, resume or create anything.
+    expect(provider.state.connectCalls).toBe(0);
   });
 
   it('rejects a missing bearer before any work', async () => {

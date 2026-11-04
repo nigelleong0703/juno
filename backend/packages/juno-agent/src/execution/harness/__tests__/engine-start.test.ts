@@ -167,11 +167,11 @@ describe('Run engine start (workflow level)', () => {
     expect(fired.origin).toEqual({ type: 'routine', routineId: 'rt-1', occurrenceAt: '2026-10-29T08:00:00.000Z' });
     expect(fired.routineId).toBe('rt-1');
 
-    const childWake = (parentRunId: string): WakeEvent => ({ ...wake, kind: 'child_task', origin: { type: 'agent', id: parentRunId, label: 'child task' }, trusted: false, priority: 'background', payload: { parentRunId, prompt: 'p' } });
-    const child = await start(store, 'run-child', childWake('run-routine'));
+    const subagentWake = (parentRunId: string): WakeEvent => ({ ...wake, kind: 'subagent_task', origin: { type: 'agent', id: parentRunId, label: 'child task' }, trusted: false, priority: 'background', payload: { parentRunId, prompt: 'p' } });
+    const child = await start(store, 'run-child', subagentWake('run-routine'));
     expect(child.origin).toEqual({ type: 'parent_run', runId: 'run-routine' });
     expect(child.rootOrigin).toEqual(fired.origin);
-    const grandchild = await start(store, 'run-grandchild', childWake('run-child'));
+    const grandchild = await start(store, 'run-grandchild', subagentWake('run-child'));
     expect(grandchild.rootOrigin).toEqual(fired.origin);
 
     const stranger = await start(store, 'run-stranger', { ...wake, trusted: false, payload: { text: 'hi', channelKind: 'telegram', speakerRole: 'stranger' } });

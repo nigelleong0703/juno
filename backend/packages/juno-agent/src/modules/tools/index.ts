@@ -29,6 +29,7 @@ import { createPersonLookupTool } from './tools/personLookup.js';
 import type { MemoryPort } from '../memory/port.js';
 import type { PlatformSkillsService, SkillsService } from '@agent-desktop/memory-graph/skills';
 import { createReactTool } from './tools/react.js';
+import { createAskAboutUncertainActionTool } from './tools/askAboutUncertainAction.js';
 import { createChannelHistoryTool, type ChannelPort } from './tools/channelHistory.js';
 import { createGroupRuleTool } from './tools/groupRule.js';
 import { createPreferenceNoteTool } from './tools/preferenceNote.js';
@@ -39,15 +40,13 @@ import { createConnectRequestTool } from './tools/connectRequest.js';
 import { createConnectorSearchTool } from './tools/connectorSearch.js';
 import { createProfileUpdateTool } from './tools/profileUpdate.js';
 import { createFeedPostTool } from './tools/feedPost.js';
-import { createFinishQuietlyTool } from './tools/finishQuietly.js';
 import { createDocumentCreateTool, createDocumentProposeTool, createDocumentReadTool } from './tools/documents.js';
 import { createTranscriptReadTool } from './tools/transcriptRead.js';
 import { createTranscriptSearchTool } from './tools/transcriptSearch.js';
 import { createOutputReadTool } from './tools/outputRead.js';
-import { createChildMessageTool, createChildResultsTool, createChildSpawnTool, createChildWaitTool } from '../tasks/childTools.js';
-import { createChildCancelTool } from '../tasks/childControl.js';
+import { createSubagentMessageTool, createSubagentSpawnTool } from '../tasks/subagentTools.js';
 import { createTaskStopTool, createTasksListTool } from './tools/taskTools.js';
-import type { ChildDispatchAdapter } from '../tasks/child.js';
+import type { SubagentDispatchAdapter } from '../tasks/subagent.js';
 import { createComputerScreenshotTool } from './tools/computerScreenshot.js';
 import { createCalendarTools } from './tools/calendarTools.js';
 import { createCalendarFreeBusyTool } from './tools/calendarFreeBusy.js';
@@ -74,6 +73,7 @@ import { currentHarnessVersion } from '../harness/loader.js';
 import { CORE_TOOL_NAMES } from './tools/namespaceDirectory.js';
 import { createToolPreparer } from './tools/prepareTools.js';
 import { createFileEditTool } from './tools/codingEdit.js';
+import { createFileRestoreTool } from './tools/filesRestore.js';
 import { createFileSearchTool } from './tools/codingSearch.js';
 import { createBrowserNavigateTool } from './tools/computerBrowser.js';
 import {
@@ -90,13 +90,15 @@ import { createRequestWithdrawTool } from './tools/requestWithdraw.js';
 import { createRequestSecureInputTool, createRequestTakeoverTool } from './tools/userHandoff.js';
 import { defaultEnvironmentSource, type ComputerClientProvider, type ComputerEnvironmentSource } from './computer/client.js';
 import { withRecreatedNote, withRestartNote } from './computer/shared.js';
+import { withHomeSync } from '../home/tool-sync.js';
+import type { HomeDeps } from '../home/service.js';
 import { createBrowserDialogTool } from './tools/computerBrowserDialog.js';
 import { createBrowserScrollTool } from './tools/computerBrowserScroll.js';
 import { createGoalBrowserTools, GOAL_BROWSER_NAMES } from './tools/browserGoals.js';
 import { createComputerBrowserAdvanceTool } from './tools/computerBrowserAdvance.js';
 import { createComputerBatchTool } from './tools/computerBatch.js';
 import { COMPUTER_BATCH_TOOL } from './computer/batch.js';
-import { createReportToParentTool } from '../tasks/childReport.js';
+import { createReportToParentTool } from '../tasks/subagentReport.js';
 import type { PluginTool } from './plugin-tool.js';
 import { createWebFetchTool } from './tools/webFetch.js';
 import { createWebSearchTool } from './tools/webSearch.js';
@@ -125,7 +127,7 @@ export interface CreateToolRegistryInput {
    */
   mcp?: McpManager;
   /** PH12: the core's run entry, so a spawned child run id and the executed run id are the same run. */
-  childDispatch?: ChildDispatchAdapter;
+  subagentDispatch?: SubagentDispatchAdapter;
   /** Web search provider (SEARCH_PROVIDER). Without one, web_search is not registered; web_fetch always is. */
   webSearch?: WebSearchProvider;
   /** Test seam for web_fetch's DNS and transport. */
@@ -189,12 +191,12 @@ export async function createToolRegistry(input: CreateToolRegistryInput): Promis
   tools.set('meal_delete', createMealDeleteTool());
   tools.set('meal_summary', createMealSummaryTool());
   tools.set('react', createReactTool(input.channels));
+  tools.set('ask_about_uncertain_action', createAskAboutUncertainActionTool({ store }));
   tools.set('channel_history', createChannelHistoryTool(input.channels));
   tools.set('group_rule', createGroupRuleTool(computer === undefined ? {} : { computer }));
   tools.set('preference_note', createPreferenceNoteTool(computer === undefined ? {} : { computer }));
   tools.set('feed_post', createFeedPostTool({ ...(input.webFetchDeps === undefined ? {} : { deps: input.webFetchDeps }) }));
   tools.set('profile_update', createProfileUpdateTool({ store }));
-  tools.set('finish_quietly', createFinishQuietlyTool());
   // Documents (BACKEND 5.11a) need no computer: the text is an argument and lives in the blob store.
   tools.set('document_create', createDocumentCreateTool({ store }));
   tools.set('document_read', createDocumentReadTool({ store }));
@@ -206,11 +208,8 @@ export async function createToolRegistry(input: CreateToolRegistryInput): Promis
   tools.set('transcript_search', createTranscriptSearchTool());
   tools.set('attachment_read', createAttachmentReadTool());
   tools.set('output_read', createOutputReadTool());
-  tools.set('child_spawn', createChildSpawnTool({ store, ...(input.childDispatch === undefined ? {} : { adapter: input.childDispatch }), ...(input.memory === undefined ? {} : { memory: input.memory }) }));
-  tools.set('child_wait', createChildWaitTool());
-  tools.set('child_results', createChildResultsTool());
-  tools.set('child_cancel', createChildCancelTool());
-  tools.set('child_message', createChildMessageTool({ store, ...(input.childDispatch === undefined ? {} : { adapter: input.childDispatch }) }));
+  tools.set('subagent_start', createSubagentSpawnTool({ store, ...(input.subagentDispatch === undefined ? {} : { adapter: input.subagentDispatch }), ...(input.memory === undefined ? {} : { memory: input.memory }) }));
+  tools.set('subagent_message', createSubagentMessageTool({ store, ...(input.subagentDispatch === undefined ? {} : { adapter: input.subagentDispatch }) }));
   tools.set('report_to_parent', createReportToParentTool());
   tools.set('tasks_list', createTasksListTool({ ...(computer === undefined ? {} : { computer }) }));
   tools.set('task_stop', createTaskStopTool({ ...(computer === undefined ? {} : { computer }) }));
@@ -256,7 +255,9 @@ export async function createToolRegistry(input: CreateToolRegistryInput): Promis
     tools.set('artifact_publish', createArtifactPublishTool({ store, computer, environment, ...(input.memory === undefined ? {} : { memory: input.memory }) }));
     tools.set('space_publish', createSpacePublishTool({ store, computer, environment }));
     // After a recovery the next computer tool result tells the model its processes and screens were reset.
-    for (const [name, tool] of [...tools].slice(computerToolsFrom)) tools.set(name, withRecreatedNote(tool));
+    // The home sync (BACKEND 5.3) happens here, where the computer is reached: after the run's first computer tool and after file-changing ones.
+    const homeDeps = (): HomeDeps | undefined => { const home = computer()?.home; return home === undefined ? undefined : { store, home, ...(input.skills === undefined ? {} : { skills: input.skills }) }; };
+    for (const [name, tool] of [...tools].slice(computerToolsFrom)) tools.set(name, withHomeSync(withRecreatedNote(tool), homeDeps));
   }
 
   // Read-only network tools: web_fetch is always there; web_search only with a configured provider.
@@ -346,7 +347,7 @@ export async function createToolRegistry(input: CreateToolRegistryInput): Promis
   // reads the map at call time, so the two proxies are included in their own results (and skipped).
   // skill_read stays readable without a computer (selected skills live on the store row); skill_search
   // is read-only replay-safe discovery over the same bounded catalog. Both are always registered.
-  tools.set('skill_read', createSkillReadTool({ ...(computer === undefined ? {} : { computer }), ...(input.skills === undefined ? {} : { skills: input.skills }), ...(input.platformSkills === undefined ? {} : { platformSkills: input.platformSkills }) }));
+  tools.set('skill_read', createSkillReadTool({ ...(input.skills === undefined ? {} : { skills: input.skills }), ...(input.platformSkills === undefined ? {} : { platformSkills: input.platformSkills }) }));
   tools.set(SKILL_SEARCH, createSkillSearchTool({ ...(input.skills === undefined ? {} : { skills: input.skills }), ...(input.platformSkills === undefined ? {} : { platformSkills: input.platformSkills }) }));
   tools.set(TOOL_SEARCH, createToolSearchTool({
     all: discoveryFor,
@@ -381,6 +382,7 @@ function registerFileTools(
   tools.set('files.read', createFileReadTool(opts));
   tools.set('files.write', createFileWriteTool(opts));
   tools.set('files.edit', createFileEditTool(opts));
+  tools.set('files.restore', createFileRestoreTool(opts));
   tools.set('files.search', createFileSearchTool(opts));
 }
 

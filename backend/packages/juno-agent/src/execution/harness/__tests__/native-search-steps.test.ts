@@ -1,6 +1,6 @@
 /** A search the provider ran inside the model call shows as the same "Looked up" step Juno's web_search gives, once, with its links as citations. */
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import type { WakeEvent } from '../../../contracts/index.js';
@@ -14,12 +14,12 @@ function journaling(journal = new Map<string, unknown>()): RunContext {
   let next = 0;
   return {
     rand: { uuidv4: () => 'u' + String(next++) },
-    run<T>(name: string, action: () => Promise<T>): RestatePromise<T> {
-      if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-      return RestatePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
+    run<T>(name: string, action: () => Promise<T>): DurablePromise<T> {
+      if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+      return DurablePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
     },
     awakeable: () => { throw new Error('unused'); },
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
 }
 

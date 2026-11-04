@@ -98,6 +98,8 @@ export interface LinkHubOptions {
   requireDeclaration?(linkId: string): boolean;
   /** The person's Stop or resume, pressed on the computer itself (`FrameType.CONTROL`); computerd writes it to the control gateway. */
   onControl?(linkId: string, body: ControlBody): void;
+  /** A link came up (first dial, redial after a deploy or a resume). Must not throw or block. */
+  onLinkUp?(linkId: string): void;
   /** Who holds the computer in the control gateway right now, asked when it connects (so a Stop made elsewhere while it was away reaches it). */
   controlOf?(linkId: string): 'agent' | 'user' | 'stopped' | undefined | Promise<'agent' | 'user' | 'stopped' | undefined>;
 }
@@ -121,6 +123,7 @@ export function createLinkHub(options: LinkHubOptions): LinkHub {
     for (const wake of waiters.get(session.id) ?? []) wake(session);
     waiters.delete(session.id);
     log({ linkId: session.id, bootId: session.bootId }, 'computer link up');
+    options.onLinkUp?.(session.id);
     session.onClosed(() => {
       if (sessions.get(session.id) === session) sessions.delete(session.id);
       log({ linkId: session.id }, 'computer link down');

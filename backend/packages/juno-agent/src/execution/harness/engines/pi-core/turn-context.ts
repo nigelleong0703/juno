@@ -19,6 +19,23 @@ export async function guardModelSelection<T>(action: () => Promise<T>): Promise<
   }
 }
 
+/**
+ * The steps of this run at which a compaction was committed. Built only from journaled results (a compaction that changed the epoch), so a replay
+ * rebuilds the same list.
+ */
+export interface CompactionLog {
+  steps: number[];
+}
+
+/** Two compactions this close together mean compacting does not help: the history is still too big right after it. */
+export const THRASH_WINDOW_STEPS = 5;
+
+/** Thrown instead of compacting a second time within the window; the turn ends the run `blocked` (turn.ts). */
+export const COMPACTION_THRASH = new Error('pi-core: compaction does not help');
+
+/** Whether a compaction at `stepIndex` would be the second one within the window. */
+export const recentlyCompacted = (log: CompactionLog, stepIndex: number): boolean => log.steps.some((step) => stepIndex - step < THRASH_WINDOW_STEPS);
+
 /** A journaled context is the slim reference (no message list); test brains without `slim` journal as is. */
 export function journaled(services: RunServices, context: BrainContext): BrainContext {
   return services.brain.slim?.(context) ?? context;
@@ -56,6 +73,7 @@ export async function prepareTurnContext(
   budget: RunBudget,
   runId: string,
   tools: Tool[],
+  compactions: CompactionLog,
 ): Promise<BrainContext> {
   let context = previousContext;
   if (stepIndex > 0) {
@@ -65,10 +83,18 @@ export async function prepareTurnContext(
     }))));
   }
   if (services.brain.shouldCompact(context)) {
+    // The second compaction within a few steps would only repeat the first: the run ends blocked instead of looping on summaries.
+    if (recentlyCompacted(compactions, stepIndex)) throw COMPACTION_THRASH;
     const before = context;
     context = await guardModelSelection(() => ctx.run(`compact:${stepIndex}`, () => compactAndRefresh(services, input, before, tools, `ctxN:${runId}:${stepIndex}:compact`)));
+    if (context.compactionEpoch !== before.compactionEpoch) compactions.steps.push(stepIndex);
     const compactWithin = await chargeCompactionStep({ ctx, services, runId, budget, key: 'compact:' + String(stepIndex), context });
     if (!compactWithin.ok) throw BUDGET_EXHAUSTED;
+  } else if (services.brain.shouldTrim?.(context) === true && services.brain.trimResults !== undefined) {
+    // Below the compaction trigger but past the trim share: the old large tool results become stubs, once, as an epoch boundary (BACKEND §3.5.2b).
+    const trim = services.brain.trimResults.bind(services.brain);
+    const before = context;
+    context = await guardModelSelection(() => ctx.run(`trim:${stepIndex}`, async () => journaled(services, await trim(before))));
   }
   return context;
 }

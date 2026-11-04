@@ -8,7 +8,7 @@ import { receiptFor } from '../../services/event-receipts.js';
 import { docOwner } from '../../../execution-owner.js';
 import type { SuspensionDeps } from './suspend.js';
 
-/** Poll durable subscription state; each observation and sleep is replayed by Restate. */
+/** Poll durable subscription state; each observation and sleep is replayed by the runner. */
 export async function waitForEvent(deps: SuspensionDeps): Promise<'resume' | 'stopped'> {
   const { ctx, services, input, runId, stepIndex, suspend, cancellation } = deps;
   const id = suspend.awakeableId;

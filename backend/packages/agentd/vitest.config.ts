@@ -8,6 +8,7 @@ export default defineConfig({
       OWNER_ID: 'member-robin',
       COMPUTERD_TOKEN: 'test-computerd-token',
       SCREEN_TICKET_SECRET: 'test-screen-ticket-secret',
+      HOSTED_MCP_TOKEN: 'test-hosted-mcp-token',
     },
   },
 });

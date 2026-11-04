@@ -67,13 +67,23 @@ async function resumeRunning(
   });
 }
 
+/** The wait on the person: after 10 minutes of it the run lets its computer pause, and the answer holds it again (BACKEND §7.3b). */
+async function waitOnPerson<T>(services: RunServices, runId: string, wait: () => Promise<T>): Promise<T> {
+  const unpark = services.computerHolds?.parked(runId);
+  try {
+    return await wait();
+  } finally {
+    unpark?.();
+  }
+}
+
 export async function awaitUser(
   ctx: RunContext,
   services: RunServices,
   input: RunInput,
   runId: string,
   stepIndex: number,
-  suspend: { reason?: 'user' | 'time' | 'event' | 'child'; awakeableId?: string },
+  suspend: { reason?: 'user' | 'time' | 'event'; awakeableId?: string },
   cancellation: RunCancellation,
   options?: AwaitUserOptions,
 ): Promise<'resolved' | 'cancelled' | 'interrupted_by_message'> {
@@ -116,15 +126,8 @@ export async function awaitUser(
   // The user's message came before the awakeable existed: nothing could resolve it, so end the wait as if it had.
   const outcome = saved?.status === 'pending' && saved.interruptRequested === true
     ? INTERRUPTED_BY_MESSAGE
-    : await cancellation.race(() => awakeable.promise);
-  if (outcome === CANCELLED) {
-    if (requestId && saved?.reconciliation !== undefined) {
-      await ctx.run(`stopped:${stepIndex}`, async () => {
-        await services.store.patch('requests', requestId, { awakeableId: '', interrupted: true });
-      });
-    }
-    return 'cancelled';
-  }
+    : await waitOnPerson(services, runId, () => cancellation.race(() => awakeable.promise));
+  if (outcome === CANCELLED) return 'cancelled';
 
   if (isInterrupted(outcome)) {
     // The request stays pending, but its dead awakeable is dropped and it is marked interrupted: a later tap is then
@@ -159,7 +162,12 @@ export async function drainAndAppend(
   if (events === CANCELLED) return CANCELLED;
   if (events.length === 0) return false;
   await ctx.run(`steer:${journalKey}`, async () => {
-    await appendWakeEvents(services.store, services.blobs, input.sessionKey, events, attachmentPlacement(services, input), services.brain);
+    await appendWakeEvents(services.store, services.blobs, input.sessionKey, events, attachmentPlacement(services, input), services.brain, input.sendOnly === true);
   });
+  // A person who writes into a run nobody was waiting on is waiting now: the rest of the run answers them like any other (final text delivered).
+  if (events.some((event) => event.origin.type === 'user')) input.sendOnly = false;
+  const itemIds = events.flatMap((event) => event.kind === 'user_message' && event.origin.type === 'user' && typeof event.payload.itemId === 'string'
+    ? [event.payload.itemId] : []);
+  if (itemIds.length > 0) input.steeredUserItemIds = [...new Set([...(input.steeredUserItemIds ?? []), ...itemIds])];
   return true;
 }

@@ -3,6 +3,13 @@
  * (GET /v1/brand-icons/<file>.png or .svg, public: a logo is not private). The PNG (192x192, transparent, rendered once from the
  * SVG by scripts/brand-icons-png.mjs) is what clients use, since every one of them, iPhone included, decodes it. `<file>` is a file name or any id in BRAND_ICON_FILES,
  * so a client can build the URL from a catalog id or a channel kind alone. The files live in packages/api/assets/brands.
+ *
+ * Sources of the files added 2026-11-02 (owner approved downloading; Simple Icons is CC0, the mark drawn white on a rounded tile of the brand's own hex):
+ *   calendly   https://cdn.jsdelivr.net/npm/simple-icons@14.15.0/icons/calendly.svg      #006BFF
+ *   todoist    https://cdn.jsdelivr.net/npm/simple-icons@14.15.0/icons/todoist.svg       #E44332
+ *   (hex values: https://raw.githubusercontent.com/simple-icons/simple-icons/develop/data/simple-icons.json)
+ *   teams      https://static2.sharepointonline.com/files/fabric/assets/brand-icons/product/svg/teams_48x1.svg  (Microsoft's own brand icon set, used as is)
+ *   microsoft-contacts shares the Outlook file: that Microsoft set has no separate People icon.
  */
 import { readFile } from 'node:fs/promises';
 import type { Hono } from 'hono';
@@ -12,6 +19,10 @@ export const BRAND_ICON_FILES: Readonly<Record<string, string>> = {
   asana: 'asana',
   atlassian: 'atlassian',
   bilibili: 'bilibili',
+  calendly: 'calendly',
+  'microsoft-contacts': 'outlook',
+  teams: 'teams',
+  todoist: 'todoist',
   github: 'github',
   'github-reading': 'github',
   gmail: 'gmail',

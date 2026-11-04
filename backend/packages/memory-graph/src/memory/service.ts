@@ -23,11 +23,21 @@ export interface MemoryItems {
   /**
    * THE read for anything that goes into a prompt or a search (BACKEND §5.3): the active items one presence may see. Owner: all, except
    * another agent's private ones (`agentId` undefined = the app, which sees all). Group `<key>`: unsensitive items of that group and
-   * public ones. Other: unsensitive public items. Oldest first. The filter runs in SQL; with `vectors` each item carries its vector.
+   * public ones. Other: unsensitive public items. Oldest first. The filter runs in SQL.
    */
-  memoryFor(ownerId: string, presence: Presence, agentId: string | undefined, options?: { vectors?: boolean }): Promise<VisibleItem[]>;
-  /** Store the vector of an item's text; false when the item is gone or its text changed since (the vector is then not stored). */
+  memoryFor(ownerId: string, presence: Presence, agentId: string | undefined): Promise<VisibleItem[]>;
+  /**
+   * The items nearest to `query` by cosine (closest first, with their cosine), among those `memoryFor(presence, agentId)` returns that
+   * carry a vector from the same model; with `ids` only among those. Ranked in SQL by the HNSW index.
+   */
+  nearest(ownerId: string, presence: Presence, agentId: string | undefined, query: ItemVector, options: { limit: number; ids?: readonly string[] }): Promise<Array<{ id: string; cosine: number }>>;
+  /** Store the vector of an item's text; false when the item is gone or its text changed since (the vector is then not stored). Throws when the vector's length is not the column's. */
   setVector(ownerId: string, id: string, text: string, vector: ItemVector): Promise<boolean>;
+  /**
+   * Makes the vector column `dimension` long. When it differs (another embedding model) every stored vector is dropped to be embedded
+   * again, the column retyped and the index rebuilt. True when it changed.
+   */
+  alignVectorDimension(dimension: number): Promise<boolean>;
   /** Items that have no vector from `model` yet, across owners (not retracted), oldest first: the boot backfill's work list. */
   itemsNeedingVector(model: string, limit: number): Promise<Array<{ ownerId: string; id: string; text: string }>>;
   /** One item of this owner, or undefined. */
@@ -87,7 +97,7 @@ export function createMemoryItems(db: DurableDb, options: MemoryItemsOptions = {
       assertText('item text', patch.text);
       assignments.push({ column: 'text', value: patch.text.trim() });
       // A new text has no vector until it is embedded again (the writer is called below).
-      assignments.push({ column: 'embedding', value: null, cast: '::text::jsonb' }, { column: 'embed_model', value: null });
+      assignments.push({ column: 'embedding', value: null, cast: '::text::vector' }, { column: 'embed_model', value: null });
     }
     if (patch.kind !== undefined) {
       assertOneOf('kind', patch.kind, ITEM_KINDS);
@@ -166,15 +176,19 @@ export function createMemoryItems(db: DurableDb, options: MemoryItemsOptions = {
 
     updateItem,
 
-    async memoryFor(ownerId, presence, agentId, memoryOptions = {}) {
+    async memoryFor(ownerId, presence, agentId) {
       assertOwner(ownerId);
-      const withVectors = memoryOptions.vectors === true;
-      return (await repo.listVisibleRows(db, ownerId, presence, agentId, withVectors)).map((row) => {
-        const item = repo.toItem(row);
-        if (!withVectors) return item;
-        const vector = Array.isArray(row.embedding) && typeof row.embed_model === 'string' ? { embedding: row.embedding, embedModel: row.embed_model } : null;
-        return { ...item, vector };
-      });
+      return (await repo.listVisibleRows(db, ownerId, presence, agentId)).map(repo.toItem);
+    },
+
+    async nearest(ownerId, presence, agentId, query, options) {
+      assertOwner(ownerId);
+      if (options.ids?.length === 0) return [];
+      return repo.nearestRows(db, ownerId, presence, agentId, query, options);
+    },
+
+    alignVectorDimension(dimension) {
+      return repo.alignEmbeddingDimension(db, dimension);
     },
 
     async setVector(ownerId, id, text, vector) {

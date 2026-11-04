@@ -120,6 +120,27 @@ describe('owner routes over HTTP', () => {
     expect((await call(me, `/v1/memory/items/${item.id}`, 'PATCH', { audience: 'group' })).status).toBe(400);
   });
 
+  it('sharing: the list can be read as one agent, and only the owner moves an item between one agent and all of them (BACKEND 5.4a)', async () => {
+    const me = freshOwner();
+    await memory.people.ensureOwner(me, 'Robin');
+    for (const id of ['agt-a', 'agt-b']) await raw.put('agents', { id: `${id}-${me}`, name: id, ownerId: me, createdAt: '2026-10-16T00:00:00.000Z' } as never);
+    const [a, b] = [`agt-a-${me}`, `agt-b-${me}`];
+    const mine = await memory.addItem(me, { text: 'Keeps bees', kind: 'fact', file: 'memory', saidIn: 'app', audience: 'owner', agentId: a });
+    await memory.addItem(me, { text: 'Lives in Lisbon', kind: 'fact', file: 'memory', saidIn: 'app', audience: 'owner' });
+    if (mine === null) throw new Error('the item was not written');
+    const listed = async (agentId: string) => texts(itemsOf((await call(me, `/v1/memory/items?agentId=${agentId}`)).json) as Array<{ text: string }>);
+    expect(await listed(a)).toEqual(['Keeps bees', 'Lives in Lisbon']);
+    expect(await listed(b)).toEqual(['Lives in Lisbon']);
+    expect(itemsOf((await call(me, '/v1/memory/items')).json)).toHaveLength(2);
+
+    expect((await call(me, `/v1/memory/items/${mine.id}`, 'PATCH', { agentId: null })).json).not.toHaveProperty('agentId');
+    expect(await listed(b)).toEqual(['Keeps bees', 'Lives in Lisbon']);
+    expect((await call(me, `/v1/memory/items/${mine.id}`, 'PATCH', { agentId: b })).json).toMatchObject({ agentId: b });
+    expect(await listed(a)).toEqual(['Lives in Lisbon']);
+    // An agent that is not the owner's cannot be named.
+    expect((await call(me, `/v1/memory/items/${mine.id}`, 'PATCH', { agentId: 'agt-of-someone-else' })).status).toBe(400);
+  });
+
   it('review: the queue lists needs-review items; keep shows one (naming its person), delete removes one', async () => {
     const me = freshOwner();
     await memory.people.ensureOwner(me, 'Robin');

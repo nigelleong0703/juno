@@ -10,7 +10,7 @@
  */
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise, TerminalError } from '@agent-desktop/durable';
+import { DurablePromise, TerminalError } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import {
   sessionKey,
@@ -171,10 +171,10 @@ function bodyHarness(runId: string): { ctx: RunBodyContext; finished: Array<{ se
     ctx: {
       key: runId,
       rand: { uuidv4: () => runId + '-' + (counter += 1) },
-      run: <T>(_name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
-      awakeable: <T>() => ({ id: runId + '-awake', promise: RestatePromise.resolve(new Promise<T>(() => {})) }),
-      drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
-      cancel: { peek: async () => false, get: () => RestatePromise.resolve(false) },
+      run: <T>(_name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()),
+      awakeable: <T>() => ({ id: runId + '-awake', promise: DurablePromise.resolve(new Promise<T>(() => {})) }),
+      drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
+      cancel: { peek: async () => false, get: () => DurablePromise.resolve(false) },
       runFinished: async (key: string, failedRunId: string) => {
         finished.push({ sessionKey: key, runId: failedRunId });
       },

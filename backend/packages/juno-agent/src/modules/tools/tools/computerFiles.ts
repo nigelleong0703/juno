@@ -9,6 +9,7 @@ import {
 } from '../computer/client.js';
 import { resolveToolPath } from './codingPath.js';
 import { refuseHomeRead, refuseProtectedHomePath, refuseServerReports, visibleFileText } from './homeGuard.js';
+import { keepBeforeWrite } from './fileUndo.js';
 import { actionResult, computerFailure, ON_PROPERTY, ON_SCHEMA } from '../computer/shared.js';
 import {
   DEFAULT_READ_LINES,
@@ -125,8 +126,10 @@ export function createFileWriteTool(opts: {
         const path = await resolveToolPath(opts, ctx, parsed.path, parsed.on);
         const refused = refuseServerReports(path) ?? (parsed.on === 'mac' ? undefined : await refuseProtectedHomePath(opts, ctx, client, path));
         if (refused !== undefined) return refused;
+        const kept = await keepBeforeWrite(client, ctx, { path, on: parsed.on ?? 'sandbox' }, 'files.write');
+        if (!kept.ok) return kept.refusal;
         const written = await client.writeFile(ctx.agentId, { path, content: parsed.content }, ctx.signal, parsed.on);
-        return actionResult(`Wrote ${written.bytes} byte(s) to ${written.path}`, { path: written.path, bytes: written.bytes });
+        return actionResult(`Wrote ${written.bytes} byte(s) to ${written.path}${kept.note}`, { path: written.path, bytes: written.bytes, ...(kept.snapshotId === undefined ? {} : { snapshotId: kept.snapshotId }) });
       } catch (error) {
         return computerFailure(error, ctx.signal);
       }

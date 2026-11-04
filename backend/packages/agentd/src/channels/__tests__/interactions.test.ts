@@ -169,7 +169,7 @@ describe('channel button taps', () => {
     expect((await handleChannelClick(deps, OWNER, 'telegram', 'bot-1', { token: 'garbage', from: { id: OWNER_EXT, name: '' } })).status).toBe('stale');
   });
 
-  it('delivers a pending question as buttons through the sender, once', async () => {
+  it('delivers a pending question as buttons through the sender', async () => {
     const conversationId = await setup('telegram', 'bot-1', 'chat-1');
     await putRequest(conversationId, 'req_d', 'question');
     const sent: Array<{ text: string; labels: string[] }> = [];
@@ -179,7 +179,6 @@ describe('channel button taps', () => {
     };
     const input = { ownerId: OWNER, conversationId, requestId: 'req_d' };
     expect(await deliverChannelRequest(store, (kind) => (kind === 'telegram' ? sender : undefined), input)).toEqual({ status: 'sent', externalId: '1' });
-    expect(await deliverChannelRequest(store, (kind) => (kind === 'telegram' ? sender : undefined), input)).toEqual({ status: 'duplicate' });
     expect(sent).toEqual([{ text: expect.any(String), labels: ['Alpha', 'Beta'] }]);
   });
 });

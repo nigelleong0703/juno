@@ -326,14 +326,16 @@ describe('computer tool behaviour', () => {
     expect(client.calls.map((call) => [call.action, call.agentId])).toEqual([
       ['runShell', 'agent-1'],
       ['readFile', 'agent-1'],
+      // files.write reads what it is about to replace first, to keep the old version (BACKEND 5.2d).
+      ['readFile', 'agent-1'],
       ['writeFile', 'agent-1'],
       ['browser', 'agent-1'],
       ['browser', 'agent-1'],
     ]);
     expect(client.calls[0]?.args).toEqual({ command: 'ls -la', timeoutMs: 5000, cwd: '/workspace' });
-    expect(client.calls[3]?.args).toEqual({ action: 'navigate', url: 'https://example.com' });
+    expect(client.calls[4]?.args).toEqual({ action: 'navigate', url: 'https://example.com' });
     // The loaded page comes back with the navigation, so the model needs no separate snapshot turn.
-    expect(client.calls[4]?.args).toEqual({ action: 'snapshot', tab: 't1', follow: true });
+    expect(client.calls[5]?.args).toEqual({ action: 'snapshot', tab: 't1', follow: true });
   });
 
   it('says a slow page is still loading instead of claiming it loaded', async () => {
@@ -343,6 +345,28 @@ describe('computer tool behaviour', () => {
     expect(result.isError).not.toBe(true);
     expect(JSON.stringify(result.content)).toContain('still loading');
     expect(result.details).toMatchObject({ loading: true });
+  });
+
+  it('adds one screen card per run in a direct chat the person started, none in a room', async () => {
+    await store.put('conversations', { id: 'conv-1', kind: 'direct', memberIds: ['owner'], agentIds: ['agent-1'] } as never);
+    await store.put('conversations', { id: 'room-1', kind: 'room', memberIds: ['owner'], agentIds: ['agent-1'] } as never);
+    const navigate = requireTool(registry, 'browser.navigate');
+    await navigate.execute({ url: 'https://example.com/a' }, toolContext(store));
+    await navigate.execute({ url: 'https://example.com/b' }, toolContext(store));
+    await navigate.execute({ url: 'https://example.com/a' }, toolContext(store, { conversationId: 'room-1', runId: 'run-2' }));
+    const cards = ((await store.list('items')).items as Array<{ type: string; conversationId: string; runId: string }>).filter((item) => item.type === 'screen_ref');
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ conversationId: 'conv-1', runId: 'run-1', agentId: 'agent-1' });
+  });
+
+  it('the screen card names a screenshot of the page the run is on, re-sent under the same id', async () => {
+    await store.put('conversations', { id: 'conv-1', kind: 'direct', memberIds: ['owner'], agentIds: ['agent-1'] } as never);
+    await requireTool(registry, 'browser.navigate').execute({ url: 'https://example.com/a' }, toolContext(store, { runId: 'run-shot' }));
+    await vi.waitFor(async () => {
+      const card = await store.get('items', 'scr-run-shot');
+      expect(card).toMatchObject({ type: 'screen_ref', url: expect.stringContaining('example.com') });
+      expect((card as { previewLibraryId?: string }).previewLibraryId).toBeDefined();
+    });
   });
 
   it('reports a refused action as a tool error with the machine code', async () => {
@@ -472,6 +496,7 @@ describe('computer environment', () => {
     await requireTool(registry, 'files.write').execute({ path: 'notes/b.md', content: 'x' }, toolContext(store));
     expect(client.calls.map((call) => call.args)).toEqual([
       '/custom/base/notes/a.md',
+      '/custom/base/notes/b.md',
       { path: '/custom/base/notes/b.md', content: 'x' },
     ]);
   });

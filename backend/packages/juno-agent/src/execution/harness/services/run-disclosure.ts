@@ -1,4 +1,4 @@
-import type { RestatePromise } from '@agent-desktop/durable';
+import type { DurablePromise } from '@agent-desktop/durable';
 import type { ToolResult, TranscriptEntry } from '../../../contracts/index.js';
 import { appendToTranscript } from '../../brain/index.js';
 import { readLatestCompaction } from '../../brain/compaction.js';
@@ -11,7 +11,7 @@ import { presentToolScope, readToolScope } from '../../../modules/tools/scope.js
 
 // Minimal durable surface the disclosure step needs; RunBodyContext satisfies it.
 export interface DisclosureContext {
-  run<T>(name: string, action: () => Promise<T>): RestatePromise<T>;
+  run<T>(name: string, action: () => Promise<T>): DurablePromise<T>;
 }
 
 const MAX_QUERY_CHARS = 2000;
@@ -94,6 +94,53 @@ function definitionsAlreadySent(earlier: readonly TranscriptEntry[], epoch: numb
   return described;
 }
 
+// What the preparer produced: read-only work that depends on the transcript only for notes of earlier runs, never on the wake row,
+// so it can run while the wake is being persisted. The step below writes the note once that is done.
+type Prepared =
+  | { status: 'ready'; epoch: number; earlier: TranscriptEntry[]; result: ToolResult }
+  | { status: 'aborted' }
+  | { status: 'failed' };
+
+export interface StartedDisclosure {
+  /** Starts the read-only half on the first call, with the same answer to every later one. */
+  begin(): Promise<Prepared>;
+}
+
+/**
+ * The read-only half of the disclosure (tool search over the user's words), started on demand: `run.ts` begins it inside the first
+ * execution of `persist-wake`, beside the wake write, and `prepareToolDisclosure` joins it inside its own journaled step. A replay in
+ * which both steps are journaled never begins it. The promise never rejects. Undefined when there is nothing to prepare.
+ */
+export function startToolDisclosure(services: RunServices, input: RunInput, runId: string, cancellation: RunCancellation): StartedDisclosure | undefined {
+  const prepare = services.toolRegistry.prepareForModel;
+  const wake = input.wakeEvents[0];
+  if (prepare === undefined || wake === undefined) return undefined;
+  const query = extractDisclosureQuery(input);
+  const noteId = disclosureNoteId(input, runId);
+  const run = async (): Promise<Prepared> => {
+    try {
+      if (cancellation.signal.aborted || cancellation.state.cancelled || await cancellation.peek()) return { status: 'aborted' };
+      // The note names the hidden tools in the words of the model's mode (run with tool_call, or call them by name).
+      const toolSearch = await services.brain.toolSearchMode?.(input.agentId);
+      const epoch = (await readLatestCompaction(services.store, input.sessionKey))?.epoch ?? 0;
+      // The row's own id is ignored, so a re-run after a crash between the write and the journal entry decides as the first attempt did.
+      const earlier = (await readTranscript(services.store, input.sessionKey)).filter((entry) => entry.id !== noteId);
+      // The conversation's frozen tool scope, or who is present when its first build has not run yet (batch 5b): the note names only what the run may use.
+      const toolScope = readToolScope(metaOf(findSystemEntry(earlier)?.message ?? {})?.toolScope)
+        ?? await presentToolScope(services.store, { ownerId: wake.ownerId === '' ? undefined : wake.ownerId, agentId: input.agentId, conversationId: input.conversationId, wake: input.wakeEvents });
+      const context = buildToolContext(services, { ...input, ...(toolSearch === undefined ? {} : { toolSearch }), toolScope }, runId, wake, cancellation.signal, 'disclosure:' + runId);
+      const result = await prepare.call(services.toolRegistry, query, context, definitionsAlreadySent(earlier, epoch));
+      return { status: 'ready', epoch, earlier, result };
+    } catch {
+      return { status: cancellation.signal.aborted ? 'aborted' : 'failed' };
+    }
+  };
+  let begun: Promise<Prepared> | undefined;
+  return { begin: () => (begun ??= run()) };
+}
+
+const disclosureNoteId = (input: RunInput, runId: string): string => 'tx_' + input.sessionKey + '_' + DISCLOSURE_KEY + runId + '_0';
+
 // Optional first-model tool preparation, once per run, journaled under a deterministic step.
 // After persist-wake, before the first brain context. Missing method keeps old behavior;
 // a throwing preparer falls back to fixed search; a stop wins the race and finalizes stopped.
@@ -103,44 +150,25 @@ export async function prepareToolDisclosure(
   input: RunInput,
   runId: string,
   cancellation: RunCancellation,
+  started: StartedDisclosure | undefined = startToolDisclosure(services, input, runId, cancellation),
 ): Promise<'continue' | 'stopped'> {
-  const prepare = services.toolRegistry.prepareForModel;
-  if (prepare === undefined) return 'continue';
+  if (started === undefined) return 'continue';
   if (cancellation.state.cancelled) return 'stopped';
   try {
     if (await cancellation.peek()) return 'stopped';
   } catch {
     return 'continue';
   }
-  const wake = input.wakeEvents[0];
-  if (wake === undefined) return 'continue';
-  const query = extractDisclosureQuery(input);
   const startedAt = Date.now();
   let outcome: DisclosureOutcome | typeof CANCELLED;
   try {
     outcome = await cancellation.race(() =>
       ctx.run(DISCLOSURE_STEP, async (): Promise<DisclosureOutcome> => {
         if (cancellation.signal.aborted) return { status: 'aborted' };
-        const noteId = 'tx_' + input.sessionKey + '_' + DISCLOSURE_KEY + runId + '_0';
-        let epoch: number;
-        let earlier: TranscriptEntry[];
-        let result: ToolResult;
-        try {
-          // The note names the hidden tools in the words of the model's mode (run with tool_call, or call them by name).
-          const toolSearch = await services.brain.toolSearchMode?.(input.agentId);
-          epoch = (await readLatestCompaction(services.store, input.sessionKey))?.epoch ?? 0;
-          // The row's own id is ignored, so a re-run after a crash between the write and the journal entry decides as the first attempt did.
-          earlier = (await readTranscript(services.store, input.sessionKey)).filter((entry) => entry.id !== noteId);
-          // The conversation's frozen tool scope, or who is present when its first build has not run yet (batch 5b): the note names only what the run may use.
-          const toolScope = readToolScope(metaOf(findSystemEntry(earlier)?.message ?? {})?.toolScope)
-            ?? await presentToolScope(services.store, { ownerId: wake.ownerId === '' ? undefined : wake.ownerId, agentId: input.agentId, conversationId: input.conversationId, wake: input.wakeEvents });
-          const context = buildToolContext(services, { ...input, ...(toolSearch === undefined ? {} : { toolSearch }), toolScope }, runId, wake, cancellation.signal, 'disclosure:' + runId);
-          result = await prepare.call(services.toolRegistry, query, context, definitionsAlreadySent(earlier, epoch));
-        } catch {
-          if (cancellation.signal.aborted) return { status: 'aborted' };
-          return { status: 'failed' };
-        }
-        if (cancellation.signal.aborted) return { status: 'aborted' };
+        const prepared = await started.begin();
+        if (prepared.status === 'aborted' || cancellation.signal.aborted) return { status: 'aborted' };
+        if (prepared.status === 'failed') return { status: 'failed' };
+        const { epoch, earlier, result } = prepared;
         if (result.isError === true) return { status: 'failed' };
         const texts: string[] = [];
         for (const part of result.content) {

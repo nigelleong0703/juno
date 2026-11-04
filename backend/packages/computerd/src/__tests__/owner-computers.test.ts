@@ -135,6 +135,33 @@ describe('owner computer boundary', () => {
     expect(f.provider('bob').state.connectCalls).toBe(bobConnects);
   });
 
+  it('serves a passive home call only from a running computer and never creates or resumes one for it', async () => {
+    const f = await fixture();
+    const passive = (path: string) => f.app.request(path, {
+      method: 'POST',
+      headers: { authorization: 'Bearer service', 'x-owner-id': 'alice', 'x-agent-id': 'agent-alice', 'content-type': 'application/json', 'x-juno-passive': '1' },
+      body: JSON.stringify({ agentId: 'agent-alice' }),
+    });
+    const lifecycle = () => f.computers.forOwner('alice').lifecycle;
+
+    // No computer yet: asleep (503 computer_asleep), and nothing was created.
+    const none = await passive('/v1/home/snapshot');
+    expect(none.status).toBe(503);
+    expect(await none.json()).toMatchObject({ code: 'computer_asleep' });
+    expect(lifecycle().currentBinding()).toBeNull();
+
+    expect((await f.request('alice', '/v1/screens/self/ensure', {})).status).toBe(200);
+    expect((await passive('/v1/home/snapshot')).status).toBe(200);
+
+    // Paused: still asleep afterwards, no resume; the same call without the header resumes it.
+    expect((await f.request('alice', '/v1/computer/pause', {})).status).toBe(200);
+    const connects = f.provider('alice').state.connectCalls;
+    expect((await passive('/v1/home/snapshot')).status).toBe(503);
+    expect(f.provider('alice').state.connectCalls).toBe(connects);
+    expect((await f.request('alice', '/v1/home/snapshot', { agentId: 'agent-alice' })).status).toBe(200);
+    expect(f.provider('alice').state.connectCalls).toBe(connects + 1);
+  });
+
   it('preserves legacy files and recovers separate bindings/display pools using hashed paths', async () => {
     const f = await fixture();
     const binding = JSON.stringify({ sandboxId: 'existing-legacy', template: 'old' });

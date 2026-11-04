@@ -27,6 +27,8 @@ export * from './plugin.js';
 export * from './apps.js';
 export * from './artifact.js';
 export * from './document.js';
+export * from './file-history.js';
+export * from './outbox.js';
 export * from './usage.js';
 export * from './model-providers.js';
 export * from './settings.js';

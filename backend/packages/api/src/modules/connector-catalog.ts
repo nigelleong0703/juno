@@ -12,10 +12,9 @@
  * and reach this process through agentd's plugin host (the `connectors-builtin` plugin and any other plugin's connectors);
  * this file adds the scopes of the hosted services, which only the gateway knows.
  */
-import { HEVY_MCP_PATH, platformKeyConfigured, withoutCoveredComposio, type CatalogEntry } from '@agent-desktop/contracts/mcp';
+import { platformKeyConfigured, withoutCoveredComposio, type CatalogEntry } from '@agent-desktop/contracts/mcp';
 import { McpAuthorizationError } from './mcp-authorization.js';
 import { GOOGLE_MCP_PATH, SERVICES } from './google-mcp.js';
-import { SG_MCP_PATH } from './sg-mcp.js';
 
 export type { CatalogEntry };
 
@@ -117,7 +116,7 @@ export function validateCatalog(catalog: readonly CatalogEntry[]): void {
       if (entry.toolkit === undefined) throw new Error('connector ' + entry.id + ' from Composio needs a toolkit');
       continue;
     }
-    const hosted = entry.url.startsWith(GOOGLE_MCP_PATH) || entry.url.startsWith(SG_MCP_PATH) || entry.url === HEVY_MCP_PATH;
+    const hosted = entry.url.startsWith(GOOGLE_MCP_PATH);
     if (!hosted && !isSecure(entry.url)) throw new Error('connector ' + entry.id + ' must use an https MCP url');
     if (entry.name === '' || entry.description === '') throw new Error('connector ' + entry.id + ' needs a name and description');
     if (entry.configuredClientIssuer !== undefined && (entry.scopes === undefined || entry.scopes.length === 0)) {

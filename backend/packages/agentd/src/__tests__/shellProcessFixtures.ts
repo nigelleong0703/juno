@@ -103,7 +103,7 @@ export class ProcessSandboxClient extends SandboxFiles {
 
   private owned(agentId: string, handle: string): Entry {
     const entry = this.processes.get(handle);
-    if (!entry) throw new ComputerError('failed', 'process ' + handle + ' is not known');
+    if (!entry) throw new ComputerError('failed', 'process ' + handle + ' is not known on this computer (it expired or never existed)');
     if (entry.scope !== agentId) throw new ComputerError('not_allowed', 'process ' + handle + ' belongs to another agent');
     return entry;
   }

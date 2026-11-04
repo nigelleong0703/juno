@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createMemoryItems, type VisibleItem } from '@agent-desktop/memory-graph/memory';
+import { createMemoryItems } from '@agent-desktop/memory-graph/memory';
 import type { Store, ToolContext, WakeEvent } from '../../../contracts/index.js';
 import { createMemoryStore } from '../../../testing/store.js';
 import { profileIdFor } from '@agent-desktop/public-contracts';
@@ -111,6 +111,21 @@ describe('the memory a run reads', () => {
     expect(hits.map((hit) => hit.item.text)).toEqual(['Roasting marshmallows at the group camp.']);
     expect(embed.mock.calls).toEqual([[['roasting']]]);
   });
+
+  it('merges the SQL vector order with the keyword order: a meaning-only match appears, a double match wins, noise is cut', async () => {
+    const owner = fresh();
+    const { items } = graph.graph;
+    const put = async (text: string, embedding: number[]): Promise<void> => {
+      const item = await items.addItem(owner, { text, kind: 'fact', file: 'memory', saidIn: 'app', audience: 'owner' });
+      await items.setVector(owner, item?.id ?? '', text, { embedding, embedModel: 'm' });
+    };
+    await put('Works as a nurse in Leiden.', [1, 0]);
+    await put('Looks after patients at the hospital.', [0.9, 0.3]);
+    await put('Has a cat named Miso.', [0, 1]);
+    const embedder = { model: 'm', embed: vi.fn(async (texts: readonly string[]) => texts.map(() => [1, 0])) } as Embedder;
+    const hits = await searchMemory({ ...graph.graph, embedder }, { ownerId: owner, presence: { kind: 'owner' }, agentId: undefined, query: 'nurse' });
+    expect(hits.map((hit) => hit.item.text)).toEqual(['Works as a nurse in Leiden.', 'Looks after patients at the hospital.']);
+  });
 });
 
 describe('the memory section of a group run', () => {
@@ -201,14 +216,14 @@ describe('the vectors of the items', () => {
     hook.writer = createVectorWriter({ items: hooked, embedder, delayMs: 1 });
     const written = await hooked.addItem(owner, { text: 'Likes cycling.', kind: 'preference', file: 'bank:preferences', saidIn: 'app', audience: 'owner' });
     await hook.writer.flush();
-    const [stored] = await hooked.memoryFor(owner, { kind: 'owner' }, undefined, { vectors: true });
-    expect(stored).toMatchObject({ id: written?.id, vector: { embedding: [0.5, 0.5], embedModel: embedder.model } });
+    const query = { embedding: [0.5, 0.5], embedModel: embedder.model };
+    expect((await hooked.nearest(owner, { kind: 'owner' }, undefined, query, { limit: 10 })).map((hit) => hit.id)).toEqual([written?.id]);
 
     // An item written with no hook (before the writer existed) is found by the backfill, and is embedded once.
     const older = await graph.graph.items.addItem(owner, { text: 'Read the news at night.', kind: 'preference', file: 'bank:preferences', saidIn: 'app', audience: 'owner' });
     expect(await backfillVectors({ items: graph.graph.items, embedder })).toBeGreaterThan(0);
-    const vectors = await graph.graph.items.memoryFor(owner, { kind: 'owner' }, undefined, { vectors: true });
-    expect(vectors.find((item: VisibleItem) => item.id === older?.id)?.vector).toEqual({ embedding: [0.5, 0.5], embedModel: embedder.model });
+    const nearest = await graph.graph.items.nearest(owner, { kind: 'owner' }, undefined, query, { limit: 10 });
+    expect(nearest.map((hit) => hit.id).sort()).toEqual([older?.id, written?.id].sort());
     expect(await backfillVectors({ items: graph.graph.items, embedder })).toBe(0);
   });
 

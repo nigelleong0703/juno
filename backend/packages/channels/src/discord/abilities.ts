@@ -44,7 +44,7 @@ async function sendDiscordFile(fetchFn: typeof fetch, auth: { token: string }, c
 }
 
 /** What a Discord chat can do: no input fields in cards; ADD_REACTIONS and ATTACH_FILES are part of the install permissions. */
-export const discordCapabilities = () => declareCapabilities({ ui: { fields: false } });
+export const discordCapabilities = () => declareCapabilities({ ui: { fields: false }, hears: 'all' });
 
 /** Discord's capability layer. Its communication layer is `createDiscordSender` and the Gateway (agentd). */
 export const discordAbilities: ChannelAbilities = {

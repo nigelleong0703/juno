@@ -9,12 +9,13 @@ import { createEngineRegistry, type EngineAdapter, type EngineRegistry } from '.
 import { resolveRunEngine } from '../engines/selection.js';
 import type { RunInput } from './run-types.js';
 import { runKindFor, runTitleFor } from '../logic/busy.js';
-import { originOfWake, quietEligibleOf, rootOriginOf } from '../logic/run-origin.js';
-import { expirePendingRequests } from '../../child-run-input.js';
+import { nobodyWaitingOf, originOfWake, rootOriginOf } from '../logic/run-origin.js';
+import { expirePendingRequests } from '../../subagent-run-input';
 import { emitAgentStatus } from '../../agent-status.js';
-import { putRunPreservingChild } from './run-reservation.js';
+import { putRunPreservingSubagent } from './run-reservation.js';
 import { runStartedEvent, runTerminalEvent } from './agui-events.js';
 import { closeRunTasks, emitRunTask } from '../../../modules/tasks/agent-tasks.js';
+import { previewOfWake } from '../../../modules/tasks/routines/preview.js';
 
 export function defaultRegistry(): EngineRegistry {
   return createEngineRegistry([createPiAdapter()]);
@@ -32,13 +33,15 @@ async function reportedTaskTitle(store: Store, input: RunInput): Promise<string 
   return title === undefined || title.trim() === '' ? undefined : title;
 }
 
-async function newRun(store: Store, input: RunInput, runId: string, engine?: RunEngineSnapshot): Promise<Run & { quietEligible?: boolean }> {
+async function newRun(store: Store, input: RunInput, runId: string, engine?: RunEngineSnapshot): Promise<Run & { nobodyWaiting?: boolean; preview?: true }> {
   const now = new Date().toISOString();
   const origin = originOfWake(input.conversationId, input.wakeEvents[0]);
   const rootOrigin = await rootOriginOf(store, origin, input.wakeEvents[0]);
-  const quietEligible = await quietEligibleOf(store, input.wakeEvents[0]);
+  const nobodyWaiting = await nobodyWaitingOf(store, input.wakeEvents[0]);
+  const preview = await previewOfWake(store, input.wakeEvents[0]);
   return {
-    ...(quietEligible ? { quietEligible } : {}),
+    ...(nobodyWaiting ? { nobodyWaiting } : {}),
+    ...(preview ? { preview } : {}),
     id: runId,
     agentId: input.agentId,
     conversationId: input.conversationId,
@@ -80,7 +83,7 @@ async function failRunStart(
   const now = new Date().toISOString();
   await ctx.runFail(async () => {
     await expirePendingRequests(store, runId);
-    const finished = await putRunPreservingChild(store, {
+    const finished = await putRunPreservingSubagent(store, {
       ...(await newRun(store, input, runId, engine)),
       status: cancelled ? 'stopped' : 'failed',
       finishedAt: now,
@@ -103,8 +106,6 @@ export async function startEngineForRun(
   input: RunInput,
   runId: string,
   cancellation: Pick<RunCancellation, 'peek'>,
-  /** Runs once, inside the journaled init step, after the run row is started (detached work only). */
-  afterStart?: () => void,
 ): Promise<{ adapter: EngineAdapter; snapshot: RunEngineSnapshot }> {
   let adapter: EngineAdapter;
   let snapshot: RunEngineSnapshot;
@@ -121,11 +122,10 @@ export async function startEngineForRun(
   }
 
   const journaled = await ctx.runInit(async () => {
-    const created = await putRunPreservingChild(store, await newRun(store, input, runId, snapshot), true);
+    const created = await putRunPreservingSubagent(store, await newRun(store, input, runId, snapshot), true);
     await store.emit(runStartedEvent(created));
     await emitRunTask(store, created, true);
     await emitAgentStatus(store, created.agentId);
-    afterStart?.();
     return snapshot;
   });
   // On resume the journaled snapshot replays while the adapter resolves fresh: an exact

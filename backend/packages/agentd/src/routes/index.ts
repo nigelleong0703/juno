@@ -6,21 +6,27 @@
 
 import { type Hono } from 'hono';
 import type { Store, Enqueuer, EventBus, BlobStore } from '@agent-desktop/contracts';
+import type { DurableDb } from '@agent-desktop/durable';
 import { bearerAuth } from '../auth.js';
 import type { AuthOptions } from '../auth.js';
 import type { Identity } from '@agent-desktop/memory-graph/identity';
 import type { MemoryPort } from 'juno-agent/modules/memory/port';
 import type { ComputerdClient } from '../computerd.js';
+import type { ComputerClient } from 'juno-agent/computer';
 import { registerAgents } from './agents.js';
 import { registerAgentTasks } from './agent-tasks.js';
 import { registerConversations } from './conversations.js';
 import { registerItems } from './items.js';
+import { registerGroupSettings } from './group-settings.js';
 import { registerAguiRuns } from './agui-runs.js';
 import { registerRuns } from './runs.js';
 import { registerModels } from './models.js';
 import { registerModelProviders } from './model-providers.js';
 import { registerRequests } from './requests.js';
 import { registerDocuments } from './documents.js';
+import { registerFiles } from './files.js';
+import { registerOutbox } from './outbox.js';
+import type { OutboxSender } from '../outbox/sender.js';
 import { registerRoutines } from './routines.js';
 import { registerRules } from './rules.js';
 import { registerDelegations } from './delegations.js';
@@ -31,6 +37,7 @@ import { registerMeals } from './meals.js';
 import { registerCalendar } from './calendar.js';
 import { registerTranscriptions } from './transcriptions.js';
 import { registerSpeech, type Speaker } from './speech.js';
+import { registerVoiceCall, type VoiceCallIssuer, type VoiceWarm, type VoicePrepare } from './voice-call.js';
 import { registerIdeas } from './ideas.js';
 import { registerFeed } from './feed.js';
 import { registerProactive } from './proactive.js';
@@ -65,6 +72,10 @@ export interface AgentdDeps {
   config?: Record<string, unknown>;
   /** computerd's internal API; absent keeps the screen routes out of the app. */
   computerd?: ComputerdClient;
+  /** The agents' computer client (the file tools use the same one): putting back an earlier version of a file writes through it; absent answers 503. */
+  computer?: ComputerClient;
+  /** The outbox sender (coordinator): the routes wake it after a retry or an unfreeze and read the delivery health from it. Absent in tests that do not run one. */
+  outbox?: Pick<OutboxSender, 'wake' | 'health'>;
   /** The versioned skill store (Postgres); absent without Postgres, and then the skill routes answer 503 and no skill can be selected. */
   skills?: SkillsService;
   /** The identity graph (people and accounts); absent when there is no Postgres (tests with the in-memory store), and nothing is recorded. */
@@ -83,12 +94,20 @@ export interface AgentdDeps {
   mcp?: McpManager;
   /** The blob store: platform files a chat message carries are kept there (through the library), as app uploads are. */
   blobs?: BlobStore;
+  /** Raw SQL (Postgres only): deleting an agent asks it which of the agent's blobs no other row names. Absent with the in-memory store, and then the agent's bytes stay. */
+  raw?: DurableDb;
   /** Fetch for the Telegram Bot API (connect, bind confirmation); absent uses the global fetch. Tests inject a fake. */
   channelFetch?: typeof fetch;
   /** Feishu `registerApp` (device-flow app creation); absent uses the SDK's. Tests inject a fake. */
   feishuRegisterApp?: FeishuRegisterApp;
   /** Text-to-speech sidecar client; absent uses the one TTS_ENABLED configures. */
   speaker?: Speaker;
+  /** Call issuance can be replaced in tests; production uses LiveKit configuration. */
+  voiceCallIssuer?: VoiceCallIssuer;
+  /** Warms a conversation's prompt cache (one tiny model call, nothing stored); absent answers the warm route 503. Boot binds it to the execution runtime. */
+  warm?: VoiceWarm;
+  /** Starts the reads a conversation's next run can do before the person has finished speaking; absent answers the prepare route 503. Boot binds it to the execution runtime. */
+  prepare?: VoicePrepare;
   /** The HTTP routes the loaded plugins registered (`ctx.http.route`); production passes the host's list, absent adds none. */
   pluginRoutes?: readonly PluginRoute[];
 }
@@ -105,11 +124,15 @@ export function registerRoutes(app: Hono, deps: AgentdDeps) {
   registerModels(app, deps);
   registerModelProviders(app, deps);
   registerConversations(app, deps);
+  registerGroupSettings(app, deps);
   registerItems(app, deps);
   registerAguiRuns(app, deps);
+  registerVoiceCall(app, deps);
   registerRuns(app, deps);
   registerRequests(app, deps);
   registerDocuments(app, deps);
+  registerFiles(app, deps);
+  registerOutbox(app, deps);
   registerRoutines(app, deps);
   registerRules(app, deps);
   registerDelegations(app, deps);

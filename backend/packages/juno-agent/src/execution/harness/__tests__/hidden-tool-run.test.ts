@@ -5,7 +5,7 @@
  * the provider needs to replay the exchange.
  */
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { AssistantTurn, Brain, BrainContext, Tool, ToolRegistry, WakeEvent } from '../../../contracts/index.js';
@@ -55,16 +55,16 @@ function context(): RunContext {
   const journal = new Map<string, unknown>();
   return {
     rand: { uuidv4: () => 'id-' + String(journal.size) },
-    run<T>(name: string, action: () => Promise<T>): RestatePromise<T> {
-      return RestatePromise.resolve(action().then((value) => {
+    run<T>(name: string, action: () => Promise<T>): DurablePromise<T> {
+      return DurablePromise.resolve(action().then((value) => {
         journal.set(name, value);
         return value;
       }));
     },
-    awakeable<T>(): { id: string; promise: RestatePromise<T> } {
-      return { id: 'awake', promise: RestatePromise.resolve(new Promise<T>(() => {})) };
+    awakeable<T>(): { id: string; promise: DurablePromise<T> } {
+      return { id: 'awake', promise: DurablePromise.resolve(new Promise<T>(() => {})) };
     },
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
 }
 

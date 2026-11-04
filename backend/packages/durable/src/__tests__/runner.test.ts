@@ -184,12 +184,17 @@ describe.each(backends)('durable runner ($name)', (backend) => {
     const other = runner.enqueue({ service: 'Lane', key: 'other', handler: 'slow', input: 'c' });
     await eventually(() => expect(log).toContain('start c'));
     expect(await runner.invoke({ service: 'Lane', key: 'same', handler: 'peek', input: undefined })).toBe('peeked');
-    // Two distinct keys run at once; which claim lands first is the database's choice.
-    expect([...log].sort()).toEqual(['start a', 'start c']);
+    // Two distinct keys run at once; on key "same" exactly one of a / b runs. a and b are invoked without awaiting each other, so
+    // which row is written (and claimed) first is not ordered by the test — only that the same key never runs two at once.
+    const sameStarts = log.filter((l) => l === 'start a' || l === 'start b');
+    expect(sameStarts).toHaveLength(1);
+    expect(log).toContain('start c');
+    const first = sameStarts[0]!.slice('start '.length);
+    const second = first === 'a' ? 'b' : 'a';
     release();
     await Promise.all([a, b, other]);
     await eventually(() => expect(log.filter((l) => l.startsWith('end'))).toHaveLength(3));
-    expect(log.indexOf('start b')).toBeGreaterThan(log.indexOf('end a'));
+    expect(log.indexOf('start ' + second)).toBeGreaterThan(log.indexOf('end ' + first));
   });
 
   it('retries a failing invocation up to the cap, then fails it terminally and tells onFailure', async () => {

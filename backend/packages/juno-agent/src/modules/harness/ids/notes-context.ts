@@ -55,6 +55,6 @@ export const CONTEXT_NOTE_IDS = [
   'tasks.unreadable',
   'tasks.header',
   'tasks.open_count',
-  'tasks.child_binding_malformed',
-  'tasks.child_binding_unreadable',
+  'tasks.subagent_binding_malformed',
+  'tasks.subagent_binding_unreadable',
 ] as const;

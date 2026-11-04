@@ -13,7 +13,7 @@ export const RESERVED_PORTS: readonly number[] = [5199, 8787, 8788, 8791, 8792, 
 /** Set by the runtime. A caller's `env` may not set these: a second database, a fixed port or a known secret would break the isolation. */
 const MANAGED_KEYS: ReadonlySet<string> = new Set([
   'DATABASE_URL', 'API_HOST', 'API_PORT', 'AGENTD_PORT', 'AGENTD_URL', 'AUTH_MODE', 'AUTH_TRUSTED_ORIGINS', 'BETTER_AUTH_URL',
-  'BETTER_AUTH_SECRET', 'INTERNAL_AGENTD_TOKEN', 'SECRETS_KEY', 'ARTIFACT_URL_SECRET', 'SPACE_URL_SECRET', 'ARTIFACT_HOST',
+  'BETTER_AUTH_SECRET', 'INTERNAL_AGENTD_TOKEN', 'HOSTED_MCP_TOKEN', 'SECRETS_KEY', 'ARTIFACT_URL_SECRET', 'SPACE_URL_SECRET', 'ARTIFACT_HOST',
   'SPACE_DOMAIN', 'BLOB_DIR', 'MEDIA_CACHE_DIR', 'SITE_ICON_CACHE_DIR',
 ]);
 
@@ -25,6 +25,7 @@ const EMPTY_UNLESS_SET: readonly string[] = ['EMBEDDING_BASE_URL', 'EMBEDDING_AP
 
 export interface EmbeddedSecrets {
   internalToken: string;
+  hostedMcpToken: string;
   authSecret: string;
   secretsKey: string;
   screenTicketSecret: string;
@@ -38,6 +39,7 @@ export function generateSecrets(): EmbeddedSecrets {
   const hex = (): string => randomBytes(32).toString('hex');
   return {
     internalToken: hex(),
+    hostedMcpToken: hex(),
     authSecret: hex(),
     // requireSecretsKey wants a base64 encoding of 32 bytes.
     secretsKey: randomBytes(32).toString('base64'),
@@ -87,6 +89,7 @@ export function buildEmbeddedEnv(input: EmbeddedEnvInput): Record<string, string
     BETTER_AUTH_URL: apiUrl,
     BETTER_AUTH_SECRET: input.secrets.authSecret,
     INTERNAL_AGENTD_TOKEN: input.secrets.internalToken,
+    HOSTED_MCP_TOKEN: input.secrets.hostedMcpToken,
     SECRETS_KEY: input.secrets.secretsKey,
     ARTIFACT_URL_SECRET: input.secrets.artifactUrlSecret,
     SPACE_URL_SECRET: input.secrets.spaceUrlSecret,

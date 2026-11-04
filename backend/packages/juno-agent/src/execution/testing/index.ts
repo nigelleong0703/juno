@@ -4,9 +4,10 @@
  */
 
 import { createHash } from 'node:crypto';
-import { appendFile, readFile } from 'node:fs/promises';
+import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import type { AssistantTurn } from '../../contracts/index.js';
 import type { ModelProvider } from '../brain/index.js';
+import { ProviderFailureError } from '../brain/model-failure.js';
 import { assistantMessage } from '../brain/messages.js';
 import { unwrapProxyCalls } from '../brain/tool-proxy.js';
 import type { Message } from '@earendil-works/pi-ai';
@@ -23,6 +24,11 @@ export interface ScriptedTurn {
    * cannot be known). A turn without `step` keeps the by-position behavior.
    */
   step?: number;
+  /**
+   * The provider answers this turn's FIRST call with a rate limit (429) announcing `retryAfterSeconds`, once: the failed call records nothing in
+   * the transcript, so the script remembers (a sidecar file) that it already failed and plays the turn on the next call.
+   */
+  fail?: { retryAfterSeconds: number };
 }
 
 interface Cursor {
@@ -49,6 +55,15 @@ function toAssistantTurn(turn: ScriptedTurn): AssistantTurn {
 function imageHashes(messages: Message[]): string[] {
   return messages.flatMap((message) => (message.role === 'assistant' || typeof message.content === 'string' ? [] : message.content))
     .flatMap((part) => (part.type === 'image' ? [createHash('sha256').update(Buffer.from(part.data, 'base64')).digest('hex')] : []));
+}
+
+function requestShape(messages: Message[]): { hashes: string[]; chars: number; toolResultChars: number } {
+  const textOf = (message: Message): string => (typeof message.content === 'string' ? message.content : message.content.map((part) => (part.type === 'text' ? part.text : part.type === 'toolCall' ? JSON.stringify(part) : '')).join('\n'));
+  return {
+    hashes: messages.map((message) => createHash('sha256').update(JSON.stringify(message.content)).digest('hex').slice(0, 12)),
+    chars: messages.reduce((total, message) => total + textOf(message).length, 0),
+    toolResultChars: messages.reduce((total, message) => total + (message.role === 'toolResult' ? textOf(message).length : 0), 0),
+  };
 }
 
 function lastUserText(messages: Message[]): string | null {
@@ -135,6 +150,14 @@ function nextTurn(script: ScriptedTurn[], cursor: Cursor, messages: Message[]): 
   return toAssistantTurn(script[selected] ?? current);
 }
 
+/** True the first time a failure key is seen (and remembers it in the sidecar file), false afterwards. */
+async function failOnce(file: string, key: string): Promise<boolean> {
+  const seen: string[] = await readFile(file, 'utf-8').then((text) => JSON.parse(text) as string[], () => []);
+  if (seen.includes(key)) return false;
+  await writeFile(file, JSON.stringify([...seen, key]));
+  return true;
+}
+
 /** Scripted deterministic model over a fixed script, advancing on every call. */
 export function createScriptedModel(script: ScriptedTurn[]): ModelProvider {
   const cursor: Cursor = { index: 0, matched: new Set() };
@@ -162,11 +185,18 @@ export function createDynamicScriptedModel(scriptFilePath: string, limits?: { co
     ...(limits === undefined ? {} : { getLimits: async () => limits }),
     async call({ messages, tools, onDelta, sessionKey = 'default' }) {
       // Auxiliary one-shots (run titles, role suggestions) get an empty reply, so they never consume a script turn.
-      if (sessionKey.startsWith('aux:')) return textTurn('');
+      // A scenario that needs one (the role suggestion) scripts it under the exact `aux:` key.
+      if (sessionKey.startsWith('aux:')) {
+        const scripted: Record<string, ScriptedTurn[]> = await readFile(scriptFilePath, 'utf-8').then((text) => JSON.parse(text) as Record<string, ScriptedTurn[]>, () => ({}));
+        const first = scripted[sessionKey]?.[0];
+        return first === undefined ? textTurn('') : toAssistantTurn(first);
+      }
       // What the model was offered on this call, beside the script file: a scenario asserts the visible tool list and
       // the images the request carried (sha256 of their bytes, so a scenario can tell the bytes really arrived).
       // Hidden tools (deferLoading) are not offered on a proxy-mode wire, so they are not listed.
-      await appendFile(scriptFilePath + '.tools.jsonl', JSON.stringify({ sessionKey, tools: tools.filter((tool) => tool.deferLoading !== true).map((tool) => tool.name), images: imageHashes(messages) }) + '\n');
+      // `shape` is the request as a cache sees it: one short hash per message in order (a request that only appended keeps every earlier hash),
+      // and the characters of the whole prompt and of its tool results (a trim of old results shows as a drop in the second).
+      await appendFile(scriptFilePath + '.tools.jsonl', JSON.stringify({ sessionKey, tools: tools.filter((tool) => tool.deferLoading !== true).map((tool) => tool.name), images: imageHashes(messages), shape: requestShape(messages) }) + '\n');
       let scripts: Record<string, ScriptedTurn[]>;
       try {
         scripts = JSON.parse(await readFile(scriptFilePath, 'utf-8'));
@@ -175,12 +205,16 @@ export function createDynamicScriptedModel(scriptFilePath: string, limits?: { co
       }
       // A child run's key embeds its runtime id (`agent:conv::child:<runId>`); tests script every child of a
       // chat through the wildcard `agent:conv::child:*`.
-      const childWildcard = sessionKey.includes('::child:') ? sessionKey.slice(0, sessionKey.indexOf('::child:')) + '::child:*' : undefined;
-      const script = scripts[sessionKey] ?? (childWildcard === undefined ? undefined : scripts[childWildcard]) ?? [{ text: 'I am operating with the scripted model for testing.' }];
+      const subagentWildcard = sessionKey.includes('::child:') ? sessionKey.slice(0, sessionKey.indexOf('::child:')) + '::child:*' : undefined;
+      const script = scripts[sessionKey] ?? (subagentWildcard === undefined ? undefined : scripts[subagentWildcard]) ?? [{ text: 'I am operating with the scripted model for testing.' }];
       const startedWith = runUserText(messages);
       const steps = stepsSinceUser(messages);
       const stepped = script.find((candidate) => candidate.step === steps && candidate.matchLastText !== undefined && startedWith.includes(candidate.matchLastText));
       const scripted = stepped === undefined ? turnFromScript(script, assistantTurns(messages), messages) : toAssistantTurn(stepped);
+      const failing = (stepped ?? script[assistantTurns(messages)])?.fail;
+      if (failing !== undefined && (await failOnce(scriptFilePath + '.failed', sessionKey + '#' + String(assistantTurns(messages))))) {
+        throw new ProviderFailureError({ kind: 'quota', code: 'quota', message: 'Model quota exhausted (429): scripted rate limit', retryAfterMs: failing.retryAfterSeconds * 1000 });
+      }
       // Streams like a real model, in small chunks with small gaps, so a scenario can see the run still writing.
       if (onDelta && scripted.text) {
         for (let at = 0; at < scripted.text.length; at += SCRIPT_CHUNK_CHARS) {

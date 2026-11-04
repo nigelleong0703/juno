@@ -8,7 +8,7 @@
  */
 import type { Runner } from '@agent-desktop/durable';
 import type { Enqueuer, Store } from '@agent-desktop/contracts';
-import { RESTATE } from '@agent-desktop/contracts';
+import { SERVICE } from '@agent-desktop/contracts';
 import { docOwner } from 'juno-agent/execution/execution-owner';
 import { createLogger } from '@agent-desktop/log';
 
@@ -23,7 +23,7 @@ export async function armMissingTimers(opts: { store: Store; runner: Runner; enq
       for (const routine of page.items) {
         if (!routine.enabled) continue;
         try {
-          if (!(await runner.isLive(RESTATE.routineTimer, routine.id, 'fire'))) await enqueuer.scheduleRoutine(routine.id);
+          if (!(await runner.isLive(SERVICE.routineTimer, routine.id, 'fire'))) await enqueuer.scheduleRoutine(routine.id);
         } catch (error) {
           log.warn({ err: error, routineId: routine.id }, 'Failed to arm routine');
         }
@@ -36,7 +36,7 @@ export async function armMissingTimers(opts: { store: Store; runner: Runner; enq
       const page = await store.list('agentCalendar', { where: { status: 'scheduled' }, limit: 100, ...(calendarCursor === undefined ? {} : { cursor: calendarCursor }) });
       for (const item of page.items) {
         try {
-          if (!(await runner.isLive(RESTATE.calendarTimer, item.id, 'fire'))) await enqueuer.scheduleCalendarItem?.(item.id);
+          if (!(await runner.isLive(SERVICE.calendarTimer, item.id, 'fire'))) await enqueuer.scheduleCalendarItem?.(item.id);
         } catch (error) {
           log.warn({ err: error, itemId: item.id }, 'Failed to arm calendar item');
         }
@@ -56,8 +56,8 @@ export async function armMissingTimers(opts: { store: Store; runner: Runner; enq
       agentCursor = page.nextCursor;
     }
     for (const owner of owners) {
-      const memory = await runner.isLive(RESTATE.memoryTimer, owner, 'fire');
-      const ideas = await runner.isLive(RESTATE.ideasTimer, owner, 'fire');
+      const memory = await runner.isLive(SERVICE.memoryTimer, owner, 'fire');
+      const ideas = await runner.isLive(SERVICE.ideasTimer, owner, 'fire');
       if (!memory || !ideas) await enqueuer.scheduleMemoryJobs?.(owner);
     }
   } catch (error) {

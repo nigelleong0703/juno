@@ -157,11 +157,15 @@ export const junoProductEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('goal.updated'), goal: goalSchema }),
   z.object({ type: z.literal('goal.deleted'), goalId: idSchema }),
   z.object({ type: z.literal('idea.updated'), idea: ideaSchema }),
+  // 0.76: the idea row is gone (its agent was deleted). Drop it from the cached list.
+  z.object({ type: z.literal('idea.deleted'), ideaId: idSchema }),
   // 0.3: an agent task started, progressed or finished (also the first sighting of a new one): upsert by id.
   z.object({ type: z.literal('task.updated'), task: agentTaskSchema }),
   // Feed posts an agent published (feed_post) or the user liked; owner-filtered like every other event.
   z.object({ type: z.literal('feed.created'), post: feedPostSchema }),
   z.object({ type: z.literal('feed.updated'), post: feedPostSchema }),
+  // 0.76: the post is gone (its agent was deleted). Drop it from the cached feed.
+  z.object({ type: z.literal('feed.deleted'), postId: idSchema }),
   // A routine run finished with new feed posts (the push trigger when the routine's notify is not 'never'); clients refetch the Feed.
   z.object({ type: z.literal('feed.brief'), routineId: idSchema, title: z.string(), postIds: z.array(idSchema).min(1), firstPostTitle: z.string(), notify: z.boolean() }),
   // The server asks the iPhone app (which declared it can answer) to run one EventKit call (BACKEND 7.13). Only the app whose
@@ -178,6 +182,9 @@ export const junoProductEventSchema = z.discriminatedUnion('type', [
   // The authoritative persisted transcript item (user turn, agent reply, artifact, request card,
   // ...). Provisional streaming text never replaces it.
   z.object({ type: z.literal('item.added'), conversationId: idSchema, item: itemSchema }),
+  // 0.76: one transcript item was removed on its own (no server path does this yet; clients drop it by id). Deleting a whole
+  // conversation sends only `conversation.deleted`, which covers every item in it, so no per-item events flood the log.
+  z.object({ type: z.literal('item.deleted'), conversationId: idSchema, itemId: idSchema }),
 ]);
 export type JunoProductEvent = z.infer<typeof junoProductEventSchema>;
 

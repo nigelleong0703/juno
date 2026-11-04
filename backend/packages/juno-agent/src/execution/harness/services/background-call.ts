@@ -18,7 +18,7 @@ import type { ToolRunContext } from './replay.js';
 import { executeBackgroundAction } from './background-recovery.js';
 import { backgroundCancellation } from './background-cancel.js';
 import { recoveryArguments } from './recovery-ledger.js';
-import { backgroundCapRefusal, backgroundSpawnOf, BACKGROUND_LIMIT_TEXT } from '../../../modules/tasks/child-background.js';
+import { backgroundCapRefusal, backgroundSpawnOf, BACKGROUND_LIMIT_TEXT } from '../../../modules/tasks/subagent-background.js';
 import { endBackgroundTask, recordBackgroundTask, taskLabel } from '../../../modules/tasks/background-registry.js';
 import { oneLine } from '../../../modules/tasks/agent-tasks.js';
 import type { RunInput, RunServices } from './run-types.js';

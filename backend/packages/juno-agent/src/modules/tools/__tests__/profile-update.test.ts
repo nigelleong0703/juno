@@ -7,6 +7,7 @@ import type { ToolContext, WakeEvent } from '../../../contracts/index.js';
 import { createProfileUpdateTool } from '../tools/profileUpdate.js';
 import { readVaultEntries, vaultSection } from '../../secure-vault/index.js';
 import { profileAudience, profileSection, readProfile } from '../../profile/index.js';
+import { OWNER, call, driveTools, turn } from '../../../testing/drive-tools.js';
 
 type MemStore = ReturnType<typeof createMemoryStore>;
 const wakeOf = (ownerId: string): WakeEvent => ({ ownerId, origin: { type: 'user', id: ownerId } }) as WakeEvent;
@@ -97,6 +98,14 @@ describe('profile_update', () => {
     expect((await audience('c-tg-dm', [strangerSpeaking])).ownerOnly).toBe(false);
     // The agent's own background report in the owner's chat does not count as someone else speaking.
     expect((await audience('c-tg-dm', [ownerSpeaking, backgroundReport])).ownerOnly).toBe(true);
+    // A child task of a stranger's run, and the run that wraps its work up, is the stranger's too (BACKEND 6.8); an owner's is not.
+    const origin = (speaker: 'owner' | 'stranger') => ({ type: 'channel', channel: 'telegram', conversationId: 'c-tg-dm', speaker }) as const;
+    await store.put('runs', { id: 'run-stranger', rootOrigin: origin('stranger'), origin: origin('stranger') } as never);
+    await store.put('runs', { id: 'run-owner', rootOrigin: origin('owner'), origin: origin('owner') } as never);
+    const child = (parentRunId: string, kind: 'subagent_task' | 'task_done' = 'subagent_task') => ({ ownerId: 'owner-1', origin: { type: 'system' }, trusted: false, kind, payload: kind === 'subagent_task' ? { parentRunId } : { originRunId: parentRunId } }) as unknown as WakeEvent;
+    expect((await audience('c-tg-dm', [child('run-stranger')])).ownerOnly).toBe(false);
+    expect((await audience('c-tg-dm', [child('run-stranger', 'task_done')])).ownerOnly).toBe(false);
+    expect((await audience('c-tg-dm', [child('run-owner')])).ownerOnly).toBe(true);
   });
 
   it('refuses private data in a shared run, accepts shared data there, and never lets a non-owner write', async () => {
@@ -121,5 +130,13 @@ describe('profile_update', () => {
     const text = vaultSection(await readVaultEntries(store, 'owner-1'));
     expect(text).toContain('Shopee password (password) vaultId v1');
     expect(vaultSection(await readVaultEntries(store, 'nobody'))).toBe('');
+  });
+
+  it('saves in one call when the model sends `set` as JSON text (2026-11-04 voice run: two validation retries, 22.5s to reply)', async () => {
+    const sent = { set: JSON.stringify([{ key: 'Name', value: 'Robin' }]) };
+    const { outcome, steps, store } = await driveTools([turn('', call('c1', 'profile_update', sent)), turn('Saved.')], (memory) => [createProfileUpdateTool({ store: memory })]);
+    expect(outcome).toBe('completed');
+    expect(steps.map((step) => step.status)).toEqual(['completed']);
+    expect((await store.get('profiles', profileIdFor(OWNER)))?.entries).toMatchObject([{ key: 'Name', value: 'Robin' }]);
   });
 });

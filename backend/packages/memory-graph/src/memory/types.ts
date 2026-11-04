@@ -94,8 +94,8 @@ export interface ItemVector {
   embedModel: string;
 }
 
-/** An item as `memoryFor` returns it; `vector` is set only when the caller asked for vectors (`null` = not embedded yet). */
-export type VisibleItem = MemoryItem & { vector?: ItemVector | null };
+/** An item as `memoryFor` returns it. Vectors never leave the database: they are ranked in SQL (`MemoryItems.nearest`). */
+export type VisibleItem = MemoryItem;
 
 export type MemoryItemErrorCode = 'invalid' | 'not_found';
 

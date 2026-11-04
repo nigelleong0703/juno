@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import type { BackgroundCallStart, Doc, Tool, ToolResult, WakeEvent } from '../../../contracts/index.js';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
@@ -18,9 +18,9 @@ function context(prefix: string) {
   let sequence = 0;
   return {
     rand: { uuidv4: () => prefix + '-' + String(++sequence) },
-    run: <T>(_name: string, action: () => Promise<T>) => RestatePromise.resolve(action()),
-    awakeable: <T>() => ({ id: prefix + '-awake', promise: RestatePromise.resolve({ interruptedByMessage: true } as T) }),
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    run: <T>(_name: string, action: () => Promise<T>) => DurablePromise.resolve(action()),
+    awakeable: <T>() => ({ id: prefix + '-awake', promise: DurablePromise.resolve({ interruptedByMessage: true } as T) }),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
 }
 
@@ -34,7 +34,8 @@ async function fixture(overrides: Partial<Tool> = {}) {
     execute: async () => { effects++; return { content: [{ type: 'text', text: 'delivered' }] }; },
     ...overrides,
   };
-  const registry = { get: (name: string) => name === tool.name ? tool : undefined, forAgent: async () => [tool] };
+  const reader: Tool = { name: 'fixture_read', description: 'Look at the fixture', parameters: {}, replay: 'safe', sideEffect: false, execute: async () => ({ content: [{ type: 'text', text: 'nothing there' }]}) };
+  const registry = { get: (name: string) => [tool, reader].find((candidate) => candidate.name === name), forAgent: async () => [tool, reader] };
   const deps = { store, blobs: createMemoryBlobStore(), enqueuer: new NoopEnqueuer(), toolRegistry: registry };
   await store.put('agents', { id: 'agent', name: 'Fixture', createdBy: 'owner' } as never);
   await store.put('conversations', { id: 'conv', kind: 'direct', memberIds: ['owner'], agentIds: ['agent'] } as never);
@@ -50,7 +51,7 @@ async function fixture(overrides: Partial<Tool> = {}) {
   const background = async (id: string, runId = 'original', arguments_: Record<string, unknown> = args) => {
     const wakes: WakeEvent[] = [];
     let done = false;
-    await runBackgroundCall({ ...context(id), key: 'mcp-' + id, done: async () => done, markDone: () => { done = true; }, now: () => RestatePromise.resolve(Date.parse(AT)), sendWake: (event) => { wakes.push(event); } }, deps, input(id, runId, arguments_));
+    await runBackgroundCall({ ...context(id), key: 'mcp-' + id, done: async () => done, markDone: () => { done = true; }, now: () => DurablePromise.resolve(Date.parse(AT)), sendWake: (event) => { wakes.push(event); } }, deps, input(id, runId, arguments_));
     return wakes;
   };
   const services: RunServices = { ...deps, brain: { buildContext: async () => ({ agentId: 'agent', sessionKey: 'agent:conv' }), step: async () => { throw new Error('no model calls expected'); }, shouldCompact: () => false, compact: async (ctx) => ctx } };
@@ -75,48 +76,50 @@ describe('background recovery through production tool handlers', () => {
     expect((await reviews(f)).items).toHaveLength(0);
   });
 
-  it('keeps one interrupted review across restart and blocks equivalent foreground and background calls', async () => {
+  it('tells the agent once per attempt (no card), holds an identical call until the agent has read, then lets it through', async () => {
     const secret = 'Bearer abcdefghijklmnopqrstuvwxyz';
     const f = await fixture({ reconcile: async () => ({ status: 'unknown', reason: 'lookup failed ' + secret }) });
     await f.step('lost', 'original', { fencedAt: AT, intent: f.intent });
+    const wakes = await f.background('lost');
     await f.background('lost');
-    await f.background('lost');
-    const requests = (await reviews(f)).items;
-    expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({ interrupted: true, status: 'pending', reconciliation: { state: 'pending', stepId: 'lost', connectionId: binding.connectionId, account: binding.account } });
-    expect(JSON.stringify(requests)).not.toContain(secret);
+    expect((await reviews(f)).items).toHaveLength(0);
+    expect(JSON.stringify(wakes)).toContain('may or may not have happened');
+    expect(JSON.stringify([wakes, await f.store.get('steps', 'lost')])).not.toContain(secret);
     await f.run('foreground');
-    const result = await executeSingleToolCall(context('foreground'), f.services, { agentId: 'agent', conversationId: 'conv', sessionKey: 'agent:conv', wakeEvents: [wake] }, 'foreground', 0, 0, { id: 'retry', name: f.tool.name, arguments: { ...args, background: false, taskTitle: 'A different label' } });
-    expect(typeof result).not.toBe('symbol');
-    if (typeof result !== 'symbol') expect(result.result.isError).toBe(true);
-    const steps = (await f.store.list('steps', { where: { runId: 'foreground' } })).items;
-    expect(steps[0]).toMatchObject({ status: 'skipped', errorKind: 'permission' });
-    await f.run('background');
-    await f.step('second', 'background');
-    await f.background('second', 'background', { ...args, background: true, taskTitle: 'Another title' });
+    const callAgain = (id: string) => executeSingleToolCall(context('foreground'), f.services, { agentId: 'agent', conversationId: 'conv', sessionKey: 'agent:conv', wakeEvents: [wake] }, 'foreground', 0, 0, { id, name: f.tool.name, arguments: { ...args, background: false, taskTitle: 'A different label' } });
+    const held = await callAgain('retry');
+    expect(typeof held).not.toBe('symbol');
+    if (typeof held !== 'symbol') expect(held.result.content[0]).toMatchObject({ text: expect.stringContaining('This call was not made') });
     expect(f.effects()).toBe(0);
-    expect((await reviews(f)).items).toHaveLength(1);
+    // The agent looks (a read step after the notice), and the identical call is then allowed: it is a new fenced call, and the old one stops holding.
+    const laterThanNotice = new Date(Date.now() + 60_000).toISOString();
+    await f.store.patch('runs', 'foreground', { steps: [{ id: 'look', runId: 'foreground', index: 0, kind: 'mcp', tool: 'fixture_read', verb: 'Executed', target: 'fixture_read', status: 'completed', durationMs: 1, startedAt: laterThanNotice }] });
+    await callAgain('retry-2');
+    expect(f.effects()).toBe(1);
+    expect(await f.store.get('steps', 'lost')).toMatchObject({ execution: { releasedAt: expect.any(String) } });
   });
 
-  it('adopts a legacy background fence into review without using a guessed receipt or repeating it', async () => {
+  it('adopts a legacy background fence as an uncertain action (the agent is told) without using a guessed receipt or repeating it', async () => {
     let checks = 0;
     const f = await fixture({ reconcile: async () => { checks++; return { status: 'succeeded', evidence: 'guessed', result: { content: [] } }; } });
     await f.step('legacy', 'original', { fencedAt: AT });
-    await f.background('legacy');
+    const wakes = await f.background('legacy');
     expect(checks).toBe(0);
     expect(f.effects()).toBe(0);
-    expect(await f.store.get('steps', 'legacy')).toMatchObject({ execution: { legacyBinding: true, intent: f.intent } });
-    expect((await reviews(f)).items).toHaveLength(1);
+    expect(await f.store.get('steps', 'legacy')).toMatchObject({ execution: { legacyBinding: true, intent: f.intent, notice: { runId: 'original' } } });
+    expect((await reviews(f)).items).toHaveLength(0);
+    expect(JSON.stringify(wakes)).toContain('may or may not have happened');
   });
 
-  it('guards a historical background fence before a foreground call can bypass it', async () => {
+  it('holds back a foreground call that repeats a historical background fence', async () => {
     const f = await fixture();
     await f.step('legacy', 'original', { fencedAt: AT });
     await f.run('next');
     const result = await executeSingleToolCall(context('next'), f.services, { agentId: 'agent', conversationId: 'conv', sessionKey: 'agent:conv', wakeEvents: [wake] }, 'next', 0, 0, { id: 'retry', name: f.tool.name, arguments: { ...args, background: false } });
     expect(typeof result).not.toBe('symbol');
     expect(f.effects()).toBe(0);
-    expect((await reviews(f)).items[0]).toMatchObject({ reconciliation: { state: 'pending', stepId: 'legacy' } });
+    expect((await reviews(f)).items).toHaveLength(0);
+    expect(await f.store.get('steps', 'legacy')).toMatchObject({ execution: { notice: { runId: 'next' } } });
   });
 
   it('reuses a trusted result, redacts evidence and the result, and does not call the external write', async () => {
@@ -143,18 +146,20 @@ describe('background recovery through production tool handlers', () => {
     expect(attempts[0]).toMatchObject({ execution: { intent: { attempt: 1 } } });
   });
 
-  it('consumes one owner-authorized retry across foreground/background control changes', async () => {
+  it('consumes one person-authorized repeat across foreground/background control changes', async () => {
     const f = await fixture();
     await f.step('uncertain', 'original', { fencedAt: AT, intent: f.intent });
-    await f.background('uncertain');
-    const request = (await reviews(f)).items[0]!;
-    await f.store.patch('requests', request.id, { status: 'answered', resolution: { action: 'answer', answers: { recovery_outcome: 'confirmed_absent_retry' } }, reconciliation: { ...request.reconciliation!, state: 'user_confirmed_not_executed', source: 'owner_report' } });
+    // The person was asked (ask_about_uncertain_action) and answered "do it again".
+    const asked = { id: 'req-asked', kind: 'question', status: 'answered', title: 'Agent Question', summary: 'Send it again?', agentId: 'agent', conversationId: 'conv', runId: 'original', createdAt: AT,
+      payload: { kind: 'question', ui: { version: 1, blocks: [] } },
+      reconciliation: { stepId: 'uncertain', tool: f.tool.name, fingerprint: f.intent.fingerprint, connectionId: binding.connectionId, account: binding.account, state: 'authorized' } } as never;
+    await f.store.put('requests', asked);
     await f.run('retry');
     await f.step('authorized', 'retry');
     await f.background('authorized', 'retry', { ...args, background: true, taskTitle: 'Retry label' });
     await f.background('authorized', 'retry');
     expect(f.effects()).toBe(1);
-    expect(await f.store.get('requests', request.id)).toMatchObject({ reconciliation: { state: 'retry_completed', attemptStepId: 'authorized' } });
+    expect(await f.store.get('requests', 'req-asked')).toMatchObject({ reconciliation: { state: 'completed', attemptStepId: 'authorized' } });
     expect(await f.store.get('steps', 'authorized')).toMatchObject({ execution: { intent: { attempt: 1 } } });
   });
 

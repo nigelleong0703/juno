@@ -40,7 +40,7 @@ const messagesIn = async (store: Store, conversationId: string) =>
 describe('send_message toOwner', () => {
   it('posts the note in the owner\'s direct chat, not in the group, and wakes the agent there once with the original question and source chat', async () => {
     const { store, tool, enqueuer, ctx } = await setup(true);
-    const result = await tool.execute({ kind: 'text', text: 'On it, checking your flight', toOwner: true }, ctx);
+    const result = await tool.execute({ kind: 'text', purpose: 'answer', text: 'On it, checking your flight', toOwner: true }, ctx);
     expect(result.isError).not.toBe(true);
     expect(textOf(result)).toContain("you'll answer privately");
     expect(await messagesIn(store, 'conv-1')).toHaveLength(0);
@@ -59,7 +59,7 @@ describe('send_message toOwner', () => {
 
   it('creates the direct chat when the owner has none yet, and wakes the agent in it', async () => {
     const { store, tool, enqueuer, ctx } = await setup(false);
-    await tool.execute({ kind: 'text', text: 'Here is the number', toOwner: true }, ctx);
+    await tool.execute({ kind: 'text', purpose: 'answer', text: 'Here is the number', toOwner: true }, ctx);
     const chats = (await store.list('conversations', { limit: 20 })).items.filter((chat) => chat.kind === 'direct');
     expect(chats).toHaveLength(1);
     expect(chats[0]).toMatchObject({ agentIds: ['agent-1'], memberIds: ['owner'], ownerId: 'owner' });
@@ -71,7 +71,7 @@ describe('send_message toOwner', () => {
   it('is refused when a stranger\'s message started the run: nothing is sent and nothing is woken', async () => {
     for (const wake of [wakeBy({ type: 'user' }, false), wakeBy({ type: 'user', id: 'bob' }, true), wakeBy({ type: 'agent', id: 'agent-2' }, false)]) {
       const { store, tool, enqueuer, ctx } = await setup(true, wake);
-      const result = await tool.execute({ kind: 'text', text: 'x', toOwner: true }, ctx);
+      const result = await tool.execute({ kind: 'text', purpose: 'answer', text: 'x', toOwner: true }, ctx);
       expect(result.isError).toBe(true);
       expect(textOf(result)).toContain('only for a message from your owner');
       expect(await messagesIn(store, 'cvn-direct')).toHaveLength(0);
@@ -81,7 +81,7 @@ describe('send_message toOwner', () => {
 
   it('is refused in a chat that is already private to the owner', async () => {
     const { store, tool, enqueuer, ctx } = await setup(true);
-    const result = await tool.execute({ kind: 'text', text: 'x', toOwner: true }, { ...ctx, conversationId: 'cvn-direct', wake: { ...ctx.wake, conversationId: 'cvn-direct' } });
+    const result = await tool.execute({ kind: 'text', purpose: 'answer', text: 'x', toOwner: true }, { ...ctx, conversationId: 'cvn-direct', wake: { ...ctx.wake, conversationId: 'cvn-direct' } });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain('already private');
     expect(await messagesIn(store, 'cvn-direct')).toHaveLength(0);
@@ -90,7 +90,7 @@ describe('send_message toOwner', () => {
 
   it('a message without toOwner still stays in the current conversation', async () => {
     const { store, tool, enqueuer, ctx } = await setup(true);
-    await tool.execute({ kind: 'text', text: 'Hello group' }, ctx);
+    await tool.execute({ kind: 'text', purpose: 'answer', text: 'Hello group' }, ctx);
     expect(await messagesIn(store, 'conv-1')).toHaveLength(1);
     expect(await messagesIn(store, 'cvn-direct')).toHaveLength(0);
     expect(enqueuer.wakes).toHaveLength(0);
@@ -98,9 +98,9 @@ describe('send_message toOwner', () => {
 
   it('is for a plain message: not with a room or targets, not for a question', async () => {
     const { store, tool, enqueuer, ctx } = await setup(true);
-    expect((await tool.execute({ kind: 'text', text: 'x', toOwner: true, conversationId: 'other' }, ctx)).isError).toBe(true);
-    expect((await tool.execute({ kind: 'text', text: 'x', toOwner: true, targetAgentIds: ['agent-2'] }, ctx)).isError).toBe(true);
-    expect(textOf(await tool.execute({ kind: 'question', toOwner: true }, ctx))).toContain('toOwner');
+    expect((await tool.execute({ kind: 'text', purpose: 'answer', text: 'x', toOwner: true, conversationId: 'other' }, ctx)).isError).toBe(true);
+    expect((await tool.execute({ kind: 'text', purpose: 'answer', text: 'x', toOwner: true, targetAgentIds: ['agent-2'] }, ctx)).isError).toBe(true);
+    expect(textOf(await tool.execute({ kind: 'question', purpose: 'decision', toOwner: true }, ctx))).toContain('toOwner');
     expect(await messagesIn(store, 'cvn-direct')).toHaveLength(0);
     expect(enqueuer.wakes).toHaveLength(0);
   });

@@ -27,9 +27,11 @@
     "hono": "^4.3.0",
     "juno-agent": "workspace:*",
     "libsodium-wrappers": "^0.8.4",
+    "livekit-server-sdk": "2.19.2",
     "opusscript": "^0.1.1",
     "pg": "^8.23.1",
     "pino": "^8.17.0",
+    "undici": "7.30.0",
     "uuid": "^9.0.0",
     "ws": "^8.22.0",
     "zod": "^4.0.0"

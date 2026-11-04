@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { idSchema, isoDateTimeSchema } from './common.js';
 import { uiDocSchema } from './ui.js';
+import { deliveryStateSchema } from './outbox.js';
 
 // ---------------------------------------------------------------------------
 // Message building blocks (shared by Items and the composer)
@@ -148,6 +149,11 @@ export const userMessageItemSchema = z.object({
   }).optional(),
   /** The platform chat this message arrived from (0.41.0); absent for a message typed in the app. */
   source: channelOriginSchema.optional(),
+  /**
+   * `true`: the agent only observed this group message (nobody addressed it, BACKEND 6.8). It is stored so the chat digest and the
+   * agent's next run in this thread can read it, and it never woke the agent. Absent: a message the agent was woken for.
+   */
+  observed: z.boolean().optional(),
 });
 
 export const agentMessageItemSchema = z.object({
@@ -156,8 +162,12 @@ export const agentMessageItemSchema = z.object({
   agentId: idSchema,
   /** PH12: the run that produced this reply, so a reply can be linked to its task. Optional. */
   runId: idSchema.optional(),
+  /** User items explicitly incorporated into this run's context before this reply. */
+  contextItemIds: z.array(idSchema).optional(),
   markdown: z.string(),
   citations: z.array(citationSchema),
+  /** The agents this room message addresses (set by message_agent / send_message targets): clients draw them as mention chips instead of the trailing `@Name` line in `markdown`. */
+  mentions: z.array(mentionSchema).optional(),
   /** Structured blocks shown under `markdown` (a short lead-in, or `uiDocToText(ui)` when the agent gave no text). */
   ui: uiDocSchema.optional(),
   /**
@@ -165,6 +175,11 @@ export const agentMessageItemSchema = z.object({
    * message typed in the app (it stays in the app) and for anything no user message started.
    */
   replyTo: channelOriginSchema.optional(),
+  /**
+   * Whether this reply reached the platform chat it goes to (contracts changed, BACKEND 5.7.11): added by the server when the conversation is read, never stored.
+   * Absent for a reply that stays in the app. `dropped` = it will never arrive, so a client can say "not delivered" under the bubble.
+   */
+  delivery: deliveryStateSchema.optional(),
 });
 
 export const runItemSchema = z.object({
@@ -237,6 +252,23 @@ export const feedRefItemSchema = z.object({
   imageUrl: z.string().min(1).optional(),
 });
 
+/**
+ * A card in the chat the platform adds, once per run, when the agent first opens a page in its browser for a person waiting in this
+ * direct chat. Tap opens the agent's live screen (the agent's own screen: `ComputersApi.screen(computerId, agentId)` then `streamScreen`).
+ * `url` / `title` are the latest page the run opened (untrusted page text; the card is a pointer, not a transcript of the browsing);
+ * `previewLibraryId` names the latest screenshot of that screen (a library image, fetched through `GET /v1/library/:id/download`):
+ * the card shows it as "Live" while the run works and as the last frame once the run ended. Each update re-sends the item under the same id.
+ */
+export const screenRefItemSchema = z.object({
+  ...itemBase,
+  type: z.literal('screen_ref'),
+  agentId: idSchema,
+  runId: idSchema,
+  url: z.string().optional(),
+  title: z.string().optional(),
+  previewLibraryId: idSchema.optional(),
+});
+
 export const systemItemSchema = z.object({
   ...itemBase,
   type: z.literal('system'),
@@ -257,6 +289,7 @@ export const itemSchema = z.discriminatedUnion('type', [
   systemItemSchema,
   roleSuggestionItemSchema,
   feedRefItemSchema,
+  screenRefItemSchema,
 ]);
 export type Item = z.infer<typeof itemSchema>;
 export type ItemType = Item['type'];

@@ -5,7 +5,7 @@ import type { AgentdDeps } from './index.js';
 import { getOwnerId } from '../auth.js';
 import { docOwnerId } from './relationships.js';
 import type { Run } from '@agent-desktop/public-contracts';
-import { expirePendingRequests } from 'juno-agent/execution/child-run-input';
+import { expirePendingRequests } from 'juno-agent/execution/subagent-run-input';
 import { emitAgentStatus } from 'juno-agent/execution/agent-status';
 import { runTerminalEvent } from 'juno-agent/execution/harness/services/agui-events';
 import { closeRunTasks } from 'juno-agent/modules/tasks/agent-tasks';
@@ -83,11 +83,11 @@ export async function stopRunTruthfully(deps: AgentdDeps, current: Run, by: Stop
     await deps.store.emit(runTerminalEvent(run));
     await closeRunTasks(deps.store, run);
     await expirePendingRequests(deps.store, runId).catch(() => undefined);
-    for (const child of await liveChildren(deps, runId)) await stopRunTruthfully(deps, child, by).catch(() => undefined);
+    for (const child of await liveSubagents(deps, runId)) await stopRunTruthfully(deps, child, by).catch(() => undefined);
     await emitAgentStatus(deps.store, run.agentId);
     // Free the chat: if this run is still the session's active run, queued messages start now.
-    const childKey: unknown = Reflect.get(run, 'childSessionKey');
-    const key = typeof childKey === 'string' && childKey.length > 0 ? childKey : run.conversationId ? sessionKey(run.agentId, run.conversationId) : undefined;
+    const subagentKey: unknown = Reflect.get(run, 'childSessionKey');
+    const key = typeof subagentKey === 'string' && subagentKey.length > 0 ? subagentKey : run.conversationId ? sessionKey(run.agentId, run.conversationId) : undefined;
     if (key !== undefined) await deps.enqueuer.releaseSession?.(key, runId).catch(() => undefined);
     return run;
   }
@@ -112,7 +112,7 @@ export async function stopAgentRuns(deps: AgentdDeps, agentId: string): Promise<
   return stopped;
 }
 
-async function liveChildren(deps: AgentdDeps, parentRunId: string): Promise<Run[]> {
+async function liveSubagents(deps: AgentdDeps, parentRunId: string): Promise<Run[]> {
   const out: Run[] = [];
   let cursor: string | undefined;
   do {

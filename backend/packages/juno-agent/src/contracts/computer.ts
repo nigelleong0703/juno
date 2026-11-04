@@ -155,3 +155,8 @@ export const MAX_LIVE_SCREENS = 4;
 export const FIRST_SCREEN_DISPLAY = 1;
 /** Screen size every agent display boots with unless COMPUTER_RESOLUTION says otherwise (BACKEND §7.1). */
 export const DEFAULT_SCREEN_RESOLUTION = '1440x900';
+/**
+ * Minutes after the last use, and after the last hold (a run in progress, an open screen; BACKEND §7.3b), before a computer is
+ * paused (billing stops while paused, BACKEND §7.3); COMPUTER_IDLE_PAUSE_MINUTES overrides it.
+ */
+export const DEFAULT_IDLE_PAUSE_MINUTES = 1;

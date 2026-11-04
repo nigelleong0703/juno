@@ -6,7 +6,9 @@
  * threads are channels of their own, so `channel_id` is both chat and thread id and task-per-thread falls
  * out of the existing conversation derivation. Error text never carries the bot token.
  */
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { httpFailure, retryAfterMsOf } from '../failure.js';
 import { decryptSecret, encryptSecret } from '@agent-desktop/contracts/secrets';
 import type { ChannelFile, ChannelInboundEvent, ChannelPerson, ChannelSender, ChannelSendResult, ChannelSendTarget } from '../types.js';
 import { renderMentions } from '../mentions.js';
@@ -73,10 +75,12 @@ export function parseDiscordMessage(message: unknown, botUserId: string): Discor
   if (msg.author.bot === true || msg.webhook_id !== undefined || msg.author.id === botUserId) return null;
   const isGuild = msg.guild_id !== undefined;
   let text = msg.content;
+  // A server message nobody addressed to the bot (needs the MESSAGE_CONTENT intent for its text): the agent only observes it.
+  let unaddressed = false;
   if (isGuild) {
     const mentioned = msg.mentions.some((user) => user.id === botUserId);
     const repliesToBot = msg.referenced_message?.author.id === botUserId;
-    if (!mentioned && !repliesToBot) return null;
+    unaddressed = !mentioned && !repliesToBot;
     text = text.split('<@' + botUserId + '>').join('').split('<@!' + botUserId + '>').join('');
   }
   const rewritten = rewriteDiscordMentions(text, msg.mentions, botUserId);
@@ -92,6 +96,7 @@ export function parseDiscordMessage(message: unknown, botUserId: string): Discor
     text,
     ...(rewritten.mentions.length === 0 ? {} : { mentions: rewritten.mentions }),
     ...(files.length === 0 ? {} : { files }),
+    ...(unaddressed ? { addressed: false } : {}),
   };
 }
 
@@ -213,7 +218,7 @@ async function sendViaWebhook(fetchFn: typeof fetch, target: ChannelSendTarget, 
       await target.persistInstallation?.({ webhooks: rest });
       return undefined;
     }
-    if (!response.ok) return { ok: false, error: 'Discord send failed: ' + String(response.status) };
+    if (!response.ok) return { ok: false, error: 'Discord send failed: ' + String(response.status), failure: httpFailure(response.status, retryAfterMsOf(response.headers.get('retry-after') ?? undefined)) };
     const payload: unknown = await response.json().catch(() => null);
     const sent = typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>)['id'] : undefined;
     if (typeof sent === 'string') ids.push(sent);
@@ -245,31 +250,33 @@ export function createDiscordSender(fetchFn: typeof fetch = fetch): ChannelSende
       const text = renderMentions(rawText, (person) => '<@' + person.id + '>');
       const hooked = await sendViaWebhook(fetchFn, target, chunkMessage(text).map((content) => ({ content })));
       if (hooked !== undefined) return hooked;
-      const token = target.channel.botToken ?? '';
-      const ids: string[] = [];
-      for (const content of chunkMessage(text)) {
-        const res = await discordCall(fetchFn, token, 'POST', '/channels/' + target.chatId + '/messages', { content, ...(ids.length === 0 ? discordReference(target) : {}) });
-        if (!res.ok) {
-          const retry = res.retryAfter === undefined ? '' : ' (retry_after ' + String(res.retryAfter) + 's)';
-          return { ok: false, error: 'Discord send failed: ' + String(res.status) + ' ' + res.error + retry };
-        }
-        const id = typeof res.body === 'object' && res.body !== null ? (res.body as Record<string, unknown>)['id'] : undefined;
-        if (typeof id === 'string') ids.push(id);
-      }
-      return sentResult(ids);
+      return postBotMessages(fetchFn, target, chunkMessage(text).map((content) => ({ content })));
     },
     async sendRich(target, rich: RichMessage): Promise<ChannelSendResult> {
       const hooked = await sendViaWebhook(fetchFn, target, discordMessages(rich));
       if (hooked !== undefined) return hooked;
-      const token = target.channel.botToken ?? '';
-      const ids: string[] = [];
-      for (const message of discordMessages(rich)) {
-        const res = await discordCall(fetchFn, token, 'POST', '/channels/' + target.chatId + '/messages', { ...message, ...(ids.length === 0 ? discordReference(target) : {}) });
-        if (!res.ok) return { ok: false, error: 'Discord send failed: ' + String(res.status) + ' ' + res.error };
-        const id = typeof res.body === 'object' && res.body !== null ? (res.body as Record<string, unknown>)['id'] : undefined;
-        if (typeof id === 'string') ids.push(id);
-      }
-      return sentResult(ids);
+      return postBotMessages(fetchFn, target, discordMessages(rich));
     },
   };
+}
+
+/**
+ * The messages as the bot, one request each. With the outbox row's key every message carries a `nonce` and `enforce_nonce: true`: Discord then returns the
+ * message it already made for the same nonce instead of a second one (https://docs.discord.com/developers/resources/message, Create Message), so a re-send
+ * after a crash makes no duplicate. A webhook post (Execute Webhook) has no such parameter, so that path can duplicate once.
+ */
+async function postBotMessages(fetchFn: typeof fetch, target: ChannelSendTarget, messages: Array<Record<string, unknown>>): Promise<ChannelSendResult> {
+  const token = target.channel.botToken ?? '';
+  const ids: string[] = [];
+  for (const [index, message] of messages.entries()) {
+    const nonce = target.idempotencyKey === undefined ? {} : { nonce: createHash('sha256').update(target.idempotencyKey + '#' + String(index)).digest('base64url').slice(0, 25), enforce_nonce: true };
+    const res = await discordCall(fetchFn, token, 'POST', '/channels/' + target.chatId + '/messages', { ...message, ...nonce, ...(ids.length === 0 ? discordReference(target) : {}) });
+    if (!res.ok) {
+      const retry = res.retryAfter === undefined ? '' : ' (retry_after ' + String(res.retryAfter) + 's)';
+      return { ok: false, error: 'Discord send failed: ' + String(res.status) + ' ' + res.error + retry, failure: httpFailure(res.status, retryAfterMsOf(res.retryAfter)) };
+    }
+    const id = typeof res.body === 'object' && res.body !== null ? (res.body as Record<string, unknown>)['id'] : undefined;
+    if (typeof id === 'string') ids.push(id);
+  }
+  return sentResult(ids);
 }

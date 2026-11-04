@@ -2,7 +2,7 @@
  * Private-chat reply admission: coalesce a burst of 1:1 messages behind a durable idle window, bound
  * the "thinking" jitter, and refuse wakes that would let an agent recursively wake itself.
  *
- * Pure helpers only. The Session object owns the durable timer (a delayed Restate self-send), never a
+ * Pure helpers only. The Session object owns the durable timer (a delayed self-send), never a
  * process `setTimeout`, so a restart cannot lose a pending reply.
  */
 import { createHash } from 'node:crypto';

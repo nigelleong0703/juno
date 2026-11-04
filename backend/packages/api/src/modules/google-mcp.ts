@@ -4,14 +4,16 @@
  * API v3: public search and charts on this deployment's key, plus the owner's own account) and Google Tasks; the tool sets live in modules/google/. Each is an OAuth protected
  * resource (RFC 9728) whose authorization server is Google: the connect flow discovers Google from our resource
  * metadata, the owner signs in with our configured Google client, and the agent calls us with that Google access
- * token. We hold no state and check nothing ourselves: every call is forwarded with the caller's token, so Google
- * decides what it may read, and a rejected token comes back as HTTP 401 (the client refreshes or asks to
- * reconnect). The public YouTube server needs no user sign-in: it calls the API with YOUTUBE_API_KEY and touches no personal
- * data, and answers only callers with the internal service token (403 otherwise). Writing tools say so (readOnlyHint false), so they follow the connector's level and ask first.
+ * token. These servers are internal (modules/hosted-mcp-auth.ts): only our own backend calls them, with HOSTED_MCP_TOKEN in
+ * `Authorization` (anyone else gets a bare 401), and the owner's token arrives in `X-Upstream-Authorization`. We hold no state and check
+ * nothing about the owner ourselves: every call is forwarded with that token, so Google decides what it may read, and a rejected token
+ * comes back as HTTP 401 with the resource metadata challenge (the client refreshes or asks to reconnect). The public YouTube server
+ * needs no user sign-in: it calls the API with YOUTUBE_API_KEY and touches no personal data, so the service credential is all it takes.
+ * Writing tools say so (readOnlyHint false), so they follow the connector's level and ask first.
  */
 
-import { createHash, timingSafeEqual } from 'node:crypto';
 import { HOSTED_MCP_PATH, MICROSOFT_ISSUER } from '@agent-desktop/contracts/mcp';
+import { callerRefused, isHostedCaller, upstreamAuthorizationOf } from './hosted-mcp-auth.js';
 import { CALENDAR_SCOPES, CALENDAR_TOOLS } from './google/calendar.js';
 import { DRIVE_SCOPES, DRIVE_TOOLS } from './google/drive.js';
 import { GMAIL_SCOPES, GMAIL_TOOLS } from './google/gmail.js';
@@ -47,8 +49,8 @@ export interface GoogleMcpDeps {
   fetchImpl?: typeof fetch;
   /** Where the platform API key is read (YOUTUBE_API_KEY); defaults to the process environment. */
   env?: Record<string, string | undefined>;
-  /** The service bearer shared with agentd (INTERNAL_AGENTD_TOKEN): the only credential a platform-key service (public YouTube) accepts. */
-  internalToken?: string;
+  /** HOSTED_MCP_TOKEN, the service credential shared with agentd: without it (or without a match) every request is refused with 401. */
+  hostedToken?: string;
 }
 
 interface HostedService {
@@ -158,22 +160,17 @@ function googleApi(deps: GoogleMcpDeps, name: ApiName, credential: { authorizati
 export const rpc = (id: unknown, result: unknown): Response => Response.json({ jsonrpc: '2.0', id, result });
 export const rpcError = (id: unknown, code: number, message: string): Response => Response.json({ jsonrpc: '2.0', id, error: { code, message } });
 
-export function isInternalCaller(token: string | undefined, authorization: string): boolean {
-  if (token === undefined || token === '') return false;
-  const expected = createHash('sha256').update(`Bearer ${token}`).digest();
-  return timingSafeEqual(expected, createHash('sha256').update(authorization).digest());
-}
-
 /** Streamable HTTP, JSON responses only (no sessions, no server-sent events): initialize, tools/list, tools/call, ping. */
 export async function handleGoogleMcp(deps: GoogleMcpDeps, service: string, request: Request): Promise<Response> {
+  // The caller check comes first, whatever the path or method: from outside nothing here can be told apart from nothing.
+  if (!(await isHostedCaller(deps.hostedToken, request))) return callerRefused();
   const hosted = SERVICES[service];
   if (hosted === undefined) return new Response(null, { status: 404 });
   if (request.method !== 'POST') return new Response(null, { status: 405, headers: { allow: 'POST' } });
-  const authorization = request.headers.get('authorization') ?? '';
+  // The owner's token for Google / Microsoft; a platform-key service (public YouTube) uses the deployment's key instead.
+  const authorization = upstreamAuthorizationOf(request);
   const key = hosted.keyEnv === undefined ? undefined : (deps.env ?? process.env)[hosted.keyEnv];
   if (hosted.keyEnv === undefined && !/^Bearer \S+$/.test(authorization)) return unauthorized(deps, service);
-  // A platform-key service spends this deployment's quota: 403, not 401 (a 401 would start an OAuth flow in the client).
-  if (hosted.keyEnv !== undefined && !isInternalCaller(deps.internalToken, authorization)) return Response.json({ error: { code: 'FORBIDDEN' } }, { status: 403 });
   const message = (await request.json().catch(() => undefined)) as { id?: unknown; method?: unknown; params?: Record<string, unknown> } | undefined;
   if (typeof message !== 'object' || message === null || typeof message.method !== 'string') return rpcError(null, -32600, 'Invalid request');
   if (message.id === undefined) return new Response(null, { status: 202 });

@@ -17,6 +17,8 @@ import { openChannelRow } from '../credentials.js';
 import type { WebhookContext, WebhookOutcome } from '../registration.js';
 import { slackConnector } from './connect.js';
 import { withSlackExternal } from './external.js';
+import { handleSlackCommand } from './native.js';
+import { backfillGroup, claimBackfill } from '../backfill.js';
 import { completeSharedSlackInstall, handleSharedSlackEvent, handleSharedSlackInteraction, provisionSlackAgent, sharedSlackConfig, slackCarriesFiles } from './shared.js';
 
 /** Slack retries non-2xx within seconds, so an event the agent should not hear is answered 200 (`answered`). */
@@ -24,12 +26,21 @@ async function slackWebhook({ deps, channelId, body }: WebhookContext): Promise<
   if (typeof body !== 'object' || body === null || !('event_id' in body)) return { event: body };
   // The channel id is opaque; the bot user id lives on the row (absent until the app is installed).
   const row = await deps.store.get('channels', channelRowId('slack', channelId));
+  // The bot joined a channel: the agent reads its earlier messages once (BACKEND 6.8); nothing else of a join is the agent's business.
+  const inner = (body as { event?: { type?: unknown; user?: unknown; channel?: unknown } }).event;
+  if (row !== null && inner?.type === 'member_joined_channel') {
+    if (typeof inner.channel === 'string' && inner.user === row.botUserId && (await claimBackfill(deps, row, inner.channel))) void backfillGroup(deps, row.ownerId, row, { chatId: inner.channel, chatType: 'group' });
+    return { answered: true };
+  }
   const event = row?.botUserId === undefined ? null : parseSlackEvent(body, row.botUserId);
   if (event === null || row === null) return { answered: true };
   const opened = await openChannelRow(deps.store, row);
   const token = 'error' in opened ? undefined : opened.channel.botToken;
-  const resolved = token === undefined ? undefined : await resolveSlackMentions(slackUserNamer(deps.channelFetch ?? fetch, token), event.text);
-  const message = resolved === undefined ? event : { ...event, text: resolved.text, ...(resolved.mentions.length === 0 ? {} : { mentions: resolved.mentions }) };
+  const nameOf = token === undefined ? undefined : slackUserNamer(deps.channelFetch ?? fetch, token);
+  const resolved = nameOf === undefined ? undefined : await resolveSlackMentions(nameOf, event.text);
+  // The speaker's name as Slack has it (the event carries only the id): the agent, the digest and the approval card say who spoke.
+  const speaker = nameOf === undefined ? event.from : { ...event.from, name: await nameOf(event.from.id) };
+  const message = resolved === undefined ? { ...event, from: speaker } : { ...event, from: speaker, text: resolved.text, ...(resolved.mentions.length === 0 ? {} : { mentions: resolved.mentions }) };
   return { event: await withSlackExternal(deps.channelFetch ?? fetch, token, message) };
 }
 
@@ -67,6 +78,16 @@ export const slackPlugin: AgentdPlugin = {
         const form: Record<string, unknown> = await c.req.parseBody().catch(() => ({}));
         await handleSharedSlackInteraction(deps, getOwnerId(c), form).catch(() => undefined);
         return c.body(null, 200);
+      },
+    });
+    // `/juno`: acknowledged inside Slack's 3 seconds, admitted after (native.ts).
+    ctx.http.route({
+      method: 'post',
+      path: '/v1/channels/slack/commands',
+      handler: async (c, deps) => {
+        const form: Record<string, unknown> = await c.req.parseBody().catch(() => ({}));
+        const answered = await handleSlackCommand(deps, getOwnerId(c), form);
+        return c.json(answered.response, 200);
       },
     });
     // Slack's redirect after the install (carrying our `state`): the api forwards it as the pending install's owner.

@@ -67,6 +67,14 @@ export function registerChannelIngress(app: Hono, deps: { store: Store; forward:
     return (await forwardToInstallation(c, deps, team)) ?? unauthorized;
   });
 
+  // The `/juno` slash command: a signed form post that names its workspace as `team_id`.
+  app.post('/v1/channels/slack/commands', async (c) => {
+    const unauthorized = c.json({ error: { code: 'UNAUTHORIZED', message: 'Invalid or missing channel secret' } }, 401);
+    if (!(await sharedSlackVerifier(c))) return unauthorized;
+    const form = new URLSearchParams(await c.req.raw.clone().text());
+    return (await forwardToInstallation(c, deps, form.get('team_id') ?? undefined)) ?? unauthorized;
+  });
+
   app.post('/v1/channels/:kind/:channelId/events', async (c) => {
     const kind = c.req.param('kind');
     const row = await deps.store.get('channels', channelRowId(kind, c.req.param('channelId')));

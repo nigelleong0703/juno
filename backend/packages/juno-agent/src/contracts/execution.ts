@@ -13,7 +13,7 @@ export const wakeKindSchema = z.enum([
   'room_mention',
   'routine',
   /** PH12: a parent run spawned a scoped child task; never a peer or hidden chat. */
-  'child_task',
+  'subagent_task',
   'webhook',
   'connector_event',
   'agent_message',
@@ -37,6 +37,8 @@ export const wakeKindSchema = z.enum([
   'monitor',
   // Best-effort client typing ping: extends a pending private reply window, never wakes an agent.
   'typing',
+  /** A group message the agent only observed (BACKEND 6.8): already stored in its conversation; this only tells the chat digest to count it. Never runs the agent. */
+  'observed',
 ]);
 export type WakeKind = z.infer<typeof wakeKindSchema>;
 
@@ -149,7 +151,7 @@ export interface Enqueuer {
    * workflow id is the idempotency key, so a retry starts the same run once — never a phantom run and
    * never a queued row with no workflow behind it.
    */
-  startChildRun?(input: ChildRunStart): Promise<void>;
+  startSubagentRun?(input: SubagentRunStart): Promise<void>;
   /**
    * H-72: start a durable watcher for a background process; when it ends, the session gets one
    * task_done. Keyed by taskId, so a retried start never creates a second watcher.
@@ -240,10 +242,12 @@ export interface TaskWatchStart {
   originRunId?: string;
   /** The computer the process runs on; absent is the sandbox. */
   computer?: 'sandbox' | 'mac';
+  /** Only keep the task row true (ended when the process ends); no task_done wake. Every process without notifyOnExit is watched this way. */
+  silent?: boolean;
 }
 
 /** The reserved child run a dispatcher starts; the core's Run workflow owns the actual execution. */
-export interface ChildRunStart {
+export interface SubagentRunStart {
   runId: string;
   ownerId: string;
   agentId: string;
@@ -257,7 +261,7 @@ export interface ChildRunStart {
 }
 
 /** Durable service names (the runner registers these; agentd calls them). */
-export const RESTATE = {
+export const SERVICE = {
   session: 'Session', // Virtual Object keyed by sessionKey: receive, drainInbox, runFinished, getState
   run: 'Run', // Workflow keyed by runId: run, stop signal via cancellation
   routineTimer: 'RoutineTimer', // Virtual Object keyed by routineId: arm, fire, recordCompletion, recordRead
@@ -331,7 +335,7 @@ export interface ToolContext {
   enqueuer: Enqueuer;
   /** The wake event that started this run (provenance, trust). */
   wake: WakeEvent;
-  /** Durable side-effect wrapper (Restate ctx.run in production, direct call in tests). */
+  /** Durable side-effect wrapper (ctx.run in production, direct call in tests). */
   step<T>(name: string, fn: () => Promise<T>): Promise<T>;
   signal: AbortSignal;
   /** Whether the model running this step accepts images in tool results; a tool that returns a picture checks it (absent = not known). */
@@ -344,6 +348,8 @@ export interface ToolContext {
   quickText?(prompt: string, agentId?: string): Promise<string | null>;
   /** The brain's System One (typed decisions; the purchase and dialog reviewers use it); absent when the brain has none. */
   systemOne?: SystemOne;
+  /** True while nobody is waiting on this run (it speaks only through send_message). The run flips it to false when a person writes into it (`RunInput.sendOnly`): one source for the final-reply path and send_message. */
+  sendOnly?: boolean;
   /** Set only inside a computer.batch step: a browser action then skips its after-action snapshot, because the batch observes once at the end. */
   quietObservation?: boolean;
 }
@@ -355,10 +361,14 @@ export interface ToolResult {
   isError?: boolean;
   /**
    * The run should suspend after this tool (e.g. approval requested, wake_at).
-   * PH12: 'child' is an explicit, durable child-wait branch — the core polls/sleeps (awaitChildTasks)
-   * and NEVER asks the user, unlike 'user' which creates a request and awaits a human.
    */
-  suspend?: { reason: 'user' | 'time' | 'event' | 'child'; awakeableId?: string; until?: string };
+  suspend?: { reason: 'user' | 'time' | 'event'; awakeableId?: string; until?: string };
+  /**
+   * "Now wait for the person": after a successful result with this flag (and the other calls of the same model turn, which still run) the
+   * harness ends the run with no further model call and no final reply. The person's answer arrives as their next message and starts a new run.
+   * Unlike `suspend`, the run is not kept open. Ignored on an error result.
+   */
+  endsTurn?: true;
   /**
    * PH11: the trusted ACTIVE duration of the authorized effect, measured locally inside the effect —
    * never a model-claimed time and never the durable approval wait before it. It rides on the
@@ -417,8 +427,6 @@ export interface Tool {
   deferLoading?: boolean;
   /** Offered only in a run where the owner is alone with the agent (profileAudience's owner-only); elsewhere the model is not shown it. */
   ownerOnly?: true;
-  /** Offered only in a run nobody is waiting on (`offersQuietExit`: the root origin is unattended and not a platform chat); elsewhere the model is not shown it and the tool refuses. */
-  unattendedOnly?: true;
   /** A tool a host plugin adds: outside the owner's own chat it is hidden (batch 5b, modules/tools/scope.ts). */
   plugin?: true;
   /** A connected-app tool whose catalog entry is marked `sharedRooms`: it stays offered in a group or a stranger's chat (set by the registry). */
@@ -515,7 +523,11 @@ export interface AssistantTurn {
     /** False when the provider reported no usage object at all; then the counters are not measured. */
     measured?: boolean;
   };
-  stopReason: 'stop' | 'tool_calls' | 'length' | 'error' | 'aborted';
+  /**
+   * `refusal`: the provider declined to answer (a content filter or a refusal block), reported by the provider adapter (brain/provider.ts).
+   * Its `text` is whatever came with it, possibly nothing; it is journaled as an ordinary stopped turn.
+   */
+  stopReason: 'stop' | 'tool_calls' | 'length' | 'error' | 'aborted' | 'refusal';
 }
 
 /**
@@ -527,6 +539,10 @@ export interface ModelCallStats {
   toolSchemaHash?: string;
   systemPromptHash?: string;
   toolCount?: number;
+  /** Fingerprint of the history before the newest user lines (see request-cache.ts); a warm-up and the run after it should agree. */
+  prefixHash?: string;
+  /** Hash of the session id the request sent as its cache key (`prompt_cache_key`, `session-id` header). */
+  sessionHash?: string;
   /** Reading the transcript back from the store before the request (brain.step only). */
   hydrateMs?: number;
   /** Credential, limits and message preparation before the HTTP request starts. */
@@ -541,6 +557,12 @@ export interface ModelCallStats {
   /** Image blocks in the request and their base64 size: every call re-sends them in full. */
   images: number;
   imageKB: number;
+  /** What the request really carries, in characters (about 3.5 per token): the declared tool schemas, the system row, the context-update notes, the rest of the history. */
+  toolsSent?: number;
+  toolChars?: number;
+  systemChars?: number;
+  noteChars?: number;
+  historyChars?: number;
   /** Responses over WebSocket or plain HTTP; absent for wires without the socket. */
   transport?: 'ws' | 'http';
   /** True when only new items were sent with previous_response_id (WebSocket transport). */
@@ -581,6 +603,8 @@ export interface Brain {
     noteKey?: string;
     /** Tool names discovered now; their persisted order is merged and carried on the context. */
     toolNames?: string[];
+    /** Filled during the build: how long the home load took, for the run's start-up log line. */
+    timings?: { homeMs?: number };
   }): Promise<BrainContext>;
   /**
    * Run `fn` with the harness version this session is pinned to (the one its frozen system row names; the active one before there is a row),
@@ -601,14 +625,30 @@ export interface Brain {
   shouldCompact(ctx: BrainContext): boolean;
   /** `tools` (the run's own) lets the summary request reuse the run's cached prefix. */
   compact(ctx: BrainContext, tools?: Tool[]): Promise<BrainContext>;
+  /**
+   * Whether the old large tool results should be trimmed before the next step (BACKEND §3.5.2b): the context is past a share of the compaction
+   * trigger and has grown since the last look. An epoch boundary like a compaction, never a per-call rewrite. Optional so test brains stay valid.
+   */
+  shouldTrim?(ctx: BrainContext): boolean;
+  /** The trim itself: a checkpoint after which those results show as stubs; the context comes back unchanged when too little would be given back. */
+  trimResults?(ctx: BrainContext): Promise<BrainContext>;
+  /**
+   * Warm the provider's prompt cache for a conversation's next run: one minimal call (a token or two of output) whose prefix is the one
+   * a run would send now (the frozen system row, the session's tool order, the stored history, the same cache key). Writes nothing and
+   * journals nothing; `cold` when the session has no stored system row yet (nothing to share a cache with). `tools` are the agent's
+   * offered tools as discovery returns them; the brain orders them like a run does. Optional so test brains stay valid.
+   */
+  warmPrefix?(input: { agentId: string; sessionKey: string; tools: Tool[]; signal: AbortSignal; /** Receives one `model call`-shaped line (tagged `warm: true`) for the warm-up request. */ log?: (fields: Record<string, unknown>, message: string) => void }): Promise<'warmed' | 'cold'>;
+  /** Pre-open the connection to the provider the conversation's next run will call (the model a fresh run resolves). Sends no key and no tokens. Optional so test brains stay valid. */
+  warmConnection?(input: { agentId: string; signal: AbortSignal }): Promise<'warm' | 'skipped'>;
   /** Compact a quiet chat in the background (owner scope required): the model a new run would use, no run prefix, no context note. Does nothing below a size floor. Optional so test brains stay valid. */
   compactIdle?(input: { agentId: string; conversationId: string; sessionKey: string }): Promise<void>;
   /**
    * One tool-less, single-message model call for short auxiliary text (run titles, role
    * suggestions). Resolves null on any failure or unusable reply; callers never block on it.
-   * Optional so test brains that do not need it stay valid.
+   * Optional so test brains that do not need it stay valid. `timeoutMs` shortens the default deadline (the Guardian review, BACKEND 8.3).
    */
-  quickText?(prompt: string, agentId?: string): Promise<string | null>;
+  quickText?(prompt: string, agentId?: string, options?: { timeoutMs?: number }): Promise<string | null>;
   /**
    * Typed decisions (BACKEND §10.14) for the current owner: their System One model, else the platform's, else the fast model
    * emulating one. Resolves null when none is available or the call failed; callers fail closed.
@@ -645,10 +685,10 @@ export const LIMITS = {
     maxHopDepth: 3,
     /** Total spend of the chain's agent-to-agent runs (Session checkPeerCost). */
     maxCostUsd: 0.5,
-    /** Background task generations: a woken run may start one more, at most this deep (child-background.ts). */
+    /** Background task generations: a woken run may start one more, at most this deep (subagent-background.ts). */
     maxBackgroundGenerations: 3,
-    /** Background runs one chain may start in total (child-background.ts). */
-    maxBackgroundRuns: 10,
+    /** Background runs one chain may start in total (subagent-background.ts). */
+    maxBackgroundRuns: 16, // 10 before deep research: 6 researchers + a follow-up round of up to 6 + the writer
   },
   /** One session inbox (Session object): batching and throttling of non-user wakes. */
   session: { collectMaxEvents: 20, maxAutoStartsPerMinute: 5 },

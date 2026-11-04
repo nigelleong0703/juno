@@ -66,7 +66,8 @@ describe('goal browser adapter', () => {
     expect(reversed).toEqual(shown);
     native = false;
     shown = presentForModel(await registry.forAgent('a'), {}).map(t => t.name);
-    expect(shown).toContain('browser.click'); expect(shown).not.toContain('browser.do'); expect(shown).not.toContain('browser.advance');
+    // The per-action browser tools are found with tool_search (not declared up front); the goal tools are gone without a native browser.
+    expect(shown).not.toContain('browser.click'); expect(shown).not.toContain('browser.do'); expect(shown).not.toContain('browser.advance');
     expect(registry.get('browser.click')).toBeDefined();
     native = true;
     const search = await registry.get('tool_load')!.execute({ names: ['browser.advance', 'browser.do'] }, { agentId: 'a', runId: 'r', store: createMemoryStore(), signal: new AbortController().signal } as never);

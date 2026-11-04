@@ -17,6 +17,8 @@ beforeAll(async () => {
   database = await startTestDatabase();
   db = database.db;
   items = createMemoryItems(db);
+  // These tests use two-number vectors; production aligns the column to its embedding model at boot.
+  await items.alignVectorDimension(2);
 });
 
 afterAll(async () => {
@@ -83,21 +85,63 @@ describe('memoryFor: what each presence may read', () => {
 });
 
 describe('vectors of the items', () => {
-  it('reads a vector only when asked, stores it against the text it was made from, and clears it when the text changes', async () => {
+  const ids = (hits: Array<{ id: string }>): string[] => hits.map((hit) => hit.id);
+
+  it('stores a vector against the text it was made from, finds it by cosine, and clears it when the text changes', async () => {
     const owner = freshOwner();
     const { id } = (await items.addItem(owner, { ...base, text: 'Likes tea.' })) ?? { id: '' };
-    expect(await items.memoryFor(owner, { kind: 'owner' }, undefined)).toEqual([expect.not.objectContaining({ vector: expect.anything() })]);
-    const [plain] = await items.memoryFor(owner, { kind: 'owner' }, undefined, { vectors: true });
-    expect(plain).toMatchObject({ id, vector: null });
+    const query = { embedding: [1, 0], embedModel: 'm1' };
+    expect(await items.nearest(owner, { kind: 'owner' }, undefined, query, { limit: 5 })).toEqual([]);
 
-    expect(await items.setVector(owner, id, 'Something else.', { embedding: [1, 0], embedModel: 'm1' })).toBe(false);
-    expect(await items.setVector(owner, id, 'Likes tea.', { embedding: [1, 0], embedModel: 'm1' })).toBe(true);
-    const [stored] = await items.memoryFor(owner, { kind: 'owner' }, undefined, { vectors: true });
-    expect(stored?.vector).toEqual({ embedding: [1, 0], embedModel: 'm1' });
+    expect(await items.setVector(owner, id, 'Something else.', query)).toBe(false);
+    expect(await items.setVector(owner, id, 'Likes tea.', query)).toBe(true);
+    const [hit] = await items.nearest(owner, { kind: 'owner' }, undefined, query, { limit: 5 });
+    expect(hit).toMatchObject({ id });
+    expect(hit?.cosine).toBeCloseTo(1, 5);
+    // A vector from another model is not compared.
+    expect(await items.nearest(owner, { kind: 'owner' }, undefined, { ...query, embedModel: 'm2' }, { limit: 5 })).toEqual([]);
 
     await items.updateItem(owner, id, { text: 'Likes green tea.' });
-    const [changed] = await items.memoryFor(owner, { kind: 'owner' }, undefined, { vectors: true });
-    expect(changed?.vector).toBeNull();
+    expect(await items.nearest(owner, { kind: 'owner' }, undefined, query, { limit: 5 })).toEqual([]);
+  });
+
+  it('orders by cosine, cuts at the limit, restricts to given ids, and sees only what the presence may read', async () => {
+    const owner = freshOwner();
+    const add = async (text: string, extra: Partial<Parameters<MemoryItems['addItem']>[1]>, embedding: number[]): Promise<string> => {
+      const item = await items.addItem(owner, { ...base, text, ...extra });
+      await items.setVector(owner, item?.id ?? '', text, { embedding, embedModel: 'rank' });
+      return item?.id ?? '';
+    };
+    const close = await add('Close.', {}, [1, 0.1]);
+    const middle = await add('Middle.', {}, [1, 1]);
+    const far = await add('Far.', {}, [0.1, 1]);
+    const otherAgents = await add('Private to agent B.', { agentId: 'agt-b' }, [0.9, 0.1]);
+    const query = { embedding: [1, 0], embedModel: 'rank' };
+
+    // Agent A does not see agent B's private item; the app (no agent) sees all.
+    expect(ids(await items.nearest(owner, { kind: 'owner' }, 'agt-a', query, { limit: 10 }))).toEqual([close, middle, far]);
+    expect(ids(await items.nearest(owner, { kind: 'owner' }, undefined, query, { limit: 10 }))).toEqual([close, otherAgents, middle, far]);
+    expect(ids(await items.nearest(owner, { kind: 'owner' }, 'agt-a', query, { limit: 2 }))).toEqual([close, middle]);
+    expect(ids(await items.nearest(owner, { kind: 'owner' }, 'agt-a', query, { limit: 10, ids: [far, middle, otherAgents] }))).toEqual([middle, far]);
+    expect(await items.nearest(owner, { kind: 'owner' }, 'agt-a', query, { limit: 10, ids: [] })).toEqual([]);
+    // A stranger reads only public unsensitive items: none here. Another owner reads nothing of this one.
+    expect(await items.nearest(owner, { kind: 'other' }, undefined, query, { limit: 10 })).toEqual([]);
+    expect(await items.nearest(freshOwner(), { kind: 'owner' }, undefined, query, { limit: 10 })).toEqual([]);
+  });
+
+  it('retypes the column for another model: the stored vectors are dropped to be embedded again', async () => {
+    const owner = freshOwner();
+    const item = await items.addItem(owner, { ...base, text: 'Has a vector.' });
+    await items.setVector(owner, item?.id ?? '', 'Has a vector.', { embedding: [1, 0], embedModel: 'before' });
+    expect(await items.alignVectorDimension(2)).toBe(false);
+    try {
+      expect(await items.alignVectorDimension(3)).toBe(true);
+      expect(await items.nearest(owner, { kind: 'owner' }, undefined, { embedding: [1, 0, 0], embedModel: 'before' }, { limit: 5 })).toEqual([]);
+      expect((await items.itemsNeedingVector('before', 1000)).map((entry) => entry.id)).toContain(item?.id);
+      expect(await items.setVector(owner, item?.id ?? '', 'Has a vector.', { embedding: [0, 1, 0], embedModel: 'before' })).toBe(true);
+    } finally {
+      await items.alignVectorDimension(2);
+    }
   });
 
   it('lists the items without a vector of a model, not retracted ones, and the list shrinks as vectors are stored', async () => {

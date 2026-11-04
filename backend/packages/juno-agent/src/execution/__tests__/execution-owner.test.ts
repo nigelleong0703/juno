@@ -8,7 +8,7 @@
  */
 import { createMemoryBlobStore } from '../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../testing/store.js';
 import { sessionKey, type Brain, type Enqueuer, type EventBus, type Store, type Subscription, type Tool, type ToolRegistry, type WakeEvent } from '../../contracts/index.js';
 import type { Agent, Conversation, Routine } from '@agent-desktop/public-contracts';
@@ -19,6 +19,7 @@ import { flushInboxEvent, receiveEvent, type SessionIo, type SessionState } from
 import { resolveRoutineOwner } from '../harness/services/routineTimer.js';
 import { createTriggersService } from '../harness/services/triggers.js';
 import type { RunInput, RunServices } from '../harness/services/run-types.js';
+import { SOMETHING_WENT_WRONG } from '../harness/logic/plain-errors.js';
 
 const at = '2026-10-06T00:00:00.000Z';
 const ownerA = 'owner-a';
@@ -203,6 +204,13 @@ function runServices(store: Store): RunServices {
   return { store, blobs: createMemoryBlobStore(), enqueuer: new NoopEnqueuer(), brain: brainWithOneToolCall(), toolRegistry };
 }
 
+/** A refused run ends with one plain sentence; the internal reason (`agent_owner_mismatch`, ...) goes to the log. */
+async function refusalReason(harness: ReturnType<typeof runHarness>, store: Store, input: RunInput): Promise<unknown> {
+  const lines: Array<Record<string, unknown>> = [];
+  await expect(runWorkflowBody(harness.ctx, { ...runServices(store), log: (fields) => { lines.push(fields); } }, input)).rejects.toThrow(SOMETHING_WENT_WRONG);
+  return lines.find((line) => line['reason'] !== undefined)?.['reason'];
+}
+
 /** Records the wake events handed to the enqueuer, so a test can assert their owner. */
 class RecordingEnqueuer implements Enqueuer {
   readonly wakes: WakeEvent[] = [];
@@ -232,12 +240,12 @@ function runHarness(runId: string): RunHarness {
     ctx: {
       key: runId,
       rand: { uuidv4: () => runId + '-' + counter++ },
-      run: <T>(_name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
-      awakeable: <T>() => ({ id: runId + '-awake', promise: RestatePromise.resolve(new Promise<T>(() => {})) }),
-      drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+      run: <T>(_name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()),
+      awakeable: <T>() => ({ id: runId + '-awake', promise: DurablePromise.resolve(new Promise<T>(() => {})) }),
+      drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
       // A neutral fixture: the durable cancel promise stays pending until a stop fires. Resolving it
-      // `false` instead would let RestatePromise.race pick the cancel branch and stop every run.
-      cancel: { peek: async () => false, get: () => RestatePromise.resolve(new Promise<boolean>(() => {})) },
+      // `false` instead would let DurablePromise.race pick the cancel branch and stop every run.
+      cancel: { peek: async () => false, get: () => DurablePromise.resolve(new Promise<boolean>(() => {})) },
       runFinished: async (key: string, failedRunId: string) => {
         finished.push({ sessionKey: key, runId: failedRunId });
       },
@@ -249,7 +257,7 @@ interface SessionHarness {
   io: SessionIo;
   started: Array<{ runId: string; input: RunInput }>;
   state: () => SessionState | null;
-  /** Fire every armed idle flush, exactly as Restate does when the durable timer elapses. */
+  /** Fire every armed idle flush, exactly as the runner does when the durable timer elapses. */
   fireFlushes: () => Promise<void>;
 }
 
@@ -295,7 +303,7 @@ describe('resolveWakeOwner', () => {
   });
 
   it('refuses a raw wire wake that carries no owner field', () => {
-    // Parsed JSON is the actual shape a Restate handler receives; a legacy or malformed producer must
+    // Parsed JSON is the actual shape a runner handler receives; a legacy or malformed producer must
     // be refused, not crash the handler on a missing property.
     const malformed: WakeEvent[] = JSON.parse('[{"id":"w1","agentId":"a","conversationId":"c"}]');
     expect(resolveWakeOwner(malformed, target('a', 'c'))).toEqual({ reason: 'missing_owner' });
@@ -466,7 +474,7 @@ describe('run body owner scope', () => {
     const harness = runHarness('run-spoof');
     const input = runInput('agent-a', 'conv-a', ownerB);
 
-    await expect(runWorkflowBody(harness.ctx, runServices(facade), input)).rejects.toThrow(/agent_owner_mismatch/);
+    expect(await refusalReason(harness, facade, input)).toBe('agent_owner_mismatch');
 
     expect((await scoped(raw, ownerA).list('runs')).items).toEqual([]);
     expect((await scoped(raw, ownerB).list('runs')).items).toEqual([]);
@@ -486,7 +494,7 @@ describe('run body owner scope', () => {
       sessionKey: 'agent-a:conv-b',
     };
 
-    await expect(runWorkflowBody(harness.ctx, runServices(facade), input)).rejects.toThrow(/session_key_mismatch/);
+    expect(await refusalReason(harness, facade, input)).toBe('session_key_mismatch');
 
     expect((await scoped(raw, ownerA).list('runs')).items).toEqual([]);
     expect((await scoped(raw, ownerA).list('transcripts')).items).toEqual([]);
@@ -508,7 +516,7 @@ describe('run body owner scope', () => {
       ],
     };
 
-    await expect(runWorkflowBody(harness.ctx, runServices(requestScopedStore(raw)), input)).rejects.toThrow(/mixed_owner_wake/);
+    expect(await refusalReason(harness, requestScopedStore(raw), input)).toBe('mixed_owner_wake');
     expect((await scoped(raw, ownerA).list('runs')).items).toEqual([]);
     expect(await bus(raw, ownerA).since(0)).toEqual([]);
     expect(harness.finished).toEqual([]);

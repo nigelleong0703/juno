@@ -1,7 +1,7 @@
 /**
- * The Restate outer run driver.
+ * The outer run driver.
  *
- * Restate stays the only durable execution owner: this loop owns the run's step budget,
+ * The runner stays the only durable execution owner: this loop owns the run's step budget,
  * the cancellation checks between steps and the terminal decision, while pi-agent-core
  * owns the inner turn (provider request, tool batch, turn finalization) through the
  * qualified driver in `../engines/pi-core/turn.js`. One outer step is exactly one core
@@ -9,10 +9,11 @@
  * old hand-rolled self-loop is retired.
  */
 import { LIMITS, type Brain } from '../../../contracts/index.js';
-import { chatTakesReactions } from '../../brain/index.js';
-import { offersQuietExit } from '../logic/run-origin.js';
+import { chatHasRoomAgents, chatTakesReactions } from '../../brain/index.js';
+import { speaksOnlyBySend } from '../logic/run-origin.js';
 import { runCoreTurn } from '../engines/pi-core/turn.js';
 import type { LengthBudget } from '../engines/pi-core/types.js';
+import type { CompactionLog } from '../engines/pi-core/turn-context.js';
 import type { EngineOutcome } from '../engines/registry.js';
 import type { RunCancellation } from './cancel.js';
 import { createStepTimer } from './step-timer.js';
@@ -22,7 +23,7 @@ import { createTodoGate } from './todo-gate.js';
 import { markRunBlocked } from './run-block.js';
 import { loadRunBudget, persistBudgetSnapshot, preflightBudget } from './run-budget.js';
 import type { RunContext, RunInput, RunServices } from './run-types.js';
-import type { CardRetryBudget, ReplyCitation } from './final-reply.js';
+import type { CardRetryBudget, NoReplyBudget, ReplyCitation } from './final-reply.js';
 
 /** A run that spent its step budget never produced a settled final, so it is blocked, not complete. */
 const STEP_LIMIT_REASON = 'run blocked: the step limit was reached before the run produced a final answer';
@@ -53,22 +54,26 @@ export async function runLoop(
   const progress = { working: false };
   const lengthBudget: LengthBudget = { count: 0 };
   const cardRetry: CardRetryBudget = { used: false };
+  const noReply: NoReplyBudget = { retried: false };
+  // The steps at which this run compacted, so a second compaction within a few steps ends the run instead of looping (pi-core/turn-context.ts).
+  const compactions: CompactionLog = { steps: [] };
   let context = brainCtx;
   await gate.announceBlocked('start');
   const goalBrowserMode = await ctx.run('browser-interface', async () => await services.toolRegistry.nativeBrowserAvailable?.(input.agentId) === true);
   if (goalBrowserMode) gate = withBrowserCompletionGate(gate, ctx, services, input, runId);
   // Read once and journaled, like the browser interface: the core tool list must not change within a run.
   const reactions = await ctx.run('chat-reactions', () => chatTakesReactions(services.store, input.conversationId));
-  // The quiet exit exists only in a run nobody is waiting on; the tool list, like the reactions, does not change within a run.
-  const quietExit = await ctx.run('quiet-exit', async () => offersQuietExit(await services.store.get('runs', runId)));
+  const roomTalk = await ctx.run('chat-room-talk', () => chatHasRoomAgents(services.store, input.conversationId));
+  // A run nobody is waiting on speaks only through send_message: its final text is a record line. Read once and journaled, so a replay takes the same branch.
+  input.sendOnly = await ctx.run('send-only', async () => speaksOnlyBySend(await services.store.get('runs', runId)));
   let stepIndex = 0;
 
   while (stepIndex < LIMITS.run.maxSteps) {
     const timer = createStepTimer(ctx);
     if (await cancellation.peek() === true) return 'stopped';
     const turn = await runCoreTurn({
-      ctx: timer.ctx, services, input, runId, stepIndex, brainCtx: context, cancellation, deliveredTexts, citations, progress, gate, lengthBudget, cardRetry,
-      budget, goalBrowserMode, reactions, quietExit,
+      ctx: timer.ctx, services, input, runId, stepIndex, brainCtx: context, cancellation, deliveredTexts, citations, progress, gate, lengthBudget, cardRetry, noReply,
+      budget, goalBrowserMode, reactions, roomTalk, compactions,
     });
     timer.report(services.log, { runId, step: stepIndex, outcome: turn.outcome });
     context = turn.brainCtx;

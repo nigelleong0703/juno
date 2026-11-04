@@ -265,12 +265,13 @@ describe('provider-sized compaction with durable checkpoints', () => {
   it('does not immediately re-compact from a retained assistant usage snapshot', async () => {
     const store = createMemoryStore();
     const messages: Message[] = [];
-    for (let index = 0; index < 16; index += 1) messages.push(userMessage(LONG));
+    for (let index = 0; index < 28; index += 1) messages.push(userMessage(LONG));
     messages.push(userMessage('latest question'));
     messages.push(assistantReply('short answer', 5_000_000));
     await seedTranscript(store, 'agent-1:conv-1', messages, 0);
-    // The window leaves room for the fixed system prompt (~3k tokens) once the history is summarized.
-    const brain = await createBrain({ store, blobs: createMemoryBlobStore(), provider: limitsProvider(10_240, 512) });
+    // The window leaves room for the fixed system prompt (~4k tokens) once the history is summarized; the history is long enough to
+    // exceed it first. Raise both when the system prompt grows.
+    const brain = await createBrain({ store, blobs: createMemoryBlobStore(), provider: limitsProvider(16_384, 512) });
 
     const before = await brain.buildContext(options('agent-1:conv-1'));
     expect(brain.shouldCompact(before)).toBe(true);

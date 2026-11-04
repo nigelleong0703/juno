@@ -1,11 +1,14 @@
 import type { PlatformSkillsService } from '@agent-desktop/memory-graph/skills';
 import { requestCacheShape } from './request-cache.js';
 import type { HarnessPins } from '../../modules/harness/store.js';
-import { withSessionHarness } from '../../modules/harness/pin.js';
+import { repinSystemRow, withSessionHarness } from '../../modules/harness/pin.js';
 import type { AssistantTurn, BlobStore, Brain, BrainContext, Compaction, Store, TranscriptEntry } from '../../contracts/index.js';
 import { LIMITS } from '../../contracts/index.js';
 import { buildContext, hydrateContext, projectMessages, readProviderLimits, resolveFrozenModel, slimContext, type BrainContextData, type ComputerEnvironmentSource } from './context.js';
-import { isSystemEntry } from './context-notes.js';
+import { findSystemEntry, isSystemEntry, metaOf } from './context-notes.js';
+import { ModelTurnError } from './model-turn-error.js';
+import { orderTools } from './tool-order.js';
+import { withoutJunoSearch } from './native-web-search.js';
 import type { HomeDeps } from '../../modules/home/service.js';
 import type { MemoryPort } from '../../modules/memory/port.js';
 import type { ConnectorCatalog } from '../../modules/mcp/catalog.js';
@@ -13,12 +16,14 @@ import type { Message } from '@earendil-works/pi-ai';
 import type { Tool } from '../../contracts/index.js';
 import {
   compactionTailBudgetTokens,
-  estimateMessagesTokens,
+  estimateContextTokensForPressure,
   createCompaction,
+  createTrim,
   planCompaction,
   readLatestCompaction,
   summaryRequestMessage,
 } from './compaction.js';
+import { MIN_RECLAIM_SHARE, planTrim } from './result-trim.js';
 import type { LimitsAwareProvider } from './model-limits.js';
 import { readTranscript } from './transcript.js';
 import { withImages } from './transcript-images.js';
@@ -30,7 +35,7 @@ import { createModelFetch } from '../../modules/tools/net/guardedFetch.js';
 import { resolveSystemOne } from './system-one.js';
 import { createJevSystemOne, type JevEndpoint } from './system-one-jev.js';
 import { createEmulatedSystemOne } from './system-one-emulation.js';
-import { contextPressure, withMetrics, withoutMetrics, type CompactionMetrics } from './compaction-metrics.js';
+import { compactionThreshold, contextPressure, trimDue, withMetrics, withoutMetrics, type CompactionMetrics } from './compaction-metrics.js';
 
 /** Deadline for one auxiliary call (run title / role suggestion); the run never waits on it. */
 const QUICK_TEXT_TIMEOUT_MS = 20_000;
@@ -40,6 +45,9 @@ const BACKGROUND_TEXT_TIMEOUT_MS = 5 * 60_000;
 export const QUICK_TEXT_SESSION_KEY = 'aux:quick-text';
 /** A chat idle for an hour is compacted in the background only when it holds more than this many tokens; inside a run only the window rule compacts. */
 const IDLE_COMPACT_MIN_TOKENS = 128_000;
+/** The smallest output a warm-up asks for (a Responses endpoint refuses fewer than 16, and a reasoning model spends some on thinking); the reply is discarded. */
+const WARM_MAX_OUTPUT_TOKENS = 32;
+const WARM_PROBE = 'ok';
 /** Deadline for one System One call; the reviewers sit in a tool step and fail closed when it passes. */
 const SYSTEM_ONE_TIMEOUT_MS = 20_000;
 
@@ -97,6 +105,38 @@ export async function createBrain({ store, blobs, provider, modelSelection, envi
         ...(onStats === undefined ? {} : { onStats: (stats) => onStats({ ...stats, hydrateMs, ...cacheShape }) }),
       });
     },
+    // The prefix a run for this session would send now, read without writing anything (buildContext writes the system row and notes).
+    // The model is the one a fresh run resolves, the tools are ordered and filtered like the run's, and the cache key is the session key.
+    async warmPrefix({ agentId, sessionKey, tools, signal, log }) {
+      const entries = await readTranscript(store, sessionKey);
+      const system = findSystemEntry(entries);
+      if (system === undefined) return 'cold';
+      const frozen = await resolveFrozenModel(modelSelection, agentId, undefined);
+      const used = frozen?.provider ?? provider;
+      if (used === undefined) throw modelProviderRequired();
+      const order = metaOf(system.message)?.toolOrder;
+      const ordered = withoutJunoSearch(orderTools(tools, order), frozen?.snapshot.nativeWebSearch === true);
+      const history = projectMessages(entries, await readLatestCompaction(store, sessionKey), frozen === undefined || frozen.snapshot.supportsImages);
+      const messages = await withImages(blobs, history);
+      // The closing user line comes after the cached prefix, so the provider can reuse the whole history before it.
+      const sent = [...messages, { role: 'user' as const, content: WARM_PROBE, timestamp: Date.now() }];
+      // The same fingerprints a real call logs, so a warm-up that missed the run's prefix shows in the two `model call` lines.
+      const line: Record<string, unknown> = { warm: true, model: frozen?.snapshot.modelId, effort: frozen?.snapshot.controls?.reasoningEffort ?? (frozen?.snapshot.controls?.omitReasoning === true ? 'omit' : undefined), ...requestCacheShape(sent, ordered) };
+      try {
+        const turn = await used.call({ messages: sent, tools: ordered, signal, sessionKey, maxOutputTokens: WARM_MAX_OUTPUT_TOKENS, onStats: (stats) => Object.assign(line, stats) });
+        log?.({ ...line, inputTokens: turn.usage.inputTokens, cachedTokens: turn.usage.cacheReadTokens ?? 0, outputTokens: turn.usage.outputTokens }, 'model call');
+      } catch (error) {
+        // A reasoning model may spend the whole tiny budget thinking and answer nothing: the provider still read, and cached, the prefix.
+        if (!(error instanceof ModelTurnError && error.code === 'output_budget')) throw error;
+        log?.(line, 'model call');
+      }
+      return 'warmed';
+    },
+    async warmConnection({ agentId, signal }) {
+      const used = (await resolveFrozenModel(modelSelection, agentId, undefined))?.provider ?? provider;
+      if (used?.warmConnection === undefined) return 'skipped';
+      return used.warmConnection(signal);
+    },
     async toolSearchMode(agentId) {
       try {
         return (await modelSelection?.resolve(agentId))?.toolSearch ?? 'proxy';
@@ -108,17 +148,23 @@ export async function createBrain({ store, blobs, provider, modelSelection, envi
     shouldCompact(ctx) {
       return (contextPressure(ctx) ?? 0) > 1;
     },
+    shouldTrim(ctx) {
+      return trimDue(ctx);
+    },
+    async trimResults(ctx) {
+      return trimContext(await hydrateContext(store, ctx));
+    },
     // Background one-shots (titles, role suggestions, purchase and dialog review) run on the fast model
     // (BACKEND §10.14), never a run's frozen model: no tools and a short deadline. With no fast model
     // the platform's main model answers; with neither, null (the same answer a failed call gives).
-    async quickText(prompt, agentId) {
+    async quickText(prompt, agentId, options) {
       try {
         const used = (await auxModel(agentId)).provider;
         if (used === undefined) return null;
         const turn = await used.call({
           messages: [{ role: 'user', content: prompt, timestamp: Date.now() }],
           tools: [],
-          signal: AbortSignal.timeout(QUICK_TEXT_TIMEOUT_MS),
+          signal: AbortSignal.timeout(options?.timeoutMs ?? QUICK_TEXT_TIMEOUT_MS),
           sessionKey: QUICK_TEXT_SESSION_KEY,
         });
         const text = turn.text.trim();
@@ -191,7 +237,7 @@ export async function createBrain({ store, blobs, provider, modelSelection, envi
       const supportsImages = frozen === undefined || frozen.snapshot.supportsImages;
       const previous = await readLatestCompaction(store, sessionKey);
       const messages = projectMessages(await readTranscript(store, sessionKey), previous, supportsImages);
-      if (estimateMessagesTokens(messages) <= IDLE_COMPACT_MIN_TOKENS) return;
+      if (estimateContextTokensForPressure(messages, frozen?.snapshot.modelId) <= IDLE_COMPACT_MIN_TOKENS) return;
       const compacted = await compactContext({
         sessionKey, agentId, messages, systemPrompt: '', compactionEpoch: previous?.epoch ?? 0,
         ...(frozen ? { modelSelection: frozen.snapshot } : {}), ...limits,
@@ -199,6 +245,39 @@ export async function createBrain({ store, blobs, provider, modelSelection, envi
       home?.log?.({ agentId, sessionKey, metrics: compacted['compactionMetrics'], harnessVersion }, 'idle compaction');
     },
   };
+
+  /**
+   * The result trim (BACKEND §3.5.2b): one epoch boundary after which the old large tool results show as stubs. Nothing is summarized and no
+   * model is called. When too little would come back to be worth breaking the cache, nothing is written and the context comes back as it
+   * was: the next step looks again (a read of the transcript, no cache cost) and trims once enough old results have piled up.
+   */
+  async function trimContext(context: BrainContextData): Promise<BrainContext> {
+    const entries = await readTranscript(store, context.sessionKey);
+    const previous = await readLatestCompaction(store, context.sessionKey);
+    const rows = entries.filter(entry => !isSystemEntry(entry) && entry.seq > (previous?.uptoSeq ?? -1));
+    const plan = planTrim(rows, new Set((previous?.trims ?? []).map(trim => trim.seq)));
+    const threshold = compactionThreshold(context);
+    const settled = withoutMetrics(context);
+    if (threshold === undefined || plan.reclaimedTokens < threshold * MIN_RECLAIM_SHARE) return settled;
+    // A compaction that landed since the context was built owns the epoch: this trim would be stale, so it stands down.
+    const fresh = await readLatestCompaction(store, context.sessionKey);
+    if ((fresh?.epoch ?? null) !== (previous?.epoch ?? null)) return settled;
+    const epoch = Math.max(context.compactionEpoch, fresh?.epoch ?? 0) + 1;
+    const created = createTrim(context.sessionKey, epoch, previous, plan.trims);
+    await store.put('compactions', created);
+    const after = await readTranscript(store, context.sessionKey);
+    const messages = projectMessages(after, created, context.modelSelection?.supportsImages !== false);
+    const contextTokens = estimateContextTokensForPressure(messages, context.modelSelection?.modelId);
+    return {
+      ...settled,
+      messages,
+      compactionEpoch: epoch,
+      checkpointEpoch: epoch,
+      uptoSeq: after.reduce((top, entry) => (isSystemEntry(entry) ? top : Math.max(top, entry.seq)), -1),
+      contextTokens,
+      trimBase: contextTokens / threshold,
+    };
+  }
 
   /** Everything after hydration: plan, summarize, guard against a concurrent writer, commit the checkpoint. */
   async function compactContext(context: BrainContextData, tools: Tool[] | undefined, started: number): Promise<BrainContext> {
@@ -221,7 +300,7 @@ export async function createBrain({ store, blobs, provider, modelSelection, envi
         ? undefined
         : await summarizeWithPrefix(frozenProvider, tools, await withImages(blobs, projectUpTo(entries, previous, plan.uptoSeq, context.modelSelection?.supportsImages !== false)), context.sessionKey);
       if (attempt === undefined || attempt.text === null) {
-        const fallback = await summarizeOlderHistory(frozenProvider, plan.older, previous?.summary);
+        const fallback = await summarizeOlderHistory(frozenProvider, plan.older, previous?.summary, context.sessionKey);
         attempt = { text: fallback.text, usage: sumUsage(attempt?.usage, fallback.usage) };
       }
       // The request was really spent, so its measurement is attached on EVERY attempted path.
@@ -248,8 +327,10 @@ export async function createBrain({ store, blobs, provider, modelSelection, envi
       // The durable checkpoint is the epoch authority: a stale context epoch must never rewind it.
       const epoch = Math.max(context.compactionEpoch, freshCheckpoint?.epoch ?? 0) + 1;
       const recentUsers = recentUserTexts(previous?.recentUsers, plan.older, recentUserTokens(context.contextWindow));
-      const created = createCompaction(context.sessionKey, epoch, attempt.text, plan.uptoSeq, recentUsers);
+      const created = createCompaction(context.sessionKey, epoch, attempt.text, plan.uptoSeq, recentUsers, previous?.trims);
       await store.put('compactions', created);
+      // The prefix is rebuilt now, so its cache is lost anyway: the session leaves an old harness pin here (BACKEND §11.2).
+      await repinSystemRow(store, freshEntries);
       // Project from the post-commit transcript, not the pre-summary plan, so rows appended during
       // the summary call (tool results, new user messages) stay in the returned context.
       const after = await readTranscript(store, context.sessionKey);
@@ -260,7 +341,9 @@ export async function createBrain({ store, blobs, provider, modelSelection, envi
         compactionEpoch: epoch,
         checkpointEpoch: epoch,
         uptoSeq: after.reduce((top, entry) => (isSystemEntry(entry) ? top : Math.max(top, entry.seq)), -1),
-        contextTokens: estimateMessagesTokens(messages),
+        contextTokens: estimateContextTokensForPressure(messages, context.modelSelection?.modelId),
+        // A new boundary: the next trim look starts from scratch.
+        trimBase: 0,
       };
   }
 
@@ -327,11 +410,13 @@ async function summarizeOlderHistory(
   provider: LimitsAwareProvider,
   older: TranscriptEntry[],
   previousSummary: string | undefined,
+  sessionKey: string,
 ): Promise<SummaryAttempt> {
   try {
     const turn = await provider.call({
       messages: [summaryRequestMessage(older, previousSummary)],
       tools: [],
+      sessionKey,
       signal: AbortSignal.timeout(LIMITS.run.maxActiveSeconds * 1000),
     });
     const summary = turn.text.trim();
@@ -437,5 +522,5 @@ export type { ModelSelection, ModelSelectionErrorCode, ModelSnapshot } from './m
 export { appendToTranscript, appendWakeEvents, readTranscript } from './transcript.js';
 export { offloadImages } from './transcript-images.js';
 export { assistantMessage, toolMessage, wakeMessage, parseMessage } from './messages.js';
-export { chatTakesReactions } from './where-you-are.js';export type { Brain, BrainContext, AssistantTurn } from '../../contracts/index.js';
+export { chatHasRoomAgents, chatTakesReactions } from './where-you-are.js';export type { Brain, BrainContext, AssistantTurn } from '../../contracts/index.js';
 export type { ComputerEnvironmentSource, RunComputerEnvironment } from './context.js';

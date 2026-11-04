@@ -1,27 +1,41 @@
 import { describe, expect, it } from 'vitest';
-import { agentCommand, agentUser, homeAgentOf, homeOwnership } from './isolation-user.js';
-import { netScript, ownAgentCdpRules, validatePackages } from './isolation.js';
-import { screenPorts } from './ports.js';
+import { egressRuleset, nameserversOf } from './egress.js';
+import { agentCommand, agentNetnsPath, agentUser, homeAgentOf, homeOwnership, inAgentNetns } from './isolation-user.js';
+import { validatePackages } from './isolation.js';
+import { agentNetnsScript, hostNetScript } from './netns.js';
 
 describe('per-agent isolation rules (BACKEND 7.9)', () => {
   const A = 'agent-a';
   const B = 'agent-b';
 
-  it('lets the agent\'s own user reach its own CDP port, placed ahead of the root-only reject, and only that uid', () => {
-    const script = netScript(1, A);
-    const own = screenPorts(1).cdp;
-    expect(script).toContain(ownAgentCdpRules(own, agentUser(A))[2]);
-    expect(script).toContain(`id -u ${agentUser(A)}`);
-    expect(script).not.toContain(`id -u ${agentUser(B)}`);
-    // The accept goes to the top of JUNO_ISO, so the root-only reject of the same port (also in this script) cannot win.
-    expect(ownAgentCdpRules(own, agentUser(A))[2]).toContain('-I JUNO_ISO 1');
+  it('gives every agent its own namespace, named like its user', () => {
+    expect(agentNetnsPath(A)).toBe(`/run/netns/${agentUser(A)}`);
+    expect(agentNetnsPath(A)).not.toBe(agentNetnsPath(B));
+    expect(inAgentNetns(A)).toBe(`nsenter --net=${agentNetnsPath(A)}`);
+    const script = agentNetnsScript(A);
+    expect(script).toContain(`NS=${agentUser(A)}`);
+    expect(script).not.toContain(agentUser(B));
   });
 
-  it('removes an accept an earlier boot gave another agent on the same port before it adds its own', () => {
-    const [remove] = ownAgentCdpRules(9223, agentUser(A));
-    expect(remove).toContain('--dport 9223 ');
-    expect(remove).toContain('-j ACCEPT');
-    expect(remove).toContain('-D JUNO_ISO');
+  it('refuses to run a command when the agent\'s namespace is gone (a cold start loses it), and runs it inside it otherwise', () => {
+    const wrapped = agentCommand(A, 'true');
+    expect(wrapped.indexOf(`${inAgentNetns(A)} true`)).toBeGreaterThan(-1);
+    expect(wrapped.indexOf(`${inAgentNetns(A)} true`)).toBeLessThan(wrapped.indexOf('exit 97'));
+    expect(wrapped).toContain(`exec ${inAgentNetns(A)} setpriv`);
+  });
+
+  it('blocks private addresses on the agents\' forward path but lets DNS through to the configured nameservers first', () => {
+    const rules = egressRuleset(['192.168.65.7']);
+    expect(rules).toContain('ip daddr { 192.168.65.7 } udp dport 53 accept');
+    expect(rules.indexOf('udp dport 53 accept')).toBeLessThan(rules.indexOf('reject with icmp type admin-prohibited'));
+    for (const range of ['10.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16']) expect(rules).toContain(range);
+    // Nothing an agent sends reaches a service of the root namespace (the sandbox daemon, the link, VNC, the gateway).
+    expect(rules).toMatch(/chain input \{[^}]*iifname "jh-\*" drop/);
+    expect(hostNetScript([])).toContain('ip_forward=1');
+  });
+
+  it('reads IPv4 nameservers from resolv.conf and ignores the rest', () => {
+    expect(nameserversOf('# c\nnameserver 8.8.8.8\nnameserver 2001:4860::8888\nsearch x\nnameserver 192.168.65.7\nnameserver 8.8.8.8\n')).toEqual(['8.8.8.8', '192.168.65.7']);
   });
 
   it('names users from the agent id: stable, short enough for Linux, distinct', () => {
@@ -57,7 +71,7 @@ describe('per-agent isolation rules (BACKEND 7.9)', () => {
     const wrapped = agentCommand(A, "echo 'hi'");
     expect(wrapped).toContain(`--reuid=${agentUser(A)}`);
     expect(wrapped).toContain('/etc/juno/isolation-v1');
-    expect(wrapped.indexOf('exit 97')).toBeLessThan(wrapped.indexOf('exec setpriv'));
+    expect(wrapped.indexOf('exit 97')).toBeLessThan(wrapped.indexOf('exec nsenter'));
   });
 
   it('accepts only apt package names', () => {

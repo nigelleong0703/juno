@@ -25,10 +25,10 @@ export const researchPageSilent: TaskSpec = {
     // A research child hits dead links (404, unknown host) and moves on to other sources; the published page is the proof it recovered.
     (o) => commonChecks(o).filter((check) => check.name !== 'no tool error worked around silently'),
     (o) => {
-      const spawns = callsOf(o, 'child_spawn');
+      const spawns = callsOf(o, 'subagent_start');
       const replies = o.turns.flatMap((t) => t.replies);
       return [
-        verdict('a background child_spawn ran (notify not false)', spawns.some((c) => c.args['notify'] !== false), `spawns: ${JSON.stringify(spawns.map((c) => c.args['notify']))}`),
+        verdict('a subagent_start ran', spawns.length > 0, 'subagent_start never called'),
         verdict('artifact_publish was called by the parent and succeeded', callsOf(o, 'artifact_publish').length > 0 && okResultsOf(o, 'artifact_publish').length > 0, 'artifact_publish missing or failed'),
         verdict('at most 5 agent bubbles in the whole task', replies.length <= 5, `${replies.length} bubbles`),
         verdict('no message talks about child or background tasks', !replies.some((text) => SPLIT_TALK.test(text)), replies.filter((text) => SPLIT_TALK.test(text)).join(' | ')),

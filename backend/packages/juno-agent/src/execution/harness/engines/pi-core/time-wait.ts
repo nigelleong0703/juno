@@ -62,7 +62,7 @@ export const WAKE_DEFER_THRESHOLD_MS = 2 * 60_000;
 /**
  * A long wake_at: schedule a delayed `timer` wake to this run's own session and let the turn end, so
  * the agent is free (other messages start runs) until the time comes. The clock read is durable and
- * the delayed send is journaled by Restate, so a replay schedules it once. Returns false (caller keeps
+ * the delayed send is journaled by the runner, so a replay schedules it once. Returns false (caller keeps
  * the in-run sleep) for short waits or when this runtime cannot send wakes.
  */
 export async function deferLongWait(

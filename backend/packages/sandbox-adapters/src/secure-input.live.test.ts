@@ -1,7 +1,7 @@
 /**
  * LIVE end-to-end secure input (BACKEND 8.7) against a real throwaway container of the desktop image: the helper unseals
  * a value a client encrypted to the sandbox key and types it, the page is masked (dots in the filled input, dots in text on
- * a later page, nothing in snapshot / get_text), and the agent's own shell cannot reach the browser's debugging port or
+ * a later page, nothing in snapshot / get_text), and the agent's own shell cannot reach
  * the helper's key. Skipped unless LIVE_DOCKER=1. Use a freshly built image (`LIVE_IMAGE=<tag>`, a desktop image that
  * contains juno-link); it starts its own container and removes it afterwards.
  *
@@ -12,6 +12,7 @@ import { createCipheriv, createPublicKey, diffieHellman, generateKeyPairSync, hk
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { E2bBinding } from '@agent-desktop/contracts';
+import { inAgentNetns } from './isolation-user.js';
 import { liveImage, startLiveLink, type LiveLink } from './live-link.js';
 import { createLocalProvider } from './local.js';
 import { screenPorts } from './ports.js';
@@ -56,8 +57,8 @@ const REVIEW = `<!doctype html><title>Review</title>
   document.getElementById('pv').value = q.get('phone');
 </script>`;
 
-/** Evaluate JS in the page's MAIN world over the CDP port, as root (what the page's own scripts could see). */
-const READ_PAGE = (port: number, expression: string) => `python3 - <<'PY'
+/** Evaluate JS in the page's MAIN world over the CDP port, as root inside the agent's network namespace (what the page's own scripts could see). */
+const READ_PAGE = (port: number, expression: string) => `${inAgentNetns(A)} python3 - <<'PY'
 import json, urllib.request
 from websocket import create_connection
 tab = [t for t in json.load(urllib.request.urlopen("http://127.0.0.1:${port}/json/list")) if t["type"] == "page"][0]
@@ -98,8 +99,10 @@ live('secure input on a real container', () => {
     await provider.withRuntime(binding, signal(), async (runtime) => {
       await runtime.writeText('/tmp/site/form.html', FORM);
       await runtime.writeText('/tmp/site/review.html', REVIEW);
-      await runtime.run('cd /tmp/site && (setsid nohup python3 -m http.server 8099 --bind 127.0.0.1 >/tmp/site.log 2>&1 &); sleep 1');
+      await runtime.run('chmod -R a+rX /tmp/site');
     }, { user: 'root' });
+    // The site runs as the agent, in its network namespace: that is where its browser can reach 127.0.0.1.
+    await sh('cd /tmp/site && (setsid nohup python3 -m http.server 8099 --bind 127.0.0.1 >/tmp/site.log 2>&1 </dev/null &); sleep 1');
   }, 400_000);
 
   afterAll(() => {
@@ -191,7 +194,7 @@ live('secure input on a real container', () => {
     await shotTo('review-page', await screenshot());
   }, 120_000);
 
-  it('the agent shell cannot reach the browser, the helper key or the helper state', async () => {
+  it('the agent shell reaches its own browser (owner decision 2026-10-27) but not the helper key or the helper state', async () => {
     const probes: Record<string, string> = {
       cdpPort: `curl -s -m 4 -o /dev/null -w 'http=%{http_code}' http://127.0.0.1:${cdp}/json/version; echo " curl_exit=$?"`,
       cdpPython: `python3 -c "import socket; s=socket.socket(); s.settimeout(4); s.connect(('127.0.0.1',${cdp})); print('CONNECTED')" 2>&1 | tail -1`,
@@ -203,8 +206,8 @@ live('secure input on a real container', () => {
     const out: Record<string, string> = {};
     for (const [name, command] of Object.entries(probes)) out[name] = ((await sh(command)).stdout + (await sh(command)).stderr).trim();
     console.log('SHELL ISOLATION PROBES\n' + JSON.stringify(out, null, 2));
-    expect(out['cdpPort']).not.toContain('http=200');
-    expect(out['cdpPython']).not.toContain('CONNECTED');
+    expect(out['cdpPort']).toContain('http=200');
+    expect(out['cdpPython']).toContain('CONNECTED');
     expect(out['keyDir']).toContain('Permission denied');
     expect(out['helperState']).toContain('Permission denied');
     expect(out['whoami']).toMatch(/^juno-/);

@@ -1,5 +1,5 @@
 import { createMemoryBlobStore } from '@agent-desktop/db';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore } from '@agent-desktop/db';
 import type { WakeEvent } from '@agent-desktop/contracts';
 import type { Agent, Conversation } from '@agent-desktop/public-contracts';
@@ -42,7 +42,7 @@ export function scoped(raw: RawStore): Store {
 
 /**
  * Trusted replay seam. Entries enter only through run()'s write path below with the same T the
- * reader requests (the same contract Restate's own ctx.run carries), so a present entry — including
+ * reader requests (the same contract the real ctx.run carries), so a present entry — including
  * a stored undefined from a void step such as persist-wake — always holds the requested type. The
  * single predicate keeps that conversion in one named, reviewable place instead of scattering
  * assertions.
@@ -281,32 +281,32 @@ export function createWorkflowHarness(): WorkflowHarness {
       return {
         key: runId,
         rand: { uuidv4: () => runId + '-' + String((counter += 1)) },
-        run: <T>(name: string, action: () => Promise<T>): RestatePromise<T> => {
+        run: <T>(name: string, action: () => Promise<T>): DurablePromise<T> => {
           if (used.has(name)) throw new Error('duplicate durable step: ' + name);
           used.add(name);
           if (journal.has(name)) {
             const cached: unknown = journal.get(name);
             if (!isJournaled<T>(cached)) throw new Error('journal lost entry: ' + name);
-            return RestatePromise.resolve(structuredClone(cached));
+            return DurablePromise.resolve(structuredClone(cached));
           }
-          return RestatePromise.resolve(action().then((value) => {
+          return DurablePromise.resolve(action().then((value) => {
             journal.set(name, structuredClone(value));
             return value;
           }));
         },
-        awakeable: <T>(): { id: string; promise: RestatePromise<T> } => {
+        awakeable: <T>(): { id: string; promise: DurablePromise<T> } => {
           throw new Error('Event wait must not create a human request');
         },
-        drainInbox: () => RestatePromise.resolve<WakeEvent[]>(inbox.splice(0, inbox.length)),
-        date: { now: () => RestatePromise.resolve(nowMs) },
+        drainInbox: () => DurablePromise.resolve<WakeEvent[]>(inbox.splice(0, inbox.length)),
+        date: { now: () => DurablePromise.resolve(nowMs) },
         sleep: (ms: number) => {
           sleeps.push(ms);
           nowMs += ms;
-          return RestatePromise.resolve(sleepHook());
+          return DurablePromise.resolve(sleepHook());
         },
         cancel: {
           peek: async () => cancelled,
-          get: () => RestatePromise.resolve(cancelFired),
+          get: () => DurablePromise.resolve(cancelFired),
         },
         runFinished: async (sessionKey: string, runIdFinished: string) => {
           runFinished.push(sessionKey + ':' + runIdFinished);

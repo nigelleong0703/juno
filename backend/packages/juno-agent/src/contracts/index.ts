@@ -4,6 +4,7 @@
  */
 export * from './storage.js';
 export * from './cross-process.js';
+export * from './outbox.js';
 export * from './requests.js';
 export * from './transition.js';
 export * from './events.js';

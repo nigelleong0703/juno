@@ -51,7 +51,7 @@ export function approvalSchema(always: boolean) {
         reversible: {
           type: 'string',
           enum: ['yes', 'hard', 'no'],
-          description: '"yes": easily undone. "hard": undone only with effort or a cost (a card charge or a sent message: refund, retraction). "no": can never be undone by anyone (permanent deletion); a "no" always asks the user and can never be allowed in advance. Leave it out when unsure.',
+          description: '"yes": easily undone. "hard": undone only with effort or a cost (a card charge, a sent message). "no": can never be undone (permanent deletion); it always asks the user and can never be allowed in advance. Leave it out when unsure.',
         },
       },
     },

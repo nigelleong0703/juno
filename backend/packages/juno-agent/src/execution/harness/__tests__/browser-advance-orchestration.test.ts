@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import type { Rule } from '@agent-desktop/public-contracts';
 import type { Store, Tool, ToolContext, ToolRegistry, ToolResult, WakeEvent } from '../../../contracts/index.js';
 import type { BrowserResult } from '../../../modules/tools/computer/contract.js';
@@ -214,16 +214,16 @@ function journaling(prefix: string, journal = new Map<string, unknown>(), create
     journal, created,
     ctx: {
       rand: { uuidv4: () => prefix + String(next++) },
-      run<T>(name: string, action: () => Promise<T>): RestatePromise<T> {
+      run<T>(name: string, action: () => Promise<T>): DurablePromise<T> {
         created.push(name);
-        if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-        return RestatePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
+        if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+        return DurablePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
       },
-      awakeable<T>(): { id: string; promise: RestatePromise<T> } {
+      awakeable<T>(): { id: string; promise: DurablePromise<T> } {
         const promise = new Promise<T>((resolve) => { settle = (value) => resolve(value as T); });
-        return { id: 'awk-advance', promise: RestatePromise.resolve(promise) };
+        return { id: 'awk-advance', promise: DurablePromise.resolve(promise) };
       },
-      drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+      drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
       decide: (value) => settle?.(value),
     },
   };
@@ -759,7 +759,7 @@ describe('browser.advance canonical orchestration', () => {
     const services = servicesFor(store, browserTools(browser, 5_000), systemOne);
     let cancel: Promise<boolean | undefined> = new Promise<boolean | undefined>(() => {});
     const never = new Promise<boolean>(() => {});
-    const cancellation = createRunCancellation({ peek: () => cancel, get: () => RestatePromise.resolve(never) });
+    const cancellation = createRunCancellation({ peek: () => cancel, get: () => DurablePromise.resolve(never) });
     const running = callAdvance(journaling('x').ctx, services, runs, { goal: 'Continue' }, 0, cancellation);
     for (let attempt = 0; attempt < 200 && browser.snapshots === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
     await new Promise((resolve) => setTimeout(resolve, 5));

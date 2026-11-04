@@ -9,7 +9,7 @@ export const PLUMBING_TOOLS: ReadonlySet<string> = new Set([
   // The agent's own bookkeeping.
   'todo_write', 'task_update', 'task_stop', 'tasks_list', 'state_update', 'goal_update', 'profile_update', 'agent_update', 'connect_request',
   // Reading back what it already did or saw.
-  'transcript_read', 'output_read', 'child_wait', 'child_results', 'child_poll',
+  'transcript_read', 'output_read',
   'computer.screenshot', 'computer.move', 'browser.snapshot', 'browser.get_text',
   // The message or reaction is itself on screen.
   'send_message', 'react',

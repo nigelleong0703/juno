@@ -181,6 +181,9 @@ export const COMPUTER_RECREATED_HEADER = 'x-computer-recreated';
 /** Set by computerd on a response whose action was still running when control of its surface changed hands; the result carries a note. */
 export const CONTROL_CHANGED_HEADER = 'x-control-changed';
 
+/** Set by the runner on a home call that may only use a computer that is already running (BACKEND 7.3a); computerd never resumes, creates or renews for it. */
+export const PASSIVE_HEADER = 'x-juno-passive';
+
 /** Which of an agent's computers a file or shell call acts on: its sandbox, or the owner's Mac (My Mac). */
 export type ComputerTarget = 'sandbox' | 'mac';
 

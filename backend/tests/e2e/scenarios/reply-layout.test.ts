@@ -1,53 +1,50 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { createAccount, listenEvents, scriptedChat, toolCall, transcriptMessages } from '../harness/client';
+import { createAccount, listenEvents, scriptedChat, toolCall, transcriptMessages, transcriptTexts } from '../harness/client';
 
 const CARD = '```card\n' + JSON.stringify({ version: 1, title: 'Fares', blocks: [{ type: 'facts', rows: [{ label: 'KL', value: 'RM 40' }] }] }) + '\n```';
 
-/** A final reply is laid out as bubbles: paragraphs become separate messages and a card rides on its lead-in. */
+/** A final reply is ONE bubble, paragraphs and card included; several messages are the model's own choice (send_message messages). */
 describe('reply layout', () => {
-  it('posts paragraphs as ordered bubbles of one run, with the card on its lead-in', async () => {
+  it('posts a final reply with paragraphs and a card as one bubble, the card on it', async () => {
     const account = await createAccount('layout');
     const events = await listenEvents(account.cookie);
     try {
       const agent = await account.api('POST', '/v1/agents', { name: 'Layout' });
       const tag = randomUUID().slice(0, 8);
       const { conversationId } = await scriptedChat(account, agent.body.id, [
-        { text: `Found it ${tag}.\n\nHere are the fares ${tag}:\n\n${CARD}` },
+        { text: `Found it ${tag}.\n\nHere are the fares:\n\n${CARD}` },
       ], 'compare fares');
       const finished = await events.waitFor((e) => e.data.type === 'RUN_FINISHED' && e.data.metadata.juno.run.conversationId === conversationId, 45_000);
       const items = (await account.api('GET', `/v1/conversations/${conversationId}/items?limit=200`)).body.items
         .filter((i: { type: string }) => i.type === 'agent_message');
-      expect(items.map((i: { markdown: string }) => i.markdown)).toEqual([`Found it ${tag}.`, `Here are the fares ${tag}:`]);
-      expect(items[0].ui).toBeUndefined();
-      expect(items[1].ui.title).toBe('Fares');
-      expect(new Set(items.map((i: { runId: string }) => i.runId))).toEqual(new Set([finished.data.metadata.juno.run.id]));
-      expect(Date.parse(items[0].at)).toBeLessThan(Date.parse(items[1].at));
+      expect(items.map((i: { markdown: string }) => i.markdown)).toEqual([`Found it ${tag}.\n\nHere are the fares:`]);
+      expect(items[0].ui.title).toBe('Fares');
+      expect(items[0].runId).toBe(finished.data.metadata.juno.run.id);
     } finally {
       events.close();
     }
   });
 
-  it('posts the first paragraph while the model is still writing the rest (block streaming)', async () => {
-    const account = await createAccount('layout-stream');
+  it('posts send_message messages as ordered bubbles of one run, a reading pause apart, and the empty turn after them is not retried', async () => {
+    const account = await createAccount('layout-messages');
     const events = await listenEvents(account.cookie);
     try {
-      const agent = await account.api('POST', '/v1/agents', { name: 'Streamer' });
+      const agent = await account.api('POST', '/v1/agents', { name: 'Messenger' });
       const tag = randomUUID().slice(0, 8);
-      // The scripted model streams ~16 characters per 8 ms, so this long second paragraph takes seconds to write.
-      const long = `Second ${tag}. ` + 'word '.repeat(1600);
-      const sentAt = Date.now();
-      const { conversationId } = await scriptedChat(account, agent.body.id, [{ text: `First ${tag}.\n\n${long.trim()}` }], 'tell me');
-      const isBubble = (e: { data: { type: string; conversationId?: string; item?: { type: string } } }) => e.data.type === 'item.added' && e.data.conversationId === conversationId && e.data.item?.type === 'agent_message';
-      await events.waitFor(isBubble, 45_000);
-      const firstBubbleAfterMs = Date.now() - sentAt;
-      expect(events.events.some((e) => e.data.type === 'RUN_FINISHED' && e.data.metadata.juno.run.conversationId === conversationId)).toBe(false);
-      // Written after the model finished, the first bubble could not arrive before the whole second paragraph was streamed.
-      expect(firstBubbleAfterMs).toBeLessThan(3_000);
-      await events.waitFor((e) => e.data.type === 'RUN_FINISHED' && e.data.metadata.juno.run.conversationId === conversationId, 60_000);
+      const messages = [`KillineyGO is open now ${tag}.\nAbout 10 minutes on foot.`, `Want me to navigate there? ${tag}`];
+      const { conversationId, sessionKey } = await scriptedChat(account, agent.body.id, [
+        { toolCalls: [toolCall('call-several', 'send_message', { kind: 'text', purpose: 'answer', messages })] },
+        { text: '' },
+      ], 'that one, killineygo');
+      const finished = await events.waitFor((e) => e.data.type === 'RUN_FINISHED' && e.data.metadata.juno.run.conversationId === conversationId, 45_000);
+      expect(finished.data.metadata.juno.run.status).toBe('completed');
       const items = (await account.api('GET', `/v1/conversations/${conversationId}/items?limit=200`)).body.items
         .filter((i: { type: string }) => i.type === 'agent_message');
-      expect(items.map((i: { markdown: string }) => i.markdown)).toEqual([`First ${tag}.`, long.trim()]);
+      expect(items.map((i: { markdown: string }) => i.markdown)).toEqual(messages);
+      expect(new Set(items.map((i: { runId: string }) => i.runId))).toEqual(new Set([finished.data.metadata.juno.run.id]));
+      expect(Date.parse(items[1].at) - Date.parse(items[0].at)).toBeGreaterThanOrEqual(400);
+      expect((await transcriptTexts(sessionKey)).some((text) => text.includes('Your last turn was empty'))).toBe(false);
     } finally {
       events.close();
     }

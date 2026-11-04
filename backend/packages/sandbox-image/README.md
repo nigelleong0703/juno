@@ -4,7 +4,7 @@ Backend-owned source for the sandbox desktop image.
 
 - Recipe: `template_debian.py` (with `build_debian.py`) defines the image. Assets live in `files/` (Dock helper, panel and desktop configs, launchers, browser helper).
 - Edit: change the recipe or files here. File edits alone change only the source; they do not rebuild anything and do not touch running sandboxes.
-- Image build: run `packages/sandbox-image/build.sh`. It syncs this directory to the configured self-hosted E2B host and builds the image there (host via `E2B_BUILD_SSH`, remote template directory via `E2B_BUILD_TEMPLATE_DIR`).
+- Image build: run `packages/sandbox-image/build.sh`. It builds the template on E2B cloud: the SDK uploads the build context and E2B runs the build. The key comes from `E2B_API_KEY` or `~/.config/juno/e2b-cloud.env` (never the repo); `TEMPLATE_ALIAS` picks the alias. E2B Hobby caps a build at 8 vCPU, 8 GiB memory and 10 GiB disk (https://docs.e2b.dev/template/quickstart).
 - Existing VMs: building a new image does not reset existing VMs. An older VM that predates an asset only gains it through an explicit, non-destructive asset migration; otherwise recreate the sandbox to pick up the new image.
 
 ## Computer-use inputs
@@ -38,13 +38,13 @@ Chromium opens `/usr/local/share/agent-home/index.html` (title "Home", clock, se
 
 ## Computer link daemon
 
-`/usr/local/bin/juno-link` is the image's start command (`set_start_cmd` in `template_debian.py`; the local Dockerfile's `CMD`). It runs as root, dials OUT to computerd (`JUNO_LINK_URL`, `JUNO_LINK_ID`, `JUNO_LINK_TOKEN` in the environment, or the root-only `/etc/juno/link.json` when the platform cannot inject one) and serves everything the platform does inside the computer: commands as root, files, and byte streams to the VNC, websockify and Spaces gateway ports. The computer opens no inbound port. The binary is built from `packages/juno-link` with `bun build --compile` (`packages/juno-link/build.sh`, called by `build.sh` and `local/build.sh`), written to `files/juno-link` (not committed) and shipped by `prepare_assets.py`.
+`/usr/local/bin/juno-link` is the local image's `CMD`; the E2B template has no start command (E2B runs it as the template user `agent`, which cannot be root), computerd starts the daemon as root right after create (`e2b-driver.ts`). It runs as root, dials OUT to computerd (`JUNO_LINK_URL`, `JUNO_LINK_ID`, `JUNO_LINK_TOKEN` in its environment) and serves everything the platform does inside the computer: commands as root, files, and byte streams to the VNC, websockify and Spaces gateway ports. The computer opens no inbound port. The binary is built from `packages/juno-link` with `bun build --compile` (`packages/juno-link/build.sh`, called by `build.sh` and `local/build.sh`), written to `files/juno-link` (not committed) and shipped by `prepare_assets.py`.
 
 ## Spaces runtime
 
 `files/spaces/install-runtime.sh` (run by the last `run_cmd` of `template_debian.py`) installs the pinned official Bun binary (version and per-arch SHA-256 inside the script) to `/usr/local/bin/bun` and fills `/opt/juno/bun-cache` from the app template's committed `bun.lock`, so `bun install --frozen-lockfile --offline` works without network. `files/skills/spaces/` is the platform skill (`SKILL.md`, `spaces_tool.py`, templates `app` and `static`); `files/spaces/gateway.mjs` is the root-run gateway on port 7090 that computerd starts at runtime. To change a template's dependencies edit its `package.json`, run `bun install` in a throwaway container and commit the new `bun.lock` (and a `migrations/` made by `drizzle-kit generate`). The image gains `unzip` for the Bun archive.
 
-`files/storage/install-juicefs.sh` (the run_cmd after it) installs the pinned official JuiceFS client (version and per-arch SHA-256 inside the script) to `/usr/local/bin/juicefs`; the template adds `fuse3`. Nothing mounts at build time: computerd mounts `/juno` and `/workspace` as root when the computer is created (BACKEND 7.10), and the sandbox needs `/dev/fuse`.
+`files/storage/install-juicefs.sh` (the run_cmd after it) installs the pinned official JuiceFS client (version and per-arch SHA-256 inside the script) to `/usr/local/bin/juicefs`; the template adds `fuse3`. Nothing mounts at build time: computerd mounts `/juno` and `/workspace` as root when the computer is created, and the sandbox needs `/dev/fuse`.
 
 ## Verification
 
@@ -59,10 +59,6 @@ python3 prepare_assets.py --output /tmp/any/sandbox-assets.tar
 ```
 
 The recipe copies that single archive and installs everything in one RUN (`tar -xpf ... -C /` to the original paths, then the desktop-database, Dock-seed, permission and ownership fixups, and removal of the archive). One COPY plus one RUN replaces the old per-asset COPY series: each COPY used to snapshot another intermediate VM on the build host, which exhausted its disk. `build_debian.py` generates the archive immediately before `Template.build` and deletes it afterwards even on failure; never commit the tar (it is gitignored).
-
-## Build free-space gate
-
-`build.sh` probes the build host first with a single SSH command (`df` on the remote template directory) and refuses the build before uploading anything unless at least `MIN_BUILD_FREE_GIB` GiB are free (default 40, floored from `df -Pk` kibibytes so 39.9GiB does not satisfy 40). Override with `MIN_BUILD_FREE_GIB=<GiB>`. A refusal uploads nothing, prints no credentials, and performs no remote cleanup: free disk space on the build host and retry.
 
 ## Local Docker image (Docker Desktop on Mac)
 

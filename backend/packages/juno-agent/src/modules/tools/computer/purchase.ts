@@ -197,7 +197,7 @@ export function reviewDetails(judgment: { review?: PurchaseReview | undefined; p
 /**
  * The independent backstop for a click the model did not confirm. Unambiguous final labels are refused by rule;
  * a risky-looking one is put to `ctx.systemOne` as one Choice question (commit / proceed / unknown; this runs inside the
- * tool's fenced, never-replayed step, so a Restate replay does not repeat it). The click goes through only when
+ * tool's fenced, never-replayed step, so a replay does not repeat it). The click goes through only when
  * proceed is the top choice with P(proceed) >= PROCEED_MIN_PROBABILITY; anything else, including no System One model, a
  * timeout or an error, refuses, so the model must confirm and the user approves.
  * `review` is absent when no reviewer was involved. Verdicts are cached per (host, path, label) for the run.

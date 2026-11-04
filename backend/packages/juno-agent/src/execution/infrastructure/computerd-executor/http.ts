@@ -4,7 +4,7 @@
  */
 
 import { ComputerError, noteComputerRecreated, noteControlChanged } from '../../../modules/tools/index.js';
-import { COMPUTER_RECREATED_HEADER, CONTROL_CHANGED_HEADER } from '../../../ports/computer/index.js';
+import { COMPUTER_RECREATED_HEADER, CONTROL_CHANGED_HEADER, PASSIVE_HEADER } from '../../../ports/computer/index.js';
 import { toComputerError } from './errors.js';
 
 export const NO_MAC_ACCESS = 'This agent has no access to your Mac. Use the sandbox (on: "sandbox"), or ask the user to allow Mac access for this agent in its settings.';
@@ -17,6 +17,8 @@ export interface RequestSpec {
   signal: AbortSignal;
   /** The call acts on the owner's Mac (My Mac) instead of the sandbox: the agent named it (`on: "mac"`) and has access to it. */
   on?: 'sandbox' | 'mac';
+  /** A home call that may only use a computer that is already running: computerd never resumes, creates or renews one for it. */
+  passive?: boolean;
 }
 
 export interface Requester {
@@ -59,6 +61,7 @@ export function createRequester(opts: RequesterOptions): Requester {
       if (opts.getMacAccess && !(await opts.getMacAccess(spec.agentId))) throw new ComputerError('not_allowed', NO_MAC_ACCESS);
       headers['x-computer'] = 'mac';
     }
+    if (spec.passive === true) headers[PASSIVE_HEADER] = '1';
     return opts.fetch(new URL(spec.path, opts.baseUrl).toString(), {
       method: spec.method,
       headers,

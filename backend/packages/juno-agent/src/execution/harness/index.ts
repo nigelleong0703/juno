@@ -1,6 +1,6 @@
 /**
- * Harness: pure logic and Restate service definitions.
- * Exports logic for Session, Run, RoutineTimer; Restate service factories.
+ * Harness: pure logic and durable service definitions.
+ * Exports logic for Session, Run, RoutineTimer; service factories.
  */
 
 // Pure logic
@@ -13,7 +13,7 @@ export * from './logic/idle.js';
 // Service definitions
 export * from './services/definitions.js';
 
-// Services (Restate definitions)
+// Services (durable definitions)
 export * from './services/session.js';
 export * from './services/run.js';
 export * from './services/routineTimer.js';

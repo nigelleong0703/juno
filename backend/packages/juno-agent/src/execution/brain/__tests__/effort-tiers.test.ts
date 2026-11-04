@@ -10,7 +10,7 @@ import type { Store, WakeEvent } from '../../../contracts/index.js';
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { createMemoryStore } from '../../../testing/store.js';
 import { runWithOwner } from '../../../owner-context.js';
-import { childSessionKey } from '../../../modules/tasks/childRead.js';
+import { subagentSessionKey } from '../../../modules/tasks/subagentRead.js';
 import { createBrain } from '../index.js';
 import { backendConfigSchema } from '../../config.js';
 import { builtinCatalogItem, findBuiltinModel } from '../builtin-providers.js';
@@ -124,7 +124,7 @@ async function setup(opts: { chatTier?: EffortTier; tiers?: Tiers } = {}) {
   const child = async (runId: string, flags: { deep?: true; fast?: true } = {}) => {
     const row: Run & { deepEffort?: true; fastModel?: true } = { id: runId, agentId: AGENT, conversationId: CONV, title: 't', status: 'running', kind: 'background', steps: [], usage: { inputTokens: 0, outputTokens: 0, computeSeconds: 0, costUsd: 0, steps: 0 }, startedAt: NOW, lastActivityAt: NOW, ...(flags.deep === true ? { deepEffort: true as const } : {}), ...(flags.fast === true ? { fastModel: true as const } : {}) };
     await store.put('runs', row, { agentId: AGENT, conversationId: CONV, runId });
-    return childSessionKey(AGENT, CONV, runId);
+    return subagentSessionKey(AGENT, CONV, runId);
   };
   const wake = (kind: WakeEvent['kind']): WakeEvent => ({ id: 'w1', ownerId: OWNER, agentId: AGENT, sessionKey: AGENT + ':' + CONV, conversationId: CONV, kind, origin: { type: 'automation' }, trusted: true, priority: 'background', payload: {}, at: NOW, status: 'accepted' });
   const build = (sessionKey: string, extra: { wake?: WakeEvent[]; previousContext?: Awaited<ReturnType<typeof brain.buildContext>> } = {}) =>

@@ -7,7 +7,7 @@
  */
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { AssistantTurn, Brain, BrainContext, ToolRegistry, WakeEvent } from '../../../contracts/index.js';
 import type { StoredRequest } from '../../../contracts/requests.js';
@@ -61,12 +61,12 @@ function registry(): ToolRegistry {
 function runContext(): RunContext {
   return {
     rand: { uuidv4: () => 'id-1' },
-    run: <T>(_name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
-    awakeable: <T>(): { id: string; promise: RestatePromise<T> } => ({
+    run: <T>(_name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()),
+    awakeable: <T>(): { id: string; promise: DurablePromise<T> } => ({
       id: 'awake-1',
-      promise: RestatePromise.resolve(new Promise<T>(() => {})),
+      promise: DurablePromise.resolve(new Promise<T>(() => {})),
     }),
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
 }
 

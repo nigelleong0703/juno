@@ -2,14 +2,14 @@
  * Session Virtual Object: inbox management, busy modes, run lifecycle.
  */
 
-import { handlers as restateHandlers, object, type ObjectContext, type ObjectSharedContext, rpc } from '@agent-desktop/durable';
+import { handlers as durableHandlers, object, type ObjectContext, type ObjectSharedContext, rpc } from '@agent-desktop/durable';
 import { patchWhen, type WakeEvent } from '../../../contracts/index.js';
 import { sessionDef, runDef, chatDigestDef, type SessionDef, type RunDef, type ChatDigestDef } from './definitions.js';
 import { inOwnerScope, resolveAdmittedOwner } from '../../execution-owner.js';
 import { replyOriginOf } from '../../../modules/channel-origin.js';
 import { takeSteerEvents } from '../logic/busy.js';
 import { defaultState, type Services, type SessionIo, type SessionState, type TypingState } from './session-state.js';
-import { childCompletionRoute } from './completion-wake.js';
+import { subagentCompletionRoute } from './completion-wake.js';
 import { INTERRUPTED_BY_MESSAGE } from './run-input.js';
 import { drainInboxEvents, flushInboxEvent, idleCompactEvent, receiveEvent, runFinishedEvent, type ReceiveDecision } from './session-events.js';
 
@@ -89,7 +89,7 @@ export const createSessionService = (services: Services) => {
       if (ownerId === undefined) return { accepted: false, reason: admitted.reason ?? 'missing_owner' };
       return inOwnerScope(ownerId, async () => {
         // Only a task_done can be re-routed, so other events add no journal step; a session never re-sends to itself.
-        const routed = event.kind === 'task_done' ? await ctx.run('route-completion', () => childCompletionRoute(services.store, event)) : null;
+        const routed = event.kind === 'task_done' ? await ctx.run('route-completion', () => subagentCompletionRoute(services.store, event)) : null;
         if (routed !== null && routed.sessionKey !== io.key) {
           ctx.objectSendClient<SessionDef>(sessionDef, routed.sessionKey).receive(routed.wake);
           return { accepted: true, reason: 'routed_to_child' };
@@ -101,6 +101,11 @@ export const createSessionService = (services: Services) => {
         if (received.accepted && event.origin.type === 'user' && (event.kind === 'user_message' || event.kind === 'room_mention')) {
           const origin = replyOriginOf([event]);
           ctx.objectSendClient<ChatDigestDef>(chatDigestDef, event.conversationId).touch({ ownerId, agentId: event.agentId, conversationId: event.conversationId, ...(origin === undefined ? {} : { origin }) });
+        }
+        // A group message the agent only observed: the digest counts it (every ~30 messages or hourly while the chat is active, never per message).
+        if (received.accepted && event.kind === 'observed') {
+          const origin = replyOriginOf([event]);
+          ctx.objectSendClient<ChatDigestDef>(chatDigestDef, event.conversationId).observe({ ownerId, agentId: event.agentId, conversationId: event.conversationId, ...(event.payload['backfill'] === true ? { immediate: true } : {}), ...(event.payload['quiet'] === true ? { quiet: true } : {}), ...(origin === undefined ? {} : { origin }) });
         }
         // A typed message while the active run waits on a blocking request ends that wait WITHOUT deciding the request.
         if (received.accepted && event.kind === 'user_message' && event.origin.type === 'user') await interruptWait(ctx, io);
@@ -121,7 +126,7 @@ export const createSessionService = (services: Services) => {
     },
 
     /** Read-only (shared, so it never queues behind a write): what a run holding its final reply needs to know. */
-    typingState: restateHandlers.object.shared(async (ctx: ObjectSharedContext): Promise<TypingState> => {
+    typingState: durableHandlers.object.shared(async (ctx: ObjectSharedContext): Promise<TypingState> => {
       const state = (await ctx.get<SessionState>('state')) ?? defaultState();
       return { typingUntil: state.typingUntil ?? null, steerQueued: takeSteerEvents(state.inbox).steer.length };
     }),

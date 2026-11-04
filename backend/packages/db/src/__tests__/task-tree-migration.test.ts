@@ -182,6 +182,15 @@ describe('the Postgres store under the task tree', () => {
         keyset = { at: last.startedAt, id: last.id };
       }
       expect(seen).toEqual(byBytes);
+      const cursorSeen: string[] = [];
+      let cursor: string | undefined;
+      for (;;) {
+        const page = await store.list('backgroundTasks', { where: { agentId, statuses: ['completed'] }, orderBy: 'at', order: 'desc', limit: 3, ...(cursor === undefined ? {} : { cursor }) });
+        cursorSeen.push(...page.items.map((row) => row.id));
+        cursor = page.nextCursor;
+        if (cursor === undefined) break;
+      }
+      expect(cursorSeen).toEqual(byBytes);
     } finally {
       await store.close();
     }

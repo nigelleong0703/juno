@@ -1,6 +1,6 @@
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, it, expect } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type {
   AssistantTurn, Brain, BrainContext, Store, Tool, ToolRegistry, WakeEvent,
@@ -35,11 +35,11 @@ class ScriptedTurns implements Brain {
 }
 
 function sendText(id: string, text: string): AssistantTurn {
-  return { text: '', toolCalls: [{ id, name: 'send_message', arguments: { kind: 'text', text } }], usage, stopReason: 'tool_calls' };
+  return { text: '', toolCalls: [{ id, name: 'send_message', arguments: { kind: 'text', purpose: 'result', text } }], usage, stopReason: 'tool_calls' };
 }
 
 function sendToRoom(id: string, text: string, conversationId: string): AssistantTurn {
-  return { text: '', toolCalls: [{ id, name: 'send_message', arguments: { kind: 'text', text, conversationId } }], usage, stopReason: 'tool_calls' };
+  return { text: '', toolCalls: [{ id, name: 'send_message', arguments: { kind: 'text', purpose: 'result', text, conversationId } }], usage, stopReason: 'tool_calls' };
 }
 
 function callStub(id: string): AssistantTurn {
@@ -62,12 +62,12 @@ function runContext(): RunContext {
   let ids = 0;
   return {
     rand: { uuidv4: () => 'id' + String(ids++) },
-    run: <T>(_name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
-    awakeable: <T>(): { id: string; promise: RestatePromise<T> } => ({
+    run: <T>(_name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()),
+    awakeable: <T>(): { id: string; promise: DurablePromise<T> } => ({
       id: 'awake',
-      promise: RestatePromise.resolve(new Promise<T>(() => {})),
+      promise: DurablePromise.resolve(new Promise<T>(() => {})),
     }),
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
 }
 

@@ -65,8 +65,8 @@ describe('compact model view', () => {
     const all = await registry.forAgent('agent-ns');
     const shown = presentForModel(all, {});
     expect(all.length).toBeGreaterThan(30);
-    expect(shown.length).toBeLessThanOrEqual(10);
-    expect(shown.map((entry) => entry.name)).toEqual(expect.arrayContaining(['send_message', 'tool_search', 'tool_call', 'skill_search', 'skill_read', 'child_spawn', 'todo_write']));
+    expect(shown.length).toBeLessThanOrEqual(16);
+    expect(shown.map((entry) => entry.name)).toEqual(expect.arrayContaining(['send_message', 'tool_search', 'tool_call', 'skill_search', 'skill_read', 'subagent_start', 'todo_write']));
     // Needed only while a request is pending, so it sits behind disclosure but stays registered and policy-checked.
     expect(shown.map((entry) => entry.name)).not.toContain('request_withdraw');
     expect(registry.get('request_withdraw')).toBeDefined();

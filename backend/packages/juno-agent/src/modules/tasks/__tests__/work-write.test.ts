@@ -7,10 +7,10 @@ import { describe, expect, it } from 'vitest';
 import type { Agent, Conversation, Run } from '@agent-desktop/public-contracts';
 import { createMemoryStore } from '../../../testing/store.js';
 import type { BackgroundTask, Store, StoredRequest } from '../../../contracts/index.js';
-import { cancelChildTasks, spawnChildTask, type ChildDispatchAdapter } from '../child.js';
-import { cancelChildRun } from '../childControl.js';
+import { cancelSubagentTasks, startSubagent, type SubagentDispatchAdapter } from '../subagent.js';
+import { cancelSubagentRun } from '../subagentControl.js';
 import { recordRunStop } from '../stop-record.js';
-import { childRunsOf, type ChildRun } from '../childRead.js';
+import { subagentRunsOf, type SubagentRun } from '../subagentRead.js';
 import { recordBackgroundTask, stopBackgroundTask, trackBackgroundCall } from '../background-registry.js';
 import { openEffectReview, settleEffectReview } from '../effect-review.js';
 import { projectBackground, projectRun, type WorkRun } from '../work-view.js';
@@ -23,8 +23,8 @@ const AT = '2026-10-29T00:00:00.000Z';
 const usage = { inputTokens: 0, outputTokens: 0, computeSeconds: 0, costUsd: 0, steps: 0 };
 const ORIGIN = { type: 'owner_message' as const, conversationId: CONV };
 
-class RecordingAdapter implements ChildDispatchAdapter {
-  async startChildRun(): Promise<void> {}
+class RecordingAdapter implements SubagentDispatchAdapter {
+  async startSubagentRun(): Promise<void> {}
 }
 
 const run = (id: string, extra: Partial<Run> = {}): Run => ({ id, agentId: AGENT, conversationId: CONV, title: id, status: 'running', kind: 'chat', steps: [], usage, startedAt: AT, lastActivityAt: AT, origin: ORIGIN, ...extra });
@@ -41,14 +41,14 @@ async function seed(): Promise<Store> {
 }
 
 const spawn = (store: Store, parentRunId: string, callId: string) =>
-  spawnChildTask(store, { ownerId: OWNER, agentId: AGENT, parentRunId, conversationId: CONV, callId, prompt: 'research flights', targetAgentId: AGENT }, new RecordingAdapter());
+  startSubagent(store, { ownerId: OWNER, agentId: AGENT, parentRunId, conversationId: CONV, callId, prompt: 'research flights', targetAgentId: AGENT }, new RecordingAdapter());
 
 describe('child runs in the tree', () => {
   it('records the root, depth and origin once at spawn, and finds the children through the indexed parent link among thousands of runs', async () => {
     const store = await seed();
     const first = await spawn(store, ROOT, 'c1');
     if (!first.ok) throw new Error(first.reason);
-    const child: ChildRun | null = await store.get('runs', first.child.runId);
+    const child: SubagentRun | null = await store.get('runs', first.child.runId);
     expect(child).toMatchObject({ parentRunId: ROOT, rootRunId: ROOT, depth: 1, origin: { type: 'parent_run', runId: ROOT }, rootOrigin: ORIGIN });
 
     const second = await spawn(store, first.child.runId, 'c2');
@@ -59,7 +59,7 @@ describe('child runs in the tree', () => {
     for (let index = 0; index < 5200; index += 1) await store.put('runs', run('run-noise-' + String(index), { startedAt: '2026-10-28T00:00:00.000Z' }));
     const lists: unknown[] = [];
     const counting: Store = { ...store, list: (async (collection: 'runs', query: never) => { lists.push(query); return store.list(collection, query); }) as Store['list'] };
-    expect((await childRunsOf(counting, ROOT)).map((entry) => entry.id)).toEqual([first.child.runId]);
+    expect((await subagentRunsOf(counting, ROOT)).map((entry) => entry.id)).toEqual([first.child.runId]);
     expect(lists).toHaveLength(1);
     expect(lists[0]).toMatchObject({ where: { parentId: ROOT } });
   });
@@ -71,18 +71,18 @@ describe('who stopped a child run', () => {
     if (!result.ok) throw new Error(result.reason);
     return result.child.runId;
   };
-  const access = (childRunId: string) => ({ ownerId: OWNER, agentId: AGENT, parentRunId: ROOT, childRunId, conversationId: CONV });
+  const access = (childRunId: string) => ({ ownerId: OWNER, agentId: AGENT, parentRunId: ROOT, subagentRunId: childRunId, conversationId: CONV });
 
-  it('records the agent for its own child_cancel, and the first requester wins over a later cascade', async () => {
+  it('records the agent for its own subagent stop, and the first requester wins over a later cascade', async () => {
     const store = await seed();
     const byAgent = await spawned(store, ROOT, 'cancel-1');
-    await cancelChildRun(store, async () => undefined, access(byAgent));
+    await cancelSubagentRun(store, async () => undefined, access(byAgent));
     expect((await store.get('runs', byAgent))?.stoppedBy).toBe('agent');
 
     // The owner stopped the parent first, so the platform's cascade to its children keeps saying "owner".
     const byOwner = await spawned(store, ROOT, 'cancel-2');
     await recordRunStop(store, ROOT, 'owner');
-    await cancelChildTasks(store, async () => undefined, ROOT);
+    await cancelSubagentTasks(store, async () => undefined, ROOT);
     expect((await store.get('runs', byOwner))?.stoppedBy).toBe('owner');
     expect((await store.get('runs', byAgent))?.stoppedBy).toBe('agent');
   });
@@ -90,7 +90,7 @@ describe('who stopped a child run', () => {
   it('records the platform for a cascade from a parent that ended on its own, and never relabels a finished run', async () => {
     const store = await seed();
     const child = await spawned(store, ROOT, 'cascade-1');
-    await cancelChildTasks(store, async () => undefined, ROOT);
+    await cancelSubagentTasks(store, async () => undefined, ROOT);
     expect((await store.get('runs', child))?.stoppedBy).toBe('system');
     await store.patch('runs', child, { status: 'completed' } as Partial<Run>);
     await recordRunStop(store, child, 'owner');
@@ -105,7 +105,7 @@ const job = (id: string, extra: Partial<BackgroundTask> = {}): BackgroundTask =>
 describe('background jobs in the tree', () => {
   it('copies the root of the run that started the job', async () => {
     const store = await seed();
-    await store.put('runs', run('run-kid', { kind: 'background', parentRunId: ROOT }) as ChildRun & Run, { agentId: AGENT, conversationId: CONV });
+    await store.put('runs', run('run-kid', { kind: 'background', parentRunId: ROOT }) as SubagentRun & Run, { agentId: AGENT, conversationId: CONV });
     await store.patch('runs', 'run-kid', { rootRunId: ROOT, depth: 1 } as Partial<Run>);
     await recordBackgroundTask(store, job('mcp-1', { runId: 'run-kid' }));
     await recordBackgroundTask(store, job('mcp-2', { runId: ROOT }));
@@ -135,10 +135,10 @@ describe('background jobs in the tree', () => {
 });
 
 describe('effect review on a routine run', () => {
-  const request = (id: string, state: 'pending' | 'user_reported_succeeded' | 'user_confirmed_not_executed' | 'still_unknown'): StoredRequest => ({
+  const request = (id: string, state: 'pending' | 'authorized' | 'declined'): StoredRequest => ({
     id, kind: 'question', status: state === 'pending' ? 'pending' : 'answered', title: 't', summary: 's', agentId: AGENT, conversationId: CONV, runId: 'run-routine',
     payload: { kind: 'question', ui: { version: 1, title: 't', blocks: [] } }, createdAt: AT,
-    reconciliation: { stepId: 'stp-' + id, tool: 'crm.update', fingerprint: 'f', reason: 'r', state },
+    reconciliation: { stepId: 'stp-' + id, tool: 'crm.update', fingerprint: 'f'.repeat(64), state },
   });
 
   it('stays open until every uncertain action is settled, and the task shows it live and after the run ends', async () => {
@@ -151,21 +151,18 @@ describe('effect review on a routine run', () => {
     await openEffectReview(store, 'run-routine');
     expect(await read()).toMatchObject({ kind: 'routine', status: 'waiting', waitingFor: 'effect_review' });
 
-    // The owner reports the first one done: the second is still open.
-    await store.put('requests', request('req-1', 'user_reported_succeeded'));
-    await settleEffectReview(store, request('req-1', 'user_reported_succeeded'));
+    // The person answers the first question: the second is still open.
+    await store.put('requests', request('req-1', 'authorized'));
+    await settleEffectReview(store, request('req-1', 'authorized'));
     expect((await store.get('runs', 'run-routine'))?.effectReview).toBe('open');
 
-    // The run finishes while the second card is unanswered: the outcome is unknown, not done.
+    // The run finishes while the second question is unanswered: the outcome is unknown, not done.
     await store.patch('runs', 'run-routine', { status: 'completed', finishedAt: AT });
     expect(await read()).toMatchObject({ status: 'ended', outcome: 'unknown_effect', outcomeDetail: 'effect_review' });
 
-    // "Still unknown" keeps it open; a report settles it.
-    await store.put('requests', request('req-2', 'still_unknown'));
-    await settleEffectReview(store, request('req-2', 'still_unknown'));
-    expect((await store.get('runs', 'run-routine'))?.effectReview).toBe('open');
-    await store.put('requests', request('req-2', 'user_confirmed_not_executed'));
-    await settleEffectReview(store, request('req-2', 'user_confirmed_not_executed'));
+    // Any answer to the last question settles it.
+    await store.put('requests', request('req-2', 'declined'));
+    await settleEffectReview(store, request('req-2', 'declined'));
     expect(await read()).toMatchObject({ status: 'ended', outcome: 'done' });
   });
 });

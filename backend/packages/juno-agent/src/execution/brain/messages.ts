@@ -42,7 +42,7 @@ export function assistantMessage(turn: AssistantTurn): AssistantMessage {
     usage: { input: turn.usage.inputTokens, output: turn.usage.outputTokens, cacheRead: 0, cacheWrite: 0,
       totalTokens: turn.usage.inputTokens + turn.usage.outputTokens,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: turn.usage.costUsd } },
-    stopReason: turn.stopReason === 'tool_calls' ? 'toolUse' : turn.stopReason,
+    stopReason: turn.stopReason === 'tool_calls' ? 'toolUse' : turn.stopReason === 'refusal' ? 'stop' : turn.stopReason,
     timestamp: Date.now(),
   };
 }
@@ -103,6 +103,21 @@ function speakerLabel(payload: Record<string, unknown>): string {
   return `[${PLATFORM_NAMES[kind] ?? kind} · ${personLabel(payload['speakerName'], payload['speakerHandle'], payload['speakerId'], payload['personId'])} · ${role}]\n`;
 }
 
+/** The group messages the agent observed since it last spoke (BACKEND 6.8), one line each: time, who, what. '' when there are none. */
+function observedLines(value: unknown): string {
+  if (!Array.isArray(value)) return '';
+  const lines: string[] = [];
+  for (const raw of value) {
+    const entry: Record<string, unknown> = typeof raw === 'object' && raw !== null ? Object.fromEntries(Object.entries(raw)) : {};
+    const text = entry['text'];
+    if (typeof text !== 'string' || text === '') continue;
+    const at = typeof entry['at'] === 'string' ? entry['at'].slice(0, 16).replace('T', ' ') + ' · ' : '';
+    const who = typeof entry['who'] === 'string' && entry['who'] !== '' ? plainLabel(entry['who'], 80) + ': ' : '';
+    lines.push(at + who + text.replace(/<(\/?)untrusted/gi, '‹$1untrusted'));
+  }
+  return lines.join('\n');
+}
+
 /** Who the message's @mentions are, decided by platform id on the server: "@Robin (@nigelleong0703) is the person you're helping". */
 function mentionNote(payload: Record<string, unknown>): string {
   const mentions = payload['mentions'];
@@ -117,6 +132,29 @@ function mentionNote(payload: Record<string, unknown>): string {
   return lines.length === 0 ? '' : `[${lines.join('; ')}]`;
 }
 
+/**
+ * An @all in an app room wakes every agent at once and none can see the others' replies yet, so two asked to "talk to each other" both
+ * opened. The wake lists everyone the message went to (`roomPeers`, written by message admission, this agent included); the first by
+ * name opens, the rest wait to be spoken to.
+ */
+function roomTogetherNote(event: WakeEvent): string {
+  const peers = event.payload['roomPeers'];
+  if (event.payload['addressed'] !== 'everyone' || !Array.isArray(peers)) return '';
+  const all = peers.flatMap((peer): Array<{ id: string; name: string }> => {
+    if (typeof peer !== 'object' || peer === null) return [];
+    const id: unknown = Reflect.get(peer, 'id');
+    const name: unknown = Reflect.get(peer, 'name');
+    return typeof id === 'string' && typeof name === 'string' && name.trim() !== '' ? [{ id, name: plainLabel(name, 80) }] : [];
+  }).sort((a, b) => a.name.localeCompare(b.name));
+  const others = all.filter((peer) => peer.id !== event.agentId);
+  const first = all[0];
+  if (others.length === 0 || first === undefined) return '';
+  const list = others.map((peer) => `${peer.name} (id ${peer.id})`).join(', ');
+  return first.id === event.agentId
+    ? harnessText('wake.room_everyone_opener', { others: list })
+    : harnessText('wake.room_everyone_waits', { others: list, opener: first.name });
+}
+
 /** A monitor wake: a system notice in our words, or the new items (data from the source, never instructions) with what the person asked for. */
 function monitorText(payload: Record<string, unknown>, text: string): string {
   if (payload['notice'] === true) return harnessText('wake.monitor_notice', { text });
@@ -127,17 +165,18 @@ function monitorText(payload: Record<string, unknown>, text: string): string {
   return harnessText('wake.monitor_found', { name, count: String(count), items: count === 1 ? 'item' : 'items', asked, text });
 }
 
-export function wakeMessage(event: WakeEvent, options: { quietExit?: boolean } = {}): UserMessage {
+export function wakeMessage(event: WakeEvent, options: { nobodyWaiting?: boolean } = {}): UserMessage {
   const text = typeof event.payload.text === 'string' ? event.payload.text : JSON.stringify(event.payload);
   let content = text;
   // A completion routed into a running child arrives as child_task (H-98) and keeps its task_done text.
-  if (event.kind === 'task_done' || (event.kind === 'child_task' && event.payload['taskId'] !== undefined)) content = taskDoneText(event.payload);
+  if (event.kind === 'task_done' || (event.kind === 'subagent_task' && event.payload['taskId'] !== undefined)) content = taskDoneText(event.payload);
   else if (event.kind === 'hand_back' && event.payload['source'] === 'screen_control') content = screenControlText(event.payload);
   else if (event.kind === 'hand_back' && event.payload['source'] === 'discord_voice') content = harnessText('wake.discord_voice_ended', { text });
   else if (event.kind === 'hand_back' && event.payload['source'] === 'meeting') content = harnessText('wake.meeting_ended', { text });
+  else if (event.kind === 'hand_back' && event.payload['source'] === 'delivery_failed') content = harnessText('wake.delivery_failed', { text });
   else if (event.payload['source'] === 'meeting' && event.payload['notice'] === true) content = harnessText('wake.meeting_notice', { text });
-  else if (event.kind === 'hand_back') content = harnessText('wake.child_update', { text });
-  else if (event.kind === 'child_task' && typeof event.payload['prompt'] === 'string') content = `${harnessText('wake.child_task')}\n${event.payload['prompt']}`;
+  else if (event.kind === 'hand_back') content = harnessText('wake.subagent_update', { text });
+  else if (event.kind === 'subagent_task' && typeof event.payload['prompt'] === 'string') content = `${harnessText('wake.subagent_task')}\n${event.payload['prompt']}`;
   else if (event.kind === 'private_handoff') content = privateHandoffText(event.payload);
   else if (event.kind === 'timer') content = harnessText('wake.timer', { text });
   else if (event.kind === 'routine') content = harnessText('wake.routine', { text });
@@ -150,10 +189,16 @@ export function wakeMessage(event: WakeEvent, options: { quietExit?: boolean } =
   const mentions = mentionNote(event.payload);
   if (mentions !== '') content += '\n' + mentions;
   if (event.kind === 'room_mention' && typeof event.payload['channelKind'] === 'string') content += '\n' + harnessText('wake.mention_hint');
+  const together = roomTogetherNote(event);
+  if (together !== '') content += '\n' + together;
+  const observed = observedLines(event.payload['observed']);
+  if (observed !== '') content = `${harnessText('wake.observed', { lines: observed })}\n${content}`;
   const context = event.payload['channelContext'];
   if (typeof context === 'string' && context !== '') content = `${harnessText('wake.channel_context', { context })}\n${content}`;
-  // The note names finish_quietly only when this run has it (quiet-eligible, decided when the run started): never a tool the run lacks.
-  if (isAutomaticWake(event)) content += '\n' + harnessText('wake.automatic', { exit: harnessText(options.quietExit === true ? 'wake.quiet_exit' : 'wake.no_quiet_exit') });
+  // The one statement of where a run's final text goes, chosen by the run's classification (decided when it started, run-origin.ts).
+  // A subagent's final text is its result for the parent; its own wake note says so.
+  if (options.nobodyWaiting === true && event.kind !== 'subagent_task' && event.origin.type !== 'user') content += '\n' + harnessText('wake.automatic.nobody_waiting');
+  else if (isAutomaticWake(event)) content += '\n' + harnessText('wake.automatic.someone_waiting');
   return { role: 'user', content, timestamp: Date.parse(event.at) };
 }
 
@@ -175,14 +220,14 @@ function privateHandoffText(payload: Record<string, unknown>): string {
  * One exit for every run: the final reply is the message the people in the chat see (final-reply replyStep), a blank one
  * posts nothing. A wake no person sent (the system or an automation: a routine, a calendar item, a finished task) gets the
  * wake.automatic note once, so the model neither sends the same thing with send_message nor closes with a "sent" note. Wake text is
- * appended to the transcript once, so this costs no cache. A helper (a run woken as a child_task) gets wake.child_task at the front of
+ * appended to the transcript once, so this costs no cache. A helper (a run woken as a child_task) gets wake.subagent_task at the front of
  * its "task assigned to you" wording instead, so it never mistakes its task for a message from an unknown agent.
  *
  * A system or automation wake. Not these: a child task (its final reply is the parent's result), the onboarding wake, the private hand-off, screen-control and live-meeting notices (they carry their own wording).
  */
 export function isAutomaticWake(event: WakeEvent): boolean {
   if (event.origin.type !== 'system' && event.origin.type !== 'automation') return false;
-  return event.kind !== 'child_task' && event.kind !== 'onboarding' && event.kind !== 'private_handoff' && !isScreenControlNote(event) && event.payload['source'] !== 'meeting';
+  return event.kind !== 'subagent_task' && event.kind !== 'onboarding' && event.kind !== 'private_handoff' && !isScreenControlNote(event) && event.payload['source'] !== 'meeting';
 }
 
 /** "1m32s" from milliseconds. */
@@ -263,6 +308,19 @@ export function pruneOldScreenshots(messages: Message[], keep = KEEP_SCREENSHOTS
   const over = total - keep;
   const remove = over > 0 ? over - (over % batch) : 0;
   if (remove === 0) return messages;
+  // Stable boundary: the screenshot that triggered the current batch is the
+  // (keep + remove)-th oldest image. Its timestamp stamps every pruned row,
+  // so a measurement taken before the batch is older than the rewritten
+  // prefix and the SDK drops it, while a later measurement stays valid.
+  // Deterministic from the rows: no clock, stable between batches.
+  const imageAt: number[] = [];
+  for (const message of messages) {
+    if (message.role !== 'toolResult') continue;
+    for (const block of message.content) {
+      if (block.type === 'image') imageAt.push(message.timestamp);
+    }
+  }
+  const trigger = imageAt[keep + remove - 1] ?? 0;
   let seen = 0;
   return messages.map((message) => {
     if (message.role !== 'toolResult' || seen >= remove || !message.content.some((block) => block.type === 'image')) return message;
@@ -273,6 +331,7 @@ export function pruneOldScreenshots(messages: Message[], keep = KEEP_SCREENSHOTS
         ? { type: 'text', text: `[image #${seen} omitted: older images are dropped to keep the context small; take a new screenshot, or web_fetch the image URL again, to see it]` }
         : block;
     });
-    return { ...message, content };
+    const stamped = Math.max(message.timestamp, trigger);
+    return { ...message, content, timestamp: stamped };
   });
 }

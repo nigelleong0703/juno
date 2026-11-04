@@ -7,27 +7,38 @@
  *
  *  - Idle: a real unref'd timer per computer, renewed by active use (create, connect, ensureScreen, acting, writable streams)
  *    and never by passive reads. When it fires the computer is suspended (memory kept) when the platform can, else stopped
- *    (a cold start later: files are on durable storage, only running processes are lost).
+ *    (a cold start later: files are on durable storage, only running processes are lost), unless a background process
+ *    (`shell.start`) is alive in it: then the window starts again (`idleExpired`).
+ *  - Holds (`hold` / `release`, BACKEND §7.3b): a run in progress or an open screen keeps the computer from pausing; the window
+ *    starts again at each check while one is held, and counts from the last release. A hold never wakes anything and lapses by itself.
  *  - Generation: every start of the daemon has a `bootId`. A different one than we last saw is a cold start: display file state
  *    of the dead generation is dropped (never killed), browser singleton locks are cleared at the next boot of each display, the
  *    durable storage is mounted again, and `onStarted` runs (Spaces are relaunched). A suspend/resume keeps the id and the screens.
+ *  - Egress: before anything runs as an agent, a computer is closed to private networks (`egress.ts`): at create, at a cold start and
+ *    at the first look after computerd restarted (a computer older than the guard). A platform that filters by itself (E2B cloud) is skipped.
+ *  - Platform skills (BACKEND §5.11b): the server's bundle is the source. A new computer gets it before `create` returns; an existing one
+ *    is brought up to date in the background the first time this process uses it (and by the hub's link-up hook after a deploy,
+ *    `skills-rollout.ts`). A failure is logged and retried at the next look; it never makes the computer unusable.
  *  - Passive reads (`environment`, `metrics`, the status gateway stream) never resume, start or renew anything.
  */
 import { randomUUID } from 'node:crypto';
 import type { Duplex } from 'node:stream';
-import type { E2bBinding } from '@agent-desktop/contracts';
+import { DEFAULT_IDLE_PAUSE_MINUTES, type E2bBinding } from '@agent-desktop/contracts';
 import { createLogger } from '@agent-desktop/log';
 import { idleWindowMs, type CreateSpec, type LifecycleDriver } from './driver.js';
 import { isIdempotentAction } from './action-policy.js';
-import { ComputerdError, StaleComputerError, failed, noScreen, unavailable } from './errors.js';
+import { ComputerAsleepError, ComputerdError, StaleComputerError, failed, noScreen, unavailable } from './errors.js';
 import { ENVIRONMENT_COMMAND, parseEnvironmentOutput } from './environment.js';
 import { agentRuntime, prepareComputer, prepareForAgent, prepareScreen } from './isolation.js';
+import { applyEgressGuard } from './netns.js';
 import { createSandboxSide } from './path-transfer.js';
+import type { SkillsRollout } from './skills-rollout.js';
+import { hasRunningProcess } from './processes.js';
 import type { LinkConnection, LinkHub } from './link-hub.js';
 import { LINK_WAIT_MS, createLinkRuntime } from './link-runtime.js';
 import { readMetrics } from './metrics.js';
 import { FIRST_SCREEN_DISPLAY, MAX_LIVE_SCREENS, screenPorts } from './ports.js';
-import type { ComputerProvider } from './provider.js';
+import { MAX_HOLD_TTL_MS, type ComputerProvider } from './provider.js';
 import type { SandboxRuntime } from './runtime.js';
 import { cleanChromiumSingletons, cleanDisplayState, displayXvfbLive } from './screen-cleanup.js';
 import { bootScreen, screenHandle, shq, stopScreenCommand } from './screen-boot.js';
@@ -75,12 +86,16 @@ export interface LinkedProviderOptions {
   onStarted?: (context: StartedContext) => Promise<void>;
   /** How long a call waits for a link that is not up yet. */
   linkWaitMs?: number;
+  /** Brings a computer to the server's platform skills bundle (`skills-rollout.ts`), shared with the link hub's link-up hook. */
+  skills?: SkillsRollout;
 }
 
 interface ComputerState {
   screens: Set<number>;
   idleMs: number;
   timer: ReturnType<typeof setTimeout> | undefined;
+  /** The binding the idle timer was last armed for, so a released hold can restart the countdown. */
+  binding: E2bBinding | undefined;
   /** The daemon generation this process last prepared the computer for. */
   bootId: string | undefined;
   /** Displays whose Chromium singleton locks still need clearing (consumed only by a successful boot). */
@@ -92,12 +107,12 @@ export function createLinkedProvider(options: LinkedProviderOptions): ComputerPr
   const files = createScreenFile();
   const states = new Map<string, ComputerState>();
   const waitMs = options.linkWaitMs ?? LINK_WAIT_MS;
-  const defaultIdleMs = options.defaultIdleMs ?? 30 * 60_000;
+  const defaultIdleMs = options.defaultIdleMs ?? DEFAULT_IDLE_PAUSE_MINUTES * 60_000;
 
   function stateFor(id: string, idleMs: number): ComputerState {
     const existing = states.get(id);
     if (existing) return existing;
-    const created: ComputerState = { screens: new Set(), idleMs, timer: undefined, bootId: undefined, restartPending: new Set() };
+    const created: ComputerState = { screens: new Set(), idleMs, timer: undefined, binding: undefined, bootId: undefined, restartPending: new Set() };
     states.set(id, created);
     return created;
   }
@@ -114,14 +129,34 @@ export function createLinkedProvider(options: LinkedProviderOptions): ComputerPr
     return createLinkRuntime({ hub, linkId: linkIdOf(binding), signal, waitMs });
   }
 
+  /**
+   * Holds (BACKEND §7.3b): who wants this owner's computer kept from pausing right now (a run in progress, an open screen), by id,
+   * each with the time it lapses unless renewed. Passive: a hold never wakes anything, it only makes the idle check re-arm the window.
+   * The provider is one owner's, and the owner has one computer, so the holds are not tied to a binding (a hold placed before the
+   * computer exists, or while it sleeps, counts the moment it runs).
+   */
+  const holds = new Map<string, number>();
+  /** Drop lapsed holds; true when any lapsed (a leak ended by its expiry counts like a release). */
+  function pruneHolds(): boolean {
+    const now = Date.now();
+    let lapsed = false;
+    for (const [id, until] of holds) {
+      if (until > now) continue;
+      holds.delete(id);
+      lapsed = true;
+    }
+    return lapsed;
+  }
+
   function touch(binding: E2bBinding, state: ComputerState): void {
     if (state.timer) clearTimeout(state.timer);
     state.timer = undefined;
+    state.binding = binding;
     void driver.keepAlive?.(binding, state.idleMs).catch(() => undefined);
     if (state.idleMs <= 0) return;
     const timer = setTimeout(() => {
       state.timer = undefined;
-      void idleSuspend(binding).catch(() => undefined);
+      void idleExpired(binding, state).catch(() => undefined);
     }, state.idleMs);
     timer.unref();
     state.timer = timer;
@@ -134,8 +169,27 @@ export function createLinkedProvider(options: LinkedProviderOptions): ComputerPr
     else await driver.stop(binding, signal);
   }
 
-  async function idleSuspend(binding: E2bBinding): Promise<void> {
+  /**
+   * The idle window ran out. A computer with background work alive in it (a `shell.start` process, watched or not) is not paused:
+   * the window starts again, so it pauses one window after the last such job ends. This is the only check, once per window,
+   * made where the timer already fires; nothing polls. A check that cannot be made pauses as before.
+   */
+  async function idleExpired(binding: E2bBinding, state: ComputerState): Promise<void> {
     try {
+      if ((await driver.status(binding, new AbortController().signal)) !== 'running') return;
+      // Held (a run in progress, a screen open), or a hold just lapsed: the window starts again from now.
+      if (pruneHolds() || holds.size > 0) {
+        if (state.timer === undefined) touch(binding, state);
+        return;
+      }
+      const signal = AbortSignal.timeout(15_000);
+      const busy = binding.linkId !== undefined && (await hasRunningProcess(rootRuntime(binding, signal), signal));
+      if (busy) {
+        if (state.timer === undefined) touch(binding, state);
+        return;
+      }
+      // Used while the check ran (touch armed a new window): not idle after all.
+      if (state.timer !== undefined) return;
       await suspendOrStop(binding, new AbortController().signal);
     } catch {
       // Best effort: a gone or foreign computer simply stays as it is.
@@ -154,7 +208,7 @@ export function createLinkedProvider(options: LinkedProviderOptions): ComputerPr
     }
     let resumed = false;
     if (status !== 'running') {
-      if (!active) throw failed(`computer ${short(binding)} is ${status}; reconnect to resume it`);
+      if (!active) throw new ComputerAsleepError(`computer ${short(binding)} is ${status}; reconnect to resume it`);
       if (status === 'suspended' && driver.resume) await driver.resume(binding, signal);
       else await driver.start(binding, signal);
       resumed = true;
@@ -171,10 +225,14 @@ export function createLinkedProvider(options: LinkedProviderOptions): ComputerPr
     const state = states.get(binding.sandboxId) ?? stateFor(binding.sandboxId, (await driver.idleWindowMs?.(binding, signal)) ?? defaultIdleMs);
     if (active) {
       await syncGeneration(binding, state, link, signal);
+      void syncSkills(binding);
       touch(binding, state);
     }
     return link;
   }
+
+  /** Bring the computer's platform skills to the server's bundle (see the file header). Never throws; concurrent callers share one run. */
+  const syncSkills = (binding: E2bBinding): Promise<void> => options.skills?.ensure(linkIdOf(binding), short(binding)) ?? Promise.resolve();
 
   /** A link that does not come up within the bounded wait means the computer is unusable: stale, so computerd replaces it. */
   async function waitForLink(binding: E2bBinding, signal: AbortSignal): Promise<LinkConnection> {
@@ -196,7 +254,11 @@ export function createLinkedProvider(options: LinkedProviderOptions): ComputerPr
   /** Detect a cold start from the daemon's boot id and put the computer back in order (see the file header). */
   async function syncGeneration(binding: E2bBinding, state: ComputerState, link: LinkConnection, signal: AbortSignal): Promise<void> {
     if (state.bootId === link.bootId) return;
+    // A computer made before the platform's current needs (e.g. no SYS_ADMIN for agent namespaces) is replaced before anything runs in it.
+    await driver.assertCurrent?.(binding, signal);
     const root = rootRuntime(binding, signal);
+    // Keep agents off private networks (BACKEND §7.9a): a cold start lost the forward rules. A failure leaves the computer unusable, not open.
+    await applyEgressGuard(root);
     if (state.bootId === undefined) {
       // Our first look after a computerd start: the marker the last preparation left decides whether the computer restarted since.
       const marker = await readMarker(root, signal);
@@ -309,6 +371,7 @@ export function createLinkedProvider(options: LinkedProviderOptions): ComputerPr
         // The computer boots, juno-link dials in; only then can anything be done inside it.
         const link = await hub.waitFor(binding.linkId as string, waitMs, signal);
         const root = rootRuntime(binding, signal);
+        await applyEgressGuard(root);
         await options.storage?.attach(root, options.ownerId, signal);
         await writeMarker(root, link.bootId);
         const state = stateFor(binding.sandboxId, idleWindowMs(host.idlePauseMinutes, host.timeoutMs));
@@ -316,6 +379,7 @@ export function createLinkedProvider(options: LinkedProviderOptions): ComputerPr
         // A browser profile on durable storage may carry the lock of a browser that ran in a computer that no longer exists.
         markRestartPending(state);
         touch(binding, state);
+        await syncSkills(binding);
         await started(binding, 'created', root);
       } catch (error) {
         await driver.destroy(binding, new AbortController().signal).catch(() => undefined);
@@ -331,6 +395,15 @@ export function createLinkedProvider(options: LinkedProviderOptions): ComputerPr
       });
     },
 
+    async adopt(binding, signal) {
+      return withLock(binding.sandboxId, async () => {
+        if (states.has(binding.sandboxId) || (await driver.status(binding, signal)) !== 'running') return;
+        const state = stateFor(binding.sandboxId, (await driver.idleWindowMs?.(binding, signal)) ?? defaultIdleMs);
+        touch(binding, state);
+        log.info({ computer: short(binding) }, 'running computer from before this process adopted: its idle timer is armed');
+      });
+    },
+
     async pause(binding, signal) {
       return withLock(binding.sandboxId, async () => {
         await suspendOrStop(binding, signal);
@@ -340,6 +413,18 @@ export function createLinkedProvider(options: LinkedProviderOptions): ComputerPr
           state.timer = undefined;
         }
       });
+    },
+
+    hold(holdId, ttlMs) {
+      holds.set(holdId, Date.now() + Math.min(Math.max(ttlMs, 0), MAX_HOLD_TTL_MS));
+    },
+
+    release(holdId) {
+      if (!holds.delete(holdId)) return;
+      pruneHolds();
+      if (holds.size > 0) return;
+      // The last hold is gone: the countdown starts now (never earlier than the last use). A sleeping computer has no timer to restart.
+      for (const state of states.values()) if (state.timer !== undefined && state.binding !== undefined) touch(state.binding, state);
     },
 
     async ensureScreen(binding, request: ScreenRequest, signal) {
@@ -438,9 +523,9 @@ export function createLinkedProvider(options: LinkedProviderOptions): ComputerPr
       return (await driver.status(binding, signal)) === 'gone' ? 'gone' : 'ok';
     },
 
-    async withRuntime<T>(binding: E2bBinding, signal: AbortSignal, fn: (runtime: SandboxRuntime) => Promise<T>, runOptions?: { user?: 'root' }): Promise<T> {
+    async withRuntime<T>(binding: E2bBinding, signal: AbortSignal, fn: (runtime: SandboxRuntime) => Promise<T>, runOptions?: { user?: 'root'; passive?: boolean }): Promise<T> {
       return withLock(binding.sandboxId, async () => {
-        await ready(binding, true, signal);
+        await ready(binding, runOptions?.passive !== true, signal);
         const root = rootRuntime(binding, signal);
         if (runOptions?.user === 'root' && (await prepareComputer(root, binding.sandboxId))) states.get(binding.sandboxId)?.screens.clear();
         return fn(root);
@@ -500,6 +585,7 @@ export function createLinkedProvider(options: LinkedProviderOptions): ComputerPr
     dispose(): void {
       for (const state of states.values()) if (state.timer) clearTimeout(state.timer);
       states.clear();
+      holds.clear();
     },
   };
   return provider;

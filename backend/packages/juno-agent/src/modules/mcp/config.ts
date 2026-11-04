@@ -1,7 +1,7 @@
 // Normalized MCP server config derived from the public create input: either an http URL or a
 // sandbox stdio command, and nothing else, so no unpublished transport can be smuggled in.
 export type McpServerConfig =
-  | { transport: 'http'; url: string; /** The owner's own API key as a request header (a catalog `userApiKey` connector). */ headers?: Record<string, string> }
+  | { transport: 'http'; url: string; /** The owner's own API key as a request header (a catalog `userApiKey` connector). */ headers?: Record<string, string>; /** A server our own gateway hosts (stored as a path, called at the current public origin): its requests carry the hosted-connector credential. */ hosted?: true }
   | { transport: 'stdio'; command: string; args: string[]; env?: Record<string, string> };
 
 export type McpConfigResult = { ok: true; config: McpServerConfig } | { ok: false; reason: string };

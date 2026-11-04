@@ -146,7 +146,7 @@ export function createRemoteMemoryPort(options: RemoteMemoryOptions): MemoryPort
       currentOf: (ownerId, personId) => call(routes.relations.currentOf, { ownerId, personId }),
     },
     digestContext: async (input) => {
-      const result = await call(routes.digestContext, { ownerId: input.ownerId, items: input.items, agents: input.agents });
+      const result = await call(routes.digestContext, { ownerId: input.ownerId, agentId: input.agentId, items: input.items, agents: input.agents });
       return { context: decodeClaimsContext(result.context), prompt: result.prompt };
     },
     applyDigest: (input) => call(routes.applyDigest, {

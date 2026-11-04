@@ -95,6 +95,9 @@ describe('native deferred tool loading (Responses wire)', () => {
     expect(tools.filter((entry) => entry['type'] === 'function' && entry['defer_loading'] !== true).map((entry) => entry['name'])).toEqual(['get_time']);
     expect(tools.find((entry) => entry['type'] === 'tool_search')).toMatchObject({ execution: 'client', parameters: { required: ['goal'] } });
     expect(tools.filter((entry) => entry['defer_loading'] === true).map((entry) => entry['name'])).toEqual(['get_weather', 'weather_alerts']);
+    // A hidden tool is declared by name and a short description only (the gateway bills every declared schema); the search result carries the full one.
+    expect(JSON.stringify(tools.find((entry) => entry['name'] === 'get_weather'))).not.toContain('"city"');
+    expect(JSON.stringify(tools.find((entry) => entry['name'] === 'get_time'))).toContain('"city"');
     // Our own function of that name is reserved by the native tool, and the proxy is not offered; nothing is sent in the pi-ai forms Muse rejects.
     expect(tools.filter((entry) => entry['name'] === 'tool_search' || entry['name'] === 'tool_call')).toEqual([]);
     expect(server.calls[0]?.raw).not.toContain('additional_tools');
@@ -114,6 +117,7 @@ describe('native deferred tool loading (Responses wire)', () => {
     ]);
     const output = items[items.length - 1] as { tools: Array<Record<string, unknown>> };
     expect(output.tools.map((entry) => [entry['name'], entry['defer_loading']])).toEqual([['get_weather', true], ['weather_alerts', true]]);
+    expect(JSON.stringify(output.tools[0])).toContain('"city"');
     expect(items.some((entry) => entry['name'] === 'tool_search')).toBe(false);
     expect(JSON.stringify(bodyTools(server.calls[1]))).toBe(JSON.stringify(tools));
     // The model calls the real tool by its own name.

@@ -26,19 +26,29 @@ export const agentUser = (agentId: string) => 'juno-' + createHash('sha256').upd
  */
 export const agentUid = (agentId: string) => 20000 + (Number.parseInt(createHash('sha256').update(agentId, 'utf8').digest('hex').slice(0, 8), 16) % 40000);
 export const agentHome = (agentId: string) => '/home/' + agentUser(agentId);
+
+/** Where `ip netns` keeps a named network namespace; the agent's namespace is named like its user. */
+export const NETNS_DIR = '/run/netns';
+export const agentNetnsPath = (agentId: string) => `${NETNS_DIR}/${agentUser(agentId)}`;
+/**
+ * The program prefix that runs a command inside this agent's network namespace (BACKEND §7.9). Root only. Everything that runs as the
+ * agent, and every root helper that has to reach the agent's loopback (its browser's debugging port, its apps), goes through it.
+ */
+export const inAgentNetns = (agentId: string) => `nsenter --net=${agentNetnsPath(agentId)}`;
 /** The per-agent X cookie file (the Xvfb `-auth` file and the clients' `XAUTHORITY`). */
 export const agentXauthority = (agentId: string) => agentHome(agentId) + '/.Xauthority';
 
 /**
- * `command` (a full POSIX shell program) as the agent's user. Meant to run as root. When the computer has not been
- * isolated yet (or the user does not exist) it prints the marker and exits `NOT_READY_EXIT` WITHOUT running the
- * command, so the caller can prepare and retry once without ever running a command twice.
- * `setpriv` execs (no extra process between the runtime's timeout/kill handling and the command); `umask 002` makes
+ * `command` (a full POSIX shell program) as the agent's user, inside the agent's network namespace. Meant to run as root. When the
+ * computer has not been isolated yet, the user does not exist or the namespace is gone (a cold start loses it) it prints the marker and
+ * exits `NOT_READY_EXIT` WITHOUT running the command, so the caller can prepare and retry once without ever running a command twice.
+ * `nsenter` and `setpriv` exec (no extra process between the runtime's timeout/kill handling and the command); `umask 002` makes
  * what an agent creates group-writable, so the other agents can use files in the shared /workspace.
  */
 export function agentCommand(agentId: string, command: string): string {
   const user = agentUser(agentId);
   const home = agentHome(agentId);
+  const enter = inAgentNetns(agentId);
   const env = [
     `HOME=${home}`,
     `USER=${user}`,
@@ -48,8 +58,8 @@ export function agentCommand(agentId: string, command: string): string {
     `PATH=${home}/.local/bin:${home}/.npm-global/bin:$PATH`,
   ].join(' ');
   return [
-    `[ -f ${ISOLATION_MARKER} ] && [ -d ${shq(home)} ] || { echo ${NOT_READY_TEXT} >&2; exit ${NOT_READY_EXIT}; }`,
-    `exec setpriv --reuid=${user} --regid=${user} --init-groups env ${env} /bin/sh -c ${shq('umask 002\n' + command)}`,
+    `[ -f ${ISOLATION_MARKER} ] && [ -d ${shq(home)} ] && ${enter} true 2>/dev/null || { echo ${NOT_READY_TEXT} >&2; exit ${NOT_READY_EXIT}; }`,
+    `exec ${enter} setpriv --reuid=${user} --regid=${user} --init-groups env ${env} /bin/sh -c ${shq('umask 002\n' + command)}`,
   ].join('\n');
 }
 

@@ -1,18 +1,17 @@
-/** Placement W: wake and injected texts (messages, task hooks, goal check-ins, onboarding, child missions, onboarding skills). */
+/** Placement W: wake and injected texts (messages, task hooks, goal check-ins, onboarding, subagent missions, onboarding skills). */
 export const WAKE_IDS = [
   // execution/brain/messages.ts: wake notes, untrusted-data frames, system notices
-  'wake.automatic',
-  'wake.quiet_exit',
-  'wake.no_quiet_exit',
-  'checkin.quiet_step',
-  'wake.child_task',
+  'wake.automatic.nobody_waiting',
+  'wake.automatic.someone_waiting',
+  'wake.subagent_task',
   'wake.private_handoff',
   'wake.private_handoff_asked',
   'wake.private_handoff_note',
   'wake.discord_voice_ended',
   'wake.meeting_ended',
   'wake.meeting_notice',
-  'wake.child_update',
+  'wake.delivery_failed',
+  'wake.subagent_update',
   'wake.untrusted_frame',
   'wake.channel_context',
   'wake.monitor_notice',
@@ -26,6 +25,10 @@ export const WAKE_IDS = [
   'wake.system_notice_routine',
   'wake.from_agent',
   'wake.mention_hint',
+  'wake.room_everyone_opener',
+  'wake.room_everyone_waits',
+  'wake.observed',
+  'wake.loop_follow_up',
   'wake.screen_control_start',
   'wake.screen_control_end_changes',
   'wake.screen_control_end_unchanged',
@@ -51,7 +54,7 @@ export const WAKE_IDS = [
   'onboarding.wake_intro',
   'skill.account_onboarding',
   'skill.agent_setup',
-  // modules/tasks/childTools.ts (child missions)
-  'child.research',
-  'child.page_builder',
+  // modules/tasks/subagentTools.ts (subagent missions)
+  'subagent.research',
+  'subagent.page_builder',
 ] as const;

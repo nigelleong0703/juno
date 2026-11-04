@@ -75,6 +75,13 @@ describe('Session names the run of a user message', () => {
     expect(s.started).toEqual(['run-1']);
   });
 
+  it('starts a spoken private turn at once: the call already decided the user stopped talking', async () => {
+    const s = await session('direct');
+    expect(await s.receive(message('m1', { payload: { text: 'm1', addressed: 'direct', channel: 'voice' } }))).toEqual({ accepted: true, runId: 'run-1' });
+    expect(s.started).toEqual(['run-1']);
+    expect(s.flushes).toEqual([]);
+  });
+
   it('names the busy run a steered message goes into', async () => {
     const s = await session('room');
     await s.receive(message('m1'));

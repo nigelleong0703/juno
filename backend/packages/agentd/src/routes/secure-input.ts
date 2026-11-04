@@ -9,7 +9,7 @@
  * opens them and types the value. Plaintext bodies are refused, so no hop (this process, computerd, the provider)
  * ever carries a value. Nothing here is stored but each field's filled/failed status, and the run resumes from a note
  * like "Filled Card number (card_number) into e12." The fill happens here and not in the run on purpose: whatever
- * reaches a run is journaled durably by Restate.
+ * reaches a run is journaled durably by the runner.
  *
  * Format checks (`validateSecureInputValues`) therefore run on the client before sealing; this handler checks that
  * every required field has a sealed value and that no unknown field is sent.

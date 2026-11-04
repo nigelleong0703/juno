@@ -2,7 +2,7 @@
 import { cacheReadMetrics } from '../../../brain/request-cache.js';
 import { TerminalError } from '@agent-desktop/durable';
 import { LIMITS, type AssistantTurn, type BrainContext, type ModelCallStats, type Tool } from '../../../../contracts/index.js';
-import { BUDGET_EXHAUSTED, compactAndRefresh } from './turn-context.js';
+import { BUDGET_EXHAUSTED, COMPACTION_THRASH, compactAndRefresh, recentlyCompacted, type CompactionLog } from './turn-context.js';
 import { parseModelSnapshot, toTerminalModelError, withFallbackModel } from '../../../brain/model-selection.js';
 import { ProviderFailureError, type ProviderFailure } from '../../../brain/model-failure.js';
 import { ModelTurnError } from '../../../brain/model-turn-error.js';
@@ -10,9 +10,11 @@ import type { RunBudget } from '../../services/run-budget.js';
 import { chargeCompactionStep, chargeFailedAttemptStep } from '../../services/model-budget.js';
 import { CANCELLED, type RunCancellation } from '../../services/cancel.js';
 import type { RunContext, RunInput, RunServices } from '../../services/run-types.js';
+import type { LiveRunEvent } from '../../../../contracts/index.js';
+import { plainProviderFailure } from '../../logic/plain-errors.js';
 
 // Turn-context preparation lives in turn-context.ts; re-exported so existing import paths hold.
-export { BUDGET_EXHAUSTED, guardModelSelection, prepareTurnContext } from './turn-context.js';
+export { BUDGET_EXHAUSTED, COMPACTION_THRASH, guardModelSelection, prepareTurnContext } from './turn-context.js';
 
 /** Transient (and quota) retries allowed on the primary model before the fallback, then a truthful failure. */
 export const MAX_TRANSIENT_ATTEMPTS = 2;
@@ -74,13 +76,10 @@ export interface RecoverModelOptions {
   tools: Tool[];
   cancellation: RunCancellation;
   recovery: RecoveryBudget;
+  /** The steps of this run that compacted: the overflow compaction counts there too, and is refused when it would be the second one in a few steps. */
+  compactions: CompactionLog;
   /** The run's frozen budget, so a compaction's measured cost is charged outside its durable step. */
   budget: RunBudget;
-  onDelta?: (text: string) => void;
-  /** Called when the provider call ends, success or failure, inside the durable action (delta side effects finish here). */
-  afterProvider?: () => Promise<void>;
-  /** Called before each attempt: the preview must not splice a failed partial into the new answer. */
-  onAttemptStart?: (attempt: number) => Promise<void>;
   /** Called after each attempt, OUTSIDE its durable action, with what it cost and how long it ran. */
   onAttempt?: (key: string, outcome: ModelStepOutcome, durationMs: number) => Promise<void>;
 }
@@ -96,18 +95,39 @@ export interface RecoveredModelStep {
 }
 
 /** One raw provider attempt; permanent failures keep their type for the journaled serialization. */
-async function callProvider(options: RecoverModelOptions, onStats: (stats: ModelCallStats) => void): Promise<AssistantTurn> {
-  const { services, brainCtx, tools, cancellation, onDelta } = options;
-  try {
-    return await services.brain.step(brainCtx, tools, {
-      signal: AbortSignal.any([cancellation.signal, AbortSignal.timeout(LIMITS.run.maxActiveSeconds * 1000)]),
-      ...(onDelta === undefined ? {} : { onDelta }),
-      onStats,
-    });
-  } finally {
-    // Still inside the durable action: whatever the delta sink was writing (streamed bubbles) settles before the step journals.
-    await options.afterProvider?.();
-  }
+async function callProvider(options: RecoverModelOptions, onStats: (stats: ModelCallStats) => void, onDelta: (delta: string) => void): Promise<AssistantTurn> {
+  const { services, brainCtx, tools, cancellation } = options;
+  return services.brain.step(brainCtx, tools, {
+    signal: AbortSignal.any([cancellation.signal, AbortSignal.timeout(LIMITS.run.maxActiveSeconds * 1000)]),
+    onStats,
+    onDelta,
+  });
+}
+
+/**
+ * Live text of ONE live model attempt (a journaled replay never runs this): a reset first, then each text delta as the provider
+ * streams it, then the end of the turn with its tool-call count. Published to the in-process live channel (`services.live`), which is
+ * synchronous and ordered, so a slow consumer cannot reorder text. A publish failure is logged and never fails the turn: the durable
+ * reply item is still the source of truth. No owner or no channel (a deployment that serves no live text): nothing is published.
+ */
+function liveAttemptOf(options: RecoverModelOptions, attempt: string): { reset(): void; onDelta(delta: string): void; end(toolCalls: number): void } {
+  const { services, input, runId } = options;
+  const ownerId = input.wakeEvents[0]?.ownerId;
+  const live = services.live;
+  const scope = { ownerId: ownerId ?? '', conversationId: input.conversationId, agentId: input.agentId, runId, attempt };
+  const publish = (event: LiveRunEvent): void => {
+    if (ownerId === undefined || live === undefined) return;
+    try {
+      live.publish(event);
+    } catch (error) {
+      services.log?.({ runId, attempt, error: error instanceof Error ? error.message : String(error) }, 'live run text not published');
+    }
+  };
+  return {
+    reset: () => publish({ ...scope, type: 'run.text.reset' }),
+    onDelta: (delta) => publish({ ...scope, type: 'run.text.delta', text: delta }),
+    end: (toolCalls) => publish({ ...scope, type: 'run.text.end', toolCalls }),
+  };
 }
 
 /**
@@ -154,18 +174,22 @@ interface JournaledAttempt {
 
 async function serializeAttempt(options: RecoverModelOptions, key: string): Promise<JournaledAttempt> {
   let measured: ModelCallStats | undefined;
-  const attempt = await runAttempt(options, (stats) => { measured = stats; });
+  const live = liveAttemptOf(options, key);
+  // Reset first, so a consumer of a retried attempt drops whatever partial text the failed one streamed.
+  live.reset();
+  const attempt = await runAttempt(options, (stats) => { measured = stats; }, live.onDelta);
+  if (attempt.outcome.kind === 'turn') live.end(attempt.outcome.turn.toolCalls.length);
   logModelCall(options, key, attempt.outcome, attempt.durationMs, measured);
   return attempt;
 }
 
-async function runAttempt(options: RecoverModelOptions, onStats: (stats: ModelCallStats) => void): Promise<JournaledAttempt> {
+async function runAttempt(options: RecoverModelOptions, onStats: (stats: ModelCallStats) => void, onDelta: (delta: string) => void): Promise<JournaledAttempt> {
   // A plain local clock: a durable op inside a ctx.run action is forbidden, and the measured delta is
   // serialized, so a replay reuses it instead of re-reading a clock.
   const started = options.ctx.localDate?.now() ?? Date.now();
   const elapsed = (): number => Math.max(0, (options.ctx.localDate?.now() ?? Date.now()) - started);
   try {
-    const turn = await callProvider(options, onStats);
+    const turn = await callProvider(options, onStats, onDelta);
     return { outcome: { kind: 'turn', turn }, durationMs: elapsed() };
   } catch (error) {
     // A failed attempt still serializes how long it ran, so its active time can be charged truthfully.
@@ -188,16 +212,13 @@ function normalizeOutcome(value: JournaledAttempt | AssistantTurn): JournaledAtt
   return { outcome: { kind: 'turn', turn: value }, durationMs: 0 };
 }
 
-/** The truthful terminal reason for a failure that recovery could not absorb; `calls` counts every provider call. */
-function terminalReason(failure: ProviderFailure, calls: number, fellBack: boolean): string {
-  if (failure.kind === 'quota') {
-    const wait = failure.retryAfterMs === undefined ? ' Retry later.' : ' Retry after ' + String(Math.ceil(failure.retryAfterMs / 1000)) + 's.';
-    return failure.message + wait;
-  }
-  if (failure.kind === 'transient') {
-    return failure.message + ' It kept failing after ' + String(calls) + ' attempts' + (fellBack ? ' on the primary and fallback models.' : '.');
-  }
-  return failure.message;
+/**
+ * What the person reads when a failure could not be absorbed (`Run.error`, the task row, a push): one plain sentence by kind. The provider's own
+ * words and the status code go to the log, with how many calls were made (`calls` counts every provider call).
+ */
+function terminalReason(options: RecoverModelOptions, failure: ProviderFailure, calls: number, fellBack: boolean): string {
+  options.services.log?.({ runId: options.runId, step: options.stepIndex, kind: failure.kind, code: failure.code, calls, fellBack, retryAfterMs: failure.retryAfterMs, error: failure.message }, 'model call failed for good');
+  return plainProviderFailure(failure.kind);
 }
 
 /**
@@ -213,7 +234,6 @@ export async function recoverModelTurn(options: RecoverModelOptions): Promise<Re
   const { ctx, services, runId, stepIndex, recovery } = options;
   let brainCtx = options.brainCtx;
   for (let attempt = 0; ; attempt += 1) {
-    if (attempt > 0 && options.onAttemptStart !== undefined) await options.onAttemptStart(attempt);
     const key = recovery.fellBack === true
       ? `model:${stepIndex}:fallback:${attempt}`
       : attempt === 0 ? `model:${stepIndex}` : `model:${stepIndex}:retry:${attempt}`;
@@ -238,9 +258,12 @@ export async function recoverModelTurn(options: RecoverModelOptions): Promise<Re
     const failure = outcome.failure;
     if (failure.kind === 'context_overflow' && !recovery.compacted) {
       recovery.compacted = true;
+      // A compaction a few steps ago did not make the history fit: another one would not either.
+      if (recentlyCompacted(options.compactions, stepIndex)) throw COMPACTION_THRASH;
       // The compacted context is the point of the retry; keeping the old one would overflow again.
       const overflowed = brainCtx;
       brainCtx = await ctx.run(`compact:${stepIndex}:recovery`, () => compactAndRefresh(services, options.input, overflowed, options.tools, `ctxN:${runId}:${stepIndex}:overflow`));
+      if (brainCtx.compactionEpoch !== overflowed.compactionEpoch) options.compactions.steps.push(stepIndex);
       const compactWithin = await chargeCompactionStep({ ctx, services, runId, budget: options.budget, key: 'compact:' + String(stepIndex) + ':recovery', context: brainCtx });
       if (!compactWithin.ok) throw BUDGET_EXHAUSTED;
       continue;
@@ -262,6 +285,7 @@ export async function recoverModelTurn(options: RecoverModelOptions): Promise<Re
       }
     }
     const calls = recovery.transient + 1 + (recovery.fellBack === true ? 1 : 0);
-    throw new TerminalError(terminalReason(failure, calls, recovery.fellBack === true), { metadata: { code: failure.code } });
+    // The provider's announced wait rides along (milliseconds): a run nobody waits on is tried again after it (routine-refire.ts).
+    throw new TerminalError(terminalReason(options, failure, calls, recovery.fellBack === true), { metadata: { code: failure.code, ...(failure.retryAfterMs === undefined ? {} : { retryAfterMs: String(failure.retryAfterMs) }) } });
   }
 }

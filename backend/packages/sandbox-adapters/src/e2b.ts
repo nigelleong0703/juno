@@ -5,7 +5,7 @@
  */
 import type { LinkHub } from './link-hub.js';
 import { createE2bDriver, type E2bDriverOptions } from './e2b-driver.js';
-import { createLinkedProvider, type StartedContext } from './linked-provider.js';
+import { createLinkedProvider, type LinkedProviderOptions, type StartedContext } from './linked-provider.js';
 import type { ComputerProvider } from './provider.js';
 import type { ComputerStorage } from './storage.js';
 
@@ -21,6 +21,7 @@ export interface E2bProviderOptions extends E2bDriverOptions {
   linkUrl: string;
   onStarted?: (context: StartedContext) => Promise<void>;
   linkWaitMs?: number;
+  skills?: LinkedProviderOptions['skills'];
 }
 
 export function createE2bProvider(options: E2bProviderOptions): ComputerProvider & { dispose(): void } {
@@ -33,5 +34,6 @@ export function createE2bProvider(options: E2bProviderOptions): ComputerProvider
     ...(options.storage ? { storage: options.storage.storage } : {}),
     ...(options.onStarted ? { onStarted: options.onStarted } : {}),
     ...(options.linkWaitMs === undefined ? {} : { linkWaitMs: options.linkWaitMs }),
+    ...(options.skills ? { skills: options.skills } : {}),
   });
 }

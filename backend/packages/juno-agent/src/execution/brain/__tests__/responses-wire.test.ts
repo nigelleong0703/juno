@@ -11,7 +11,8 @@ import type { AssistantMessage, Message } from '@earendil-works/pi-ai';
 import { backendConfigSchema } from '../../config.js';
 import { runWithOwner } from '../../../owner-context.js';
 import { createMemoryStore } from '../../../testing/store.js';
-import { createOpenAIProvider } from '../provider.js';
+import { createModelProvider, createOpenAIProvider } from '../provider.js';
+import { builtinProviderFor, findBuiltinModel } from '../builtin-providers.js';
 import { createUserProvider, sealProviderKey } from '../user-providers.js';
 
 interface Captured { path: string; headers: Record<string, string | string[] | undefined>; body: Record<string, unknown>; raw: string }
@@ -82,6 +83,39 @@ const user = (text: string): Message => ({ role: 'user', content: text, timestam
 const system: Message = { role: 'system', content: 'FROZEN-SYSTEM', timestamp: 0 };
 
 describe('Responses wire', () => {
+  it('keeps Muse chat and voice on one cache key and requests longer retention across idle gaps', async () => {
+    const server = await startServer([textAnswer]);
+    try {
+      const model = findBuiltinModel('opencode-go', 'muse-spark-1.3-contributor');
+      if (model === undefined) throw new Error('Muse is missing from the built-in catalog');
+      const provider = createModelProvider({
+        resolve: async () => ({
+          apiKey: 'test-key', buildModel: () => ({ ...model, baseUrl: server.url }),
+          provider: builtinProviderFor('opencode-go'),
+        }),
+        limits: { getLimits: async () => ({ contextWindow: model.contextWindow }) },
+        sessionIdBody: true, textOnlyHint: '',
+      });
+      const history = [system, user('same conversation')];
+      const call = { messages: history, tools: [], signal: signal(), sessionKey: 'agt-1:cvn-1' };
+      await provider.call(call);
+      await provider.call({ ...call, messages: [...history, user('spoken follow-up')] });
+      const first = server.calls[0]!;
+      const spoken = server.calls[1]!;
+      expect(first.body['prompt_cache_retention']).toBe('24h');
+      expect(spoken.body['prompt_cache_retention']).toBe('24h');
+      expect(first.headers['x-opencode-session']).toBe(first.body['prompt_cache_key']);
+      expect(spoken.headers['x-opencode-session']).toBe(first.headers['x-opencode-session']);
+      expect(spoken.body['prompt_cache_key']).toBe(first.body['prompt_cache_key']);
+      const initialInput = first.body['input'];
+      const spokenInput = spoken.body['input'];
+      if (!Array.isArray(initialInput) || !Array.isArray(spokenInput)) throw new Error('Missing Responses input');
+      expect(spokenInput.slice(0, initialInput.length)).toEqual(initialInput);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('sends store:false, the encrypted-reasoning include, the stable header and no temperature; returns the reasoning item as an opaque thinking block', async () => {
     const server = await startServer([reasoningThenToolCall]);
     try {

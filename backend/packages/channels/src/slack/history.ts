@@ -2,7 +2,7 @@ import { getJson, record, str } from '../http.js';
 import { HISTORY_FETCH_LIMIT as FETCH_LIMIT, type ChannelMessage, type HistoryFetcher } from '../types.js';
 import { resolveSlackMentions, slackUserNamer } from './mentions.js';
 
-const BASE = 'https://slack.com/api/';
+import { slackApiBase } from './base.js';
 
 /**
  * The thread before the trigger, else the channel's recent messages, oldest first. A message posted by an app (`bot_id`) is a bot
@@ -18,12 +18,12 @@ export const fetchSlackHistory: HistoryFetcher = async (fetchFn, token, chat) =>
   const threadTs = sep === -1 ? undefined : chat.threadId.slice(sep + 1);
   let messages: unknown[] = [];
   if (threadTs !== undefined && triggerTs !== undefined) {
-    const replies = record(await getJson(fetchFn, BASE + 'conversations.replies?channel=' + chat.chatId + '&ts=' + threadTs + '&latest=' + triggerTs + '&limit=' + limit, headers));
+    const replies = record(await getJson(fetchFn, slackApiBase() +'conversations.replies?channel=' + chat.chatId + '&ts=' + threadTs + '&latest=' + triggerTs + '&limit=' + limit, headers));
     if (replies['ok'] === true && Array.isArray(replies['messages'])) messages = replies['messages'].filter((m) => str(record(m)['ts']) !== triggerTs);
   }
   // A top-level mention starts its own thread, so there is nothing in it yet: the channel's recent messages are the context.
   if (messages.length === 0) {
-    const history = record(await getJson(fetchFn, BASE + 'conversations.history?channel=' + chat.chatId + latest + '&limit=' + limit, headers));
+    const history = record(await getJson(fetchFn, slackApiBase() +'conversations.history?channel=' + chat.chatId + latest + '&limit=' + limit, headers));
     if (history['ok'] !== true || !Array.isArray(history['messages'])) return undefined;
     messages = [...history['messages']].reverse();
   }

@@ -13,6 +13,7 @@ import type { TaskPlan } from '../../../modules/tasks/state.js';
 import { readBoundTaskPlan } from '../../../modules/tasks/plan-binding.js';
 import { blockOpenTasks } from '../../../modules/tasks/plan-updates.js';
 import { harnessText } from '../../../modules/harness/loader.js';
+import { SOMETHING_WENT_WRONG } from '../logic/plain-errors.js';
 
 export { checksToVerify } from '../../../modules/tasks/state.js';
 export { readRunBinding, readBoundTaskPlan } from '../../../modules/tasks/plan-binding.js';
@@ -123,7 +124,8 @@ export function verificationBlockedReason(note: string): string {
 }
 
 export function blockedReason(state: RunTaskState, cause: BlockCause): string {
-  if (state.kind === 'unreadable') return 'run blocked: task state unreadable (' + state.reason + ')';
+  // `state.reason` is parse detail for the log (todo-gate.ts); the line a person reads on the task is one plain sentence.
+  if (state.kind === 'unreadable') return SOMETHING_WENT_WRONG;
   const open = openTodos(state);
   if (open.length > 0) {
     const lead = cause === 'limit' ? 'step limit reached with ' : 'no progress on ';

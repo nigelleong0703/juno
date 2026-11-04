@@ -21,7 +21,7 @@ const planMetaSchema = z.object({
   parentRunId: z.string().min(1).optional(),
 }).passthrough();
 
-export function isChildPlan(doc: unknown): boolean {
+export function isSubagentPlan(doc: unknown): boolean {
   const meta = planMetaSchema.safeParse(doc);
   return meta.success && meta.data.scope === 'child';
 }
@@ -95,7 +95,7 @@ export async function readTaskPlan(store: Store, agentId: string, conversationId
   const canonical = await directCanonical(store, agentId, conversationId);
   if (canonical) return canonical;
   const legacy = (await scanPlanItems(store, conversationId)).filter(
-    (plan) => plan.agentId === undefined && plan.conversationId === conversationId && !isChildPlan(plan),
+    (plan) => plan.agentId === undefined && plan.conversationId === conversationId && !isSubagentPlan(plan),
   );
   if (legacy.length === 0) return null;
   return newest(await legacyForAgent(store, legacy, agentId)) ?? null;
@@ -110,13 +110,13 @@ export async function listTaskPlans(store: Store, agentId: string): Promise<Task
   const plans = await scanPlanItems(store);
   const byConversation = new Map<string, TaskPlan>();
   const own = plans.filter((entry) => entry.agentId === agentId);
-  for (const plan of own.filter((entry) => !isChildPlan(entry))) {
+  for (const plan of own.filter((entry) => !isSubagentPlan(entry))) {
     const current = byConversation.get(plan.conversationId);
     byConversation.set(plan.conversationId, current ? newest([current, plan]) ?? plan : plan);
   }
   const legacy = await legacyForAgent(
     store,
-    plans.filter((entry) => entry.agentId === undefined && !isChildPlan(entry)),
+    plans.filter((entry) => entry.agentId === undefined && !isSubagentPlan(entry)),
     agentId,
   );
   const legacyByConversation = new Map<string, TaskPlan>();
@@ -127,7 +127,7 @@ export async function listTaskPlans(store: Store, agentId: string): Promise<Task
   for (const [conversationId, plan] of legacyByConversation) {
     if (!byConversation.has(conversationId)) byConversation.set(conversationId, plan);
   }
-  const children = own.filter((entry) => isChildPlan(entry));
+  const children = own.filter((entry) => isSubagentPlan(entry));
   return [...byConversation.values(), ...children].sort((a, b) => b.at.localeCompare(a.at));
 }
 

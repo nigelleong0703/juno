@@ -61,8 +61,8 @@ export interface ScreenFile {
   runOnDisplay(runtime: SandboxRuntime, displayNo: number, command: string, timeoutMs?: number): Promise<CommandResult>;
   screenshot(runtime: SandboxRuntime, displayNo: number): Promise<Screenshot>;
   navigate(runtime: SandboxRuntime, agentId: string, displayNo: number, url: string): Promise<NavigateResult>;
-  browser(runtime: SandboxRuntime, displayNo: number, input: BrowserInput): Promise<BrowserResult>;
-  meet(runtime: SandboxRuntime, displayNo: number, input: MeetInput): Promise<MeetResult>;
+  browser(runtime: SandboxRuntime, agentId: string, displayNo: number, input: BrowserInput): Promise<BrowserResult>;
+  meet(runtime: SandboxRuntime, agentId: string, displayNo: number, input: MeetInput): Promise<MeetResult>;
   shell(runtime: SandboxRuntime, displayNo: number, input: ShellInput): Promise<ShellOutput>;
   readFile(runtime: SandboxRuntime, path: string): Promise<FileContent>;
   writeFile(runtime: SandboxRuntime, input: FileWriteRequest): Promise<FileWriteResult>;
@@ -102,26 +102,25 @@ export function createScreenFile(): ScreenFile {
     },
 
     async navigate(runtime, agentId, displayNo, url) {
-      void agentId;
       // The live Chromium owns its profile and CDP port; navigating drives it through the
       // browser helper instead of launching a second shell browser, and reports the real page.
-      const page = await runBrowser(runtime, displayNo, { action: 'navigate', url });
+      const page = await runBrowser(runtime, agentId, displayNo, { action: 'navigate', url });
       if (page.action !== 'navigate') throw failed(`browser navigate returned a ${page.action} result`);
       return { url: page.url, title: page.title };
     },
 
-    async browser(runtime, displayNo, input) {
-      return runBrowser(runtime, displayNo, input);
+    async browser(runtime, agentId, displayNo, input) {
+      return runBrowser(runtime, agentId, displayNo, input);
     },
 
-    async meet(runtime, displayNo, input) {
-      const result = await runtime.run(meetCommand(displayNo, input), { timeoutMs: MEET_TIMEOUT_MS });
+    async meet(runtime, agentId, displayNo, input) {
+      const result = await runtime.run(meetCommand(agentId, displayNo, input), { timeoutMs: MEET_TIMEOUT_MS });
       return parseMeetOutput(result.stdout, result.stderr, result.exitCode, input.action);
     },
 
     async shell(runtime, displayNo, input) {
       try {
-        // JUNO_CDP_PORT is this agent's own browser debugging port (the shell may use it, see isolation.ts ownAgentCdpRules).
+        // JUNO_CDP_PORT is this agent's own browser debugging port, on its own namespace's loopback (netns.ts): the shell may use it.
         const result = await runtime.run(displayShell(displayNo, input.command), {
           envs: { DISPLAY: `:${displayNo}`, JUNO_CDP_PORT: String(screenPorts(displayNo).cdp) },
           timeoutMs: input.timeoutMs,
@@ -171,8 +170,8 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** One typed browser call through the sandbox-local helper on the display's CDP port (`runtime` is the platform's root runtime). */
-async function runBrowser(runtime: SandboxRuntime, displayNo: number, input: BrowserInput): Promise<BrowserResult> {
-  const result = await runtime.run(browserCommand(displayNo, input), { timeoutMs: BROWSER_TIMEOUT_MS });
+/** One typed browser call through the sandbox-local helper on the display's CDP port, inside the agent's namespace (`runtime` is the platform's root runtime). */
+async function runBrowser(runtime: SandboxRuntime, agentId: string, displayNo: number, input: BrowserInput): Promise<BrowserResult> {
+  const result = await runtime.run(browserCommand(agentId, displayNo, input), { timeoutMs: BROWSER_TIMEOUT_MS });
   return parseBrowserOutput(result.stdout, result.stderr, result.exitCode, input.action);
 }

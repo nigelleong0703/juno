@@ -90,8 +90,8 @@ export function createMemoryServer(options: MemoryServerOptions): Hono {
     await port.renderViews({ ownerId, agentId });
     return { ok: true as const };
   });
-  mount(routes.digestContext.route, routes.digestContext.input, async ({ ownerId, items, agents }) => {
-    const result = await port.digestContext({ ownerId, items, agents, ...logging });
+  mount(routes.digestContext.route, routes.digestContext.input, async ({ ownerId, agentId, items, agents }) => {
+    const result = await port.digestContext({ ownerId, agentId, items, agents, ...logging });
     return { context: encodeClaimsContext(result.context), prompt: result.prompt };
   });
   mount(routes.applyDigest.route, routes.applyDigest.input, ({ ownerId, agentId, items, claims, context, now }) =>

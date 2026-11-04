@@ -4,7 +4,7 @@
  * registry and the real browser tools against a fake browser helper, and the harness's canonical call path.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import type { Rule } from '@agent-desktop/public-contracts';
 import type { Store, ToolResult, WakeEvent } from '../../../contracts/index.js';
 import { ComputerError, type BrowserResult, type ComputerClient } from '../../../modules/tools/computer/contract.js';
@@ -78,11 +78,11 @@ function journaling(journal = new Map<string, unknown>()): { ctx: ToolCallContex
     journal,
     ctx: {
       rand: { uuidv4: () => 'b' + String(next++) },
-      run<T>(name: string, action: () => Promise<T>): RestatePromise<T> {
-        if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-        return RestatePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
+      run<T>(name: string, action: () => Promise<T>): DurablePromise<T> {
+        if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+        return DurablePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
       },
-      drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+      drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
     },
   };
 }

@@ -64,6 +64,21 @@ function summaryProvider(text: string, stopReason: 'stop' | 'length', pauseMs = 
   };
 }
 describe('compaction usage producer', () => {
+  it('commits a standalone summary when the provider requires the conversation session for routing', async () => {
+    const store = createMemoryStore();
+    await seedLongHistory(store, 20);
+    const brain = await makeBrain(store, {
+      call: async ({ sessionKey }) => {
+        if (sessionKey !== SESSION) throw new Error('MissingSessionID');
+        return { text: 'Routed summary.', toolCalls: [], usage: REPORTED, stopReason: 'stop' };
+      },
+    }, { frozen: 0, bootstrap: 0 });
+    const before = await brain.buildContext(options());
+    const after = await brain.compact(before);
+    expect(after.compactionEpoch).toBe(1);
+    expect((await store.list('compactions')).items[0]?.summary).toBe('Routed summary.');
+  });
+
   it('forwards reported usage on success and keeps history plus the frozen model', async () => {
     const store = createMemoryStore();
     await seedLongHistory(store, 20);

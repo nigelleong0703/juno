@@ -21,15 +21,15 @@ describe('room question', () => {
       const roomId: string = created.body.id;
       const done = `ANSWERED-${randomUUID().slice(0, 8)}`;
       scriptModel(`${ada}:${roomId}`, [
-        { toolCalls: [{ id: 'ask', name: 'send_message', arguments: { kind: 'question', text: 'Which city?', ui: CARD } }] },
-        { text: 'Pick a city above.' },
+        { toolCalls: [{ id: 'ask', name: 'send_message', arguments: { kind: 'question', purpose: 'decision', text: 'Which city?', ui: CARD } }] },
         { matchLastText: 'Singapore', step: 0, text: done },
       ]);
       const sent = await account.api('POST', `/v1/conversations/${roomId}/runs`, aguiInput(`/v1/conversations/${roomId}/runs`, { text: '@Ada plan the trip', mentions: [{ kind: 'agent', id: ada, label: '@Ada' }] }));
       expect(sent.status).toBe(202);
       const asked = await events.waitFor((e) => e.data.type === 'request.created' && e.data.request.kind === 'question' && e.data.request.conversationId === roomId, 45_000);
-      await events.waitFor((e) => e.data.type === 'item.added' && e.data.conversationId === roomId && String(e.data.item.markdown).includes('Pick a city above'), 45_000);
       for (let i = 0; i < 60 && !(await listRuns(account, roomId)).every((run) => run.status === 'completed'); i += 1) await new Promise((r) => setTimeout(r, 500));
+      // The card ended the run: it completed with no second model call, so nothing was said after (or, in a room, before) the card.
+      expect((await listRuns(account, roomId)).map((run) => run.status)).toEqual(['completed']);
       const before = (await listRuns(account, roomId)).length;
 
       const answered = await account.api('POST', `/v1/requests/${asked.data.request.id}/resolve`, { action: 'answer', answers: { city: 'sg' } });

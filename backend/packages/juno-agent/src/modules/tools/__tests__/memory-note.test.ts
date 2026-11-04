@@ -66,7 +66,7 @@ describe('memory_note', () => {
     const vectors = new Map([['Wants to build muscle', [1, 0, 0]], ['Is working on gaining muscle', [0.99, 0.1, 0]], ['Likes tea', [0, 1, 0]]]);
     const embedder = { model: 'fake', embed: async (texts: readonly string[]) => texts.map((text) => vectors.get(text) ?? [0, 0, 1]) };
     const withEmbedder = createMemoryNoteTool({ memory: portOf(graph, s.store) });
-    const item = await graph.graph.items.addItem(s.owner, { text: 'Wants to build muscle', kind: 'preference', file: 'bank:preferences', saidIn: 'app', audience: 'owner', aboutPersonId: s.ownerPerson.id });
+    const item = await graph.graph.items.addItem(s.owner, { text: 'Wants to build muscle', kind: 'preference', file: 'bank:preferences', saidIn: 'app', audience: 'owner', aboutPersonId: s.ownerPerson.id, agentId: s.ctx.agentId });
     await graph.graph.items.setVector(s.owner, item?.id ?? '', 'Wants to build muscle', { embedding: [1, 0, 0], embedModel: 'fake' });
     graph.graph.embedder = embedder;
     try {
@@ -115,7 +115,7 @@ describe('memory_note', () => {
     for (const about of ['user', 'the owner']) {
       expect(textOf(await s.tool.execute({ about, kind: 'fact', text: 'lives in a castle' }, s.stranger(s.ctx)))).toBe("Error: Only your owner's own words can be noted about them.");
     }
-    const child = await s.tool.execute({ about: 'user', kind: 'fact', text: 'x' }, { ...s.ctx, wake: { ...s.ctx.wake, kind: 'child_task' } });
+    const child = await s.tool.execute({ about: 'user', kind: 'fact', text: 'x' }, { ...s.ctx, wake: { ...s.ctx.wake, kind: 'subagent_task' } });
     expect(child.isError).toBe(true);
     expect(textOf(child)).toContain('sub-task');
     for (const bad of [{ about: 'user', kind: 'fact', text: 'two\nlines' }, { about: 'user', kind: 'fact', text: 'x'.repeat(301) }, { about: 'user', kind: 'mood', text: 'x' }, { kind: 'fact', text: 'x' }]) {

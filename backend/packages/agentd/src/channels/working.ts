@@ -11,6 +11,7 @@
 import { createLogger } from '@agent-desktop/log';
 import type { Store } from '@agent-desktop/contracts';
 import { chatCapabilities, reactionAllowed, type ChannelOrigin } from '@agent-desktop/public-contracts';
+import { setSlackThreadStatus } from '@agent-desktop/channels/slack/status';
 import { chatAccess } from './port.js';
 import type { ChannelRegistry } from './registry.js';
 
@@ -37,6 +38,22 @@ export async function startWorking(
   try {
     if (deps.channels.get(origin.kind)?.workingIndicator !== true) return;
     const chat = await chatAccess(deps.store, deps.channels, ownerId, origin);
+    // A Slack assistant thread (a thread of the app's direct chat) shows "is thinking…" while the run works; Slack clears it with the reply.
+    const threadSep = origin.threadId === undefined ? -1 : origin.threadId.indexOf(':');
+    if (chat !== undefined && origin.kind === 'slack' && origin.chatType === 'private' && origin.threadId !== undefined && threadSep !== -1) {
+      const ts = origin.threadId.slice(threadSep + 1);
+      const statusFetch = deps.channelFetch ?? fetch;
+      await setSlackThreadStatus(statusFetch, chat.auth.token, origin.chatId, ts, 'is thinking…').catch(() => undefined);
+      const status: Mark = {
+        remove: async () => {
+          clearTimeout(status.timer);
+          await setSlackThreadStatus(statusFetch, chat.auth.token, origin.chatId, ts, '').catch(() => undefined);
+        },
+        timer: setTimeout(() => { void status.remove(); }, MAX_MS),
+      };
+      status.timer.unref();
+      marks.set(conversationId, [...(marks.get(conversationId) ?? []), status]);
+    }
     if (chat === undefined || !reactionAllowed(chatCapabilities(origin.kind, chat.row.grantedScopes ?? []).reactions, WORKING_EMOJI)) return;
     const fetchFn = deps.channelFetch ?? fetch;
     const message = { chatId: origin.chatId, messageId };

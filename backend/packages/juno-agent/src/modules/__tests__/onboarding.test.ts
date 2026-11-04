@@ -26,7 +26,7 @@ describe('the onboarding wake', () => {
   it('carries the skills inline: both for the account\'s first agent (account skill first), only agent-setup for any other', () => {
     const first = onboardingWakeText(true);
     const other = onboardingWakeText(false);
-    expect(first.startsWith('[You were just created and your owner hasn\'t talked to you yet. Your final reply is your first message to them in this chat.]')).toBe(true);
+    expect(first.startsWith('[You were just created and your owner hasn\'t talked to you yet. Welcome them:')).toBe(true);
     expect(other.startsWith(first.slice(0, 40))).toBe(true);
     expect(first.indexOf('# Account onboarding')).toBeGreaterThan(0);
     expect(first.indexOf('# Account onboarding')).toBeLessThan(first.indexOf('# Setting up a new agent'));

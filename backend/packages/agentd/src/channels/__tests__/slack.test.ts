@@ -37,8 +37,14 @@ describe('parseSlackEvent', () => {
     expect(parseSlackEvent(callback({ type: 'message', channel_type: 'im', bot_id: 'B1' }), BOT)).toBeNull();
     expect(parseSlackEvent(callback({ type: 'message', channel_type: 'im', user: BOT }), BOT)).toBeNull();
     expect(parseSlackEvent(callback({ type: 'message', channel_type: 'im', subtype: 'message_changed' }), BOT)).toBeNull();
-    expect(parseSlackEvent(callback({ type: 'message', channel_type: 'channel' }), BOT)).toBeNull();
     expect(parseSlackEvent({ type: 'url_verification', challenge: 'x' }, BOT)).toBeNull();
+  });
+
+  it('observes channel messages nobody addressed to the bot: the channel\'s own messages in its conversation, replies in their thread; a mention is left to app_mention', () => {
+    expect(parseSlackEvent(callback({ type: 'message', channel_type: 'channel', channel: 'C1', ts: '300.1', text: 'lunch?' }), BOT)).toMatchObject({ chatType: 'group', threadId: 'C1', addressed: false, text: 'lunch?' });
+    expect(parseSlackEvent(callback({ type: 'message', channel_type: 'group', channel: 'C1', ts: '300.9', thread_ts: '300.1', text: 'yes' }), BOT)).toMatchObject({ threadId: 'C1:300.1', addressed: false });
+    expect(parseSlackEvent(callback({ type: 'message', channel_type: 'channel', channel: 'C1', ts: '300.5', text: '<@UBOT> hi' }), BOT)).toBeNull();
+    expect(parseSlackEvent(callback({ type: 'app_mention', channel: 'C1', ts: '300.5', text: '<@UBOT> hi' }), BOT)).not.toHaveProperty('addressed');
   });
 });
 
@@ -111,9 +117,10 @@ describe('createSlackSender', () => {
 
   it('reports ok:false errors and rate limits', async () => {
     const failed = await fake(Response.json({ ok: false, error: 'channel_not_found' })).sender.sendText({ channel, chatId: 'C1', threadId: 'C1' }, 'x');
-    expect(failed).toEqual({ ok: false, error: 'Slack send failed: channel_not_found' });
+    expect(failed).toEqual({ ok: false, error: 'Slack send failed: channel_not_found', failure: { kind: 'channel_gone' } });
     const limited = await fake(new Response('', { status: 429, headers: { 'retry-after': '7' } })).sender.sendText({ channel, chatId: 'C1', threadId: 'C1' }, 'x');
     expect(limited.ok === false && limited.error).toContain('retry after 7');
+    expect(limited.ok === false && limited.failure).toEqual({ kind: 'transient', retryAfterMs: 7000 });
   });
 });
 

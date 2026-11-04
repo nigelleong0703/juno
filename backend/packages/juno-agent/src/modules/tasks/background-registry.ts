@@ -76,6 +76,35 @@ export function exitOutcome(exitCode: number | null | undefined): string | undef
   return typeof exitCode === 'number' ? 'Exited with code ' + String(exitCode) : undefined;
 }
 
+/**
+ * The sandbox's answer for a handle its computer does not hold (it expired, or the computer was replaced): the text of
+ * `unknownMessage` in sandbox-adapters/processes.ts, which reaches us inside a ComputerError / ComputerdClientError.
+ */
+const UNKNOWN_PROCESS_TEXT = 'is not known on this computer';
+
+export function isUnknownProcess(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(UNKNOWN_PROCESS_TEXT);
+}
+
+export const ORPHAN_OUTCOME = 'The process no longer exists (its computer was replaced, or it expired)';
+
+/** How a process that is no longer running ends its task row. */
+export function processEnd(state: string, exitCode: number | null | undefined): { status: Exclude<BackgroundTask['status'], 'running'>; outcome?: string } {
+  if (state === 'exited') {
+    const outcome = exitOutcome(exitCode);
+    return { status: exitCode === 0 ? 'completed' : 'failed', ...(outcome === undefined ? {} : { outcome }) };
+  }
+  if (state === 'stopped') return { status: 'stopped' };
+  return { status: 'failed', outcome: ORPHAN_OUTCOME };
+}
+
+/** Settle a shell task from what its process was seen doing (a poll, the boot sweep). A process still running changes nothing. */
+export async function settleShellTask(store: Store, id: string, seen: { state: string; exitCode?: number | null }, at: string = new Date().toISOString()): Promise<void> {
+  if (seen.state === 'running') return;
+  const end = processEnd(seen.state, seen.exitCode);
+  await endBackgroundTask(store, id, end.status, at, end.outcome);
+}
+
 /** Stops a shell process by handle (the sandbox's process stop), when this host can. */
 export type StopProcess = (handle: string) => Promise<{ state: string; exitCode: number | null }>;
 
@@ -89,7 +118,15 @@ export async function stopBackgroundTask(store: Store, task: BackgroundTask, sto
   const at = new Date().toISOString();
   if (task.kind === 'shell') {
     if (stopProcess === undefined || task.handle === undefined) return { ok: false, text: 'Process control is not available here; the process cannot be stopped.' };
-    const stopped = await stopProcess(task.handle);
+    let stopped;
+    try {
+      stopped = await stopProcess(task.handle);
+    } catch (error) {
+      if (!isUnknownProcess(error)) throw error;
+      // An orphan (its computer was replaced): nothing to stop, so the row is closed instead of staying running forever.
+      await endBackgroundTask(store, task.id, 'failed', at, ORPHAN_OUTCOME);
+      return { ok: true, text: 'Process ' + task.handle + ' no longer exists on this computer; the task is closed.' };
+    }
     const exited = stopped.state === 'exited';
     await endBackgroundTask(store, task.id, exited ? 'completed' : 'stopped', at, exitOutcome(stopped.exitCode), undefined, exited ? undefined : by);
     return { ok: true, text: 'Process ' + task.handle + ' is ' + stopped.state + (stopped.exitCode === null ? '' : ' (exit ' + String(stopped.exitCode) + ')') + '.' };

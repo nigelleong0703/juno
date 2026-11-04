@@ -323,14 +323,14 @@ import { createMemoryBlobStore } from '../../../testing/blobs.js';
  
    it('directs attachment posts to send_file as an explicit error', async () => {
      const send = createSendMessageTool({ store, enqueuer });
-     const result = await send.execute({ kind: 'attachment', text: 'see file' }, ctxFor(store, enqueuer));
+     const result = await send.execute({ kind: 'attachment', purpose: 'result', text: 'see file' }, ctxFor(store, enqueuer));
      expect(result.isError).toBe(true);
      expect(textOf(result)).toContain('send_file');
    });
  
    it('rejects secret_request explicitly', async () => {
      const send = createSendMessageTool({ store, enqueuer });
-     const result = await send.execute({ kind: 'secret_request', text: 'code?' }, ctxFor(store, enqueuer));
+     const result = await send.execute({ kind: 'secret_request', purpose: 'decision', text: 'code?' }, ctxFor(store, enqueuer));
      expect(result.isError).toBe(true);
    });
  });

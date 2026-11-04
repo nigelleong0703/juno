@@ -9,7 +9,8 @@ import { createMemoryStore } from '../../../testing/store.js';
 import { getRow, newRow, putRow } from '../../home/mirror.js';
 import { homeHash } from '../../home/paths.js';
 import { agentGoals } from '../../goals/index.js';
-import { groupNoteKey, groupNotePath, parseNote, rulesOf } from '../../groups/note.js';
+import { agentCalendarItems } from '../../calendar/index.js';
+import { groupNoteKey, groupNotePath, parseNote, rulesOf, teamLines } from '../../groups/note.js';
 import { portOf, startMemoryGraph, type MemoryGraphFixture } from '../../memory/__tests__/memory-graph-fixture.js';
 import type { JobDeps, JobModel } from '../../memory/jobs/types.js';
 import { runChatDigest } from '../job.js';
@@ -226,6 +227,40 @@ describe('chat digest', () => {
     const note = (await s.note()) ?? '';
     expect(note).toContain('Dinner friends. (noted by Juno, agt-1)');
     expect(rulesOf(parseNote(note))).toEqual([]);
+  });
+
+  it('a group: the team picture replaces its sections, keeps the rules, and a named follow-up lands in the agent\'s schedule once', async () => {
+    const seeded = "# dinner · Discord\n\n## About (as of 2026-10-20)\nFriends.\n\n## People\n- Ben brings dessert (Ben, 10-20)\n\n## Owner's rules\n- Reply in English.\n";
+    const team = { people: ['Amy books the table (Amy, 2026-10-22: "booking the table")'], loops: ['Amy owes the group the booking by 2026-10-23 (Amy, 2026-10-22) - open'], followUps: [{ at: '2026-10-23T12:00:00Z', about: 'Amy: booking by 2026-10-23' }, { at: '2026-10-22T10:01:00Z', about: 'too soon' }] };
+    const items = (owner: string) => [ownerRoomLine(owner, 'itm-g0', '2026-10-22T09:00:00Z', 'Amy, please book the table for Friday by tomorrow.'), strangerLine('itm-g1', '2026-10-22T09:01:00Z', 'Amy', 'booking the table for seven, I will do it by tomorrow')];
+    const s = await setup({ kind: 'room', model: scriptedModel(JSON.stringify({ memory: [], team })), note: seeded, items });
+    // The agent is woken from a digest only where the owner let it speak up without being mentioned (BACKEND 6.8).
+    await runWithOwner(s.owner, () => s.store.put('channels', { id: 'discord:chan', ownerId: s.owner, agentId: AGENT, kind: 'discord', channelId: 'chan', secretHashHex: 'x', groups: { C1: { speak: true } }, createdAt: NOW.toISOString(), updatedAt: NOW.toISOString() }));
+    const scheduled: string[] = [];
+    const deps = { store: s.store, home: s.computer, model: s.model, now: () => NOW, memory: portOf(graph, s.store), scheduleCalendarItem: async (id: string) => { scheduled.push(id); } };
+    const input = { ownerId: s.owner, agentId: AGENT, conversationId: 'c1', agents: [{ id: AGENT, name: 'Juno' }], checkpoint: {} };
+    expect(await runWithOwner(s.owner, () => runChatDigest(deps, input))).toMatchObject({ outcome: 'done' });
+    expect(s.model.prompts[0]).toContain('## Team picture');
+    expect(s.model.prompts[0]).toContain('· Amy: booking the table for seven');
+    const note = parseNote((await s.note()) ?? '');
+    expect(teamLines(note, 'people')).toEqual(['Amy books the table (Amy, 2026-10-22: "booking the table")']);
+    expect(teamLines(note, 'loops')).toEqual(['Amy owes the group the booking by 2026-10-23 (Amy, 2026-10-22) - open']);
+    expect(rulesOf(note)).toEqual(['Reply in English.']);
+    // One follow-up is in the future; the one a minute away is not scheduled. A second digest of the same loop makes no second item.
+    const calendar = await runWithOwner(s.owner, () => agentCalendarItems(s.store, AGENT, 'scheduled'));
+    expect(calendar.map((item) => ({ at: item.at, conversationId: item.conversationId, kind: item.kind }))).toEqual([{ at: '2026-10-23T12:00:00.000Z', conversationId: 'c1', kind: 'follow_up' }]);
+    expect(scheduled).toHaveLength(1);
+    await runWithOwner(s.owner, () => runChatDigest({ ...deps, model: scriptedModel(JSON.stringify({ memory: [], team })) }, input));
+    expect(await runWithOwner(s.owner, () => agentCalendarItems(s.store, AGENT, 'scheduled'))).toHaveLength(1);
+  });
+
+  it('a group where the owner did not let the agent speak up: the picture is written, no follow-up wakes the agent, and the model is told so', async () => {
+    const team = { loops: ['Amy owes the group the booking by 2026-10-23 (Amy, 2026-10-22) - open'], followUps: [{ at: '2026-10-23T12:00:00Z', about: 'Amy: booking by 2026-10-23' }] };
+    const s = await setup({ kind: 'room', model: scriptedModel(JSON.stringify({ memory: [], team })), items: (owner) => [ownerRoomLine(owner, 'itm-g0', '2026-10-22T09:00:00Z', 'Amy, please book the table for Friday by tomorrow.'), strangerLine('itm-g1', '2026-10-22T09:01:00Z', 'Amy', 'booking the table for seven, I will do it by tomorrow')] });
+    expect(await s.run()).toMatchObject({ outcome: 'done' });
+    expect(s.model.prompts[0]).toContain('does not speak up without being mentioned');
+    expect(teamLines(parseNote((await s.note()) ?? ''), 'loops')).toHaveLength(1);
+    expect(await runWithOwner(s.owner, () => agentCalendarItems(s.store, AGENT, 'scheduled'))).toEqual([]);
   });
 
   it('a group where only strangers write: the gate counts their messages, the group note is written, and no owner memory is claimed', async () => {

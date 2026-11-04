@@ -73,6 +73,29 @@ describe('shell process tools over a sandbox client', () => {
     expect(client.agentIds.every((id) => id === 'agent-1')).toBe(true);
   });
 
+  it('ends the task row when a poll sees the process finish, with or without a watcher', async () => {
+    const started = await requireTool(registry, 'shell.start').execute({ command: 'make' }, toolCtx(store));
+    const handle = String(started.details?.handle);
+    const id = 'shell-agent-1-' + handle;
+    await requireTool(registry, 'shell.poll').execute({ handle }, toolCtx(store));
+    expect(await store.get('backgroundTasks', id)).toMatchObject({ status: 'running', notify: false });
+    const process = client.processes.get(handle);
+    if (process === undefined) throw new Error('process missing');
+    process.state = 'exited';
+    process.exitCode = 2;
+    await requireTool(registry, 'shell.poll').execute({ handle }, toolCtx(store));
+    expect(await store.get('backgroundTasks', id)).toMatchObject({ status: 'failed', outcome: 'Exited with code 2' });
+  });
+
+  it('ends the task row as failed when the computer no longer has the process (replaced computer)', async () => {
+    const started = await requireTool(registry, 'shell.start').execute({ command: 'sleep 999' }, toolCtx(store));
+    const handle = String(started.details?.handle);
+    client.processes.delete(handle);
+    const polled = await requireTool(registry, 'shell.poll').execute({ handle }, toolCtx(store));
+    expect(polled.isError).toBe(true);
+    expect(await store.get('backgroundTasks', 'shell-agent-1-' + handle)).toMatchObject({ status: 'failed', outcome: expect.stringContaining('no longer exists') });
+  });
+
   it('refuses a foreign handle and an unknown handle as tool errors', async () => {
     const started = await requireTool(registry, 'shell.start').execute({ command: 'cat' }, toolCtx(store));
     expect(client.processes.get(String(started.details?.handle))?.scope).toBe('agent-1');

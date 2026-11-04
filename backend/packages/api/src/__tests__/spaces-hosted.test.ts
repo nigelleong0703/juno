@@ -279,4 +279,20 @@ describe('hosted Spaces routes', () => {
     expect(await revokeOwnerHosted(scoped, undefined)).toBeUndefined();
     expect(await revokeOwnerHosted(store.forOwner?.(OTHER) ?? scoped, { ready: false, reason: 'hosting is off' })).toBeUndefined();
   });
+
+  it('revokes only the deleted agent\'s links when one agent is deleted', async () => {
+    const fake = fakePublisher();
+    const { app, store } = appWith(hostingWith(fake));
+    await seedSpace(store, OWNER);
+    await call(app, 'POST', `/v1/spaces/${SPACE}/publish-hosted`, { body: {} });
+    const scoped = store.forOwner?.(OWNER);
+    if (scoped === undefined) throw new Error('memory store is owner-scoped');
+
+    // Another agent's deletion leaves the link alone (and needs no hosting at all); the owning agent's revokes it.
+    expect(await revokeOwnerHosted(scoped, { ready: false, reason: 'hosting is off' }, 'agent-2')).toBeUndefined();
+    expect((await scoped.get('spaceHosted', SPACE))?.revokedAt).toBeUndefined();
+    expect(await revokeOwnerHosted(scoped, { ready: false, reason: 'hosting is off' }, 'agent-1')).toBe('hosting is off');
+    expect(await revokeOwnerHosted(scoped, hostingWith(fake), 'agent-1')).toBeUndefined();
+    expect((await scoped.get('spaceHosted', SPACE))?.revokedAt).toBeDefined();
+  });
 });

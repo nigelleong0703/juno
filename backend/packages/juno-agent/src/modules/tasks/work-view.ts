@@ -6,15 +6,15 @@
  * (`rootRunId`, `depth`, `blockCause`, `effectReview`, `stopDelivery`).
  */
 import { LIMITS, type BackgroundTask, type DeclaredTask, type Doc, type StopActor, type Store } from '../../contracts/index.js';
-import type { ChildRun } from './childRead.js';
+import type { SubagentRun } from './subagentRead.js';
 import type {
   AgentTask, OutcomeDetail, ReplyTarget, RunOrigin, RunUsage, TaskTree, WaitingFor, WorkKind, WorkOutcome, WorkStatus,
 } from '@agent-desktop/public-contracts';
 import type { StoredRun } from '../../contracts/index.js';
-import { QUIET_RESULT_PREFIX } from '../tools/tools/finishQuietly.js';
+import { failureLineOf } from '../../execution/harness/logic/plain-errors.js';
 
 /** A run row as the projection reads it: the stored run plus the child-reservation fields. */
-export type WorkRun = StoredRun & ChildRun;
+export type WorkRun = StoredRun & SubagentRun;
 
 const LINE_MAX = 300;
 const TITLE_MAX = 200;
@@ -150,10 +150,12 @@ export function runAsTask(run: WorkRun, ctx: RunTaskContext): AgentTask | null {
   const subagent = isSubagentRun(run);
   const verdict = runVerdict(run, ctx.waitingFor);
   const live = verdict.status !== 'ended';
-  const step = run.steps.at(-1);
-  // A run that ended through finish_quietly says why there was nothing to tell (BACKEND §3.3a), ahead of any model summary of its steps.
-  const resultSource = run.quietReason !== undefined ? QUIET_RESULT_PREFIX + run.quietReason : subagent ? run.childResult : (run.summary ?? run.childResult);
-  const resultLine = !live ? (resultSource ?? (run.status === 'failed' || run.status === 'blocked' ? run.error : undefined)) : undefined;
+  // Internal steps (bookkeeping tools) are not progress worth showing.
+  const step = run.steps.findLast((candidate) => candidate.internal !== true);
+  // A run nobody waited on keeps its final text as a record line (BACKEND §3.3b): it is the result, ahead of any model summary of its steps.
+  const resultSource = run.record !== undefined ? run.record : subagent ? run.childResult : (run.summary ?? run.childResult);
+  // A run that did not finish shows a plain sentence, never the stored error as it is (plain-errors.ts `failureLineOf`).
+  const resultLine = !live ? (resultSource ?? (run.status === 'failed' || run.status === 'blocked' ? failureLineOf(run) : undefined)) : undefined;
   const delivery = ctx.routine?.delivery;
   const replyTo: ReplyTarget = subagent
     ? (run.notifyParent === undefined ? { type: 'parent_run', runId: run.parentRunId ?? '' } : { type: 'session', agentId: run.notifyParent.agentId, conversationId: run.notifyParent.conversationId })

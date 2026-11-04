@@ -7,8 +7,8 @@
  */
 import type { Store } from '../../contracts/index.js';
 import { planItemSchema } from '@agent-desktop/public-contracts';
-import { canonicalPlanId, isChildPlan, readTaskPlan, type TaskPlan } from './state.js';
-import { childPlanFor, readRunBinding } from './plan-binding.js';
+import { canonicalPlanId, isSubagentPlan, readTaskPlan, type TaskPlan } from './state.js';
+import { subagentPlanFor, readRunBinding } from './plan-binding.js';
 
 export function isTaskPlan(doc: unknown): doc is TaskPlan {
   if (typeof doc !== 'object' || doc === null) return false;
@@ -29,7 +29,7 @@ export async function planAt(store: Store, agentId: string, conversationId: stri
   const plan = asPlan(await store.get('items', planId));
   if (plan === null) return null;
   if (plan.agentId !== agentId || plan.conversationId !== conversationId) return null;
-  if (planId !== canonicalPlanId(agentId, conversationId) && !isChildPlan(plan)) return null;
+  if (planId !== canonicalPlanId(agentId, conversationId) && !isSubagentPlan(plan)) return null;
   return plan;
 }
 
@@ -43,7 +43,7 @@ export async function planForRun(store: Store, agentId: string, conversationId: 
   }
   if (binding.scope === 'child') {
     if (binding.parentRunId === undefined) return null;
-    return childPlanFor(store, binding.planId, agentId, conversationId, runId, binding.parentRunId);
+    return subagentPlanFor(store, binding.planId, agentId, conversationId, runId, binding.parentRunId);
   }
   return readTaskPlan(store, agentId, conversationId);
 }

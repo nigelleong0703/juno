@@ -10,7 +10,8 @@
 # POSTGRES_PASSWORD, POSTGRES_DB, POSTGRES_PORT); never commit real values.
 services:
   postgres:
-    image: postgres:18
+    # pgvector build of the official image (same Postgres 18, same data volume): memory vectors need the `vector` extension (migration 0072).
+    image: pgvector/pgvector:pg18
     container_name: vomu-postgres
     restart: unless-stopped
     ports:

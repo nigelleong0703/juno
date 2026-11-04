@@ -8,6 +8,7 @@ import type { ListPage, Store, WakeEvent } from '../../contracts/index.js';
 import { harnessText } from '../../modules/harness/loader.js';
 import { meaningfulRole, quoteId, quoteLabel, whoLine } from './social-format.js';
 import { readString } from './social-read.js';
+import { isVoiceWake, VOICE_TURN_HINT } from '../voice-channel.js';
 
 // Max agent docs scanned for the team.
 const ROSTER_SCAN_LIMIT = 100;
@@ -109,5 +110,7 @@ export function wakeSummary(wake: WakeEvent[]): string[] {
   const tag = first.origin.label === undefined ? '' : ' (' + quoteLabel(first.origin.label) + ')';
   const lines = ['Woken by: kind ' + quoteId(first.kind) + ', from ' + from + tag + ', ' + (first.trusted ? 'trusted' : 'untrusted') + '.'];
   if (first.reason !== undefined && first.reason.length > 0) lines.push('Wake reason: ' + quoteLabel(first.reason) + '.');
+  // A spoken turn says how to answer in its own note; the system prompt and the tools stay the text chat's (the prompt cache prefix).
+  if (wake.some(isVoiceWake)) lines.push(VOICE_TURN_HINT);
   return lines;
 }

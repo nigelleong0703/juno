@@ -5,10 +5,20 @@
  */
 import { renderMentions } from '../mentions.js';
 import { chunkMarkdown, convertMarkdown, TELEGRAM_HTML, type RichMessage } from '../render.js';
+import { httpFailure, retryAfterMsOf, type SendFailure } from '../failure.js';
 import type { ChannelSender, ChannelSendResult, ChannelSendTarget } from '../types.js';
 import { telegramKeyboard, TELEGRAM_SOURCE_CHUNK } from './render.js';
 
-export async function telegramPost(fetchFn: typeof fetch, token: string, method: string, body: Record<string, unknown>): Promise<{ ok: true; result: unknown } | { ok: false; status: number; error: string }> {
+export type TelegramPostResult = { ok: true; result: unknown } | { ok: false; status: number; error: string; retryAfterMs?: number };
+
+/** What a failed Telegram call means for the outbox: flood control (429, `parameters.retry_after`) waits, a chat that is gone or a bot that was removed is permanent. */
+export function telegramFailure(sent: { status: number; error: string; retryAfterMs?: number }): SendFailure {
+  // 400 "chat not found" / "group chat was upgraded to a supergroup" / "message thread not found", 403 "bot was blocked by the user" / "bot was kicked": the chat is gone.
+  if (sent.status === 400 && /chat not found|upgraded to a supergroup|thread not found|chat was deleted/i.test(sent.error)) return { kind: 'channel_gone' };
+  return httpFailure(sent.status, sent.retryAfterMs);
+}
+
+export async function telegramPost(fetchFn: typeof fetch, token: string, method: string, body: Record<string, unknown>): Promise<TelegramPostResult> {
   let response: Response;
   try {
     response = await fetchFn('https://api.telegram.org/bot' + token + '/' + method, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -19,7 +29,9 @@ export async function telegramPost(fetchFn: typeof fetch, token: string, method:
   const record = typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>) : {};
   if (!response.ok || record['ok'] === false) {
     const description = record['description'];
-    return { ok: false, status: response.status, error: typeof description === 'string' ? description : method + ' failed' };
+    const parameters = record['parameters'];
+    const retryAfterMs = typeof parameters === 'object' && parameters !== null ? retryAfterMsOf((parameters as Record<string, unknown>)['retry_after']) : undefined;
+    return { ok: false, status: response.status, error: typeof description === 'string' ? description : method + ' failed', ...(retryAfterMs === undefined ? {} : { retryAfterMs }) };
   }
   return { ok: true, result: record['result'] };
 }
@@ -46,7 +58,7 @@ export async function sendTelegramRich(fetchFn: typeof fetch, target: ChannelSen
     };
     let sent = await telegramPost(fetchFn, token, 'sendMessage', { ...base, text: convertMarkdown(chunk, TELEGRAM_HTML), parse_mode: 'HTML' });
     if (!sent.ok && sent.status === 400 && /parse entities/i.test(sent.error)) sent = await telegramPost(fetchFn, token, 'sendMessage', { ...base, text: chunk });
-    if (!sent.ok) return { ok: false, error: 'Telegram send failed: ' + String(sent.status) + ' ' + sent.error.slice(0, 200) };
+    if (!sent.ok) return { ok: false, error: 'Telegram send failed: ' + String(sent.status) + ' ' + sent.error.slice(0, 200), failure: telegramFailure(sent) };
     const id = typeof sent.result === 'object' && sent.result !== null ? (sent.result as Record<string, unknown>)['message_id'] : undefined;
     if (firstId === undefined && typeof id === 'number') firstId = String(id);
   }
@@ -57,37 +69,11 @@ export async function sendTelegramRich(fetchFn: typeof fetch, target: ChannelSen
 export function createTelegramSender(fetchFn: typeof fetch = fetch): ChannelSender {
   return {
     async sendText(target: ChannelSendTarget, text: string): Promise<ChannelSendResult> {
-      let response: Response;
-      try {
-        response = await fetchFn('https://api.telegram.org/bot' + (target.channel.botToken ?? '') + '/sendMessage', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ chat_id: target.chatId, text: renderMentions(text), ...telegramReplyTo(target) }),
-        });
-      } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) };
-      }
-      if (!response.ok) {
-        const detail = await response.text().catch(() => '');
-        const suffix = detail ? ' ' + detail.slice(0, 200) : '';
-        return { ok: false, error: 'Telegram send failed: ' + String(response.status) + suffix };
-      }
-      return { ok: true, externalId: await telegramMessageId(response) };
+      const sent = await telegramPost(fetchFn, target.channel.botToken ?? '', 'sendMessage', { chat_id: target.chatId, text: renderMentions(text), ...telegramReplyTo(target) });
+      if (!sent.ok) return { ok: false, error: 'Telegram send failed: ' + String(sent.status) + ' ' + sent.error.slice(0, 200), failure: telegramFailure(sent) };
+      const id = typeof sent.result === 'object' && sent.result !== null ? (sent.result as Record<string, unknown>)['message_id'] : undefined;
+      return typeof id === 'number' ? { ok: true, externalId: String(id) } : { ok: true };
     },
     sendRich: (target, rich) => sendTelegramRich(fetchFn, target, rich),
   };
-}
-
-async function telegramMessageId(response: Response): Promise<string | undefined> {
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    return undefined;
-  }
-  if (typeof body !== 'object' || body === null) return undefined;
-  const result: unknown = (body as Record<string, unknown>)['result'];
-  if (typeof result !== 'object' || result === null) return undefined;
-  const messageId: unknown = (result as Record<string, unknown>)['message_id'];
-  return typeof messageId === 'number' ? String(messageId) : undefined;
 }

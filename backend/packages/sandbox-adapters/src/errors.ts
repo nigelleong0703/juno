@@ -12,6 +12,8 @@ export type ComputerErrorCode =
   | 'home_conflict'
   /** The platform is replacing a lost computer (retrying with backoff); the call waited and ran out of time, the agent should wait and retry. */
   | 'computer_recovering'
+  /** A passive read found the computer paused and left it alone. Not a fault: the first real call resumes it, so no model-facing text says so. */
+  | 'computer_asleep'
   | 'failed';
 
 /** Concrete HTTP statuses so callers (Hono) accept them as a contentful status without a cast. */
@@ -25,6 +27,7 @@ const HTTP_STATUS: Record<ComputerErrorCode, ComputerHttpStatus> = {
   aborted: 408,
   home_conflict: 409,
   computer_recovering: 503,
+  computer_asleep: 503,
   failed: 500,
 };
 
@@ -83,4 +86,12 @@ export class StaleComputerError extends ComputerdError {
   }
 }
 
-export const computerRecovering = (message: string) => new ComputerdError('computer_recovering', message);
+/** A passive call found the computer suspended or stopped and left it alone: nothing was resumed, started or renewed. */
+export class ComputerAsleepError extends ComputerdError {
+  constructor(message: string) {
+    super('computer_asleep', message);
+    this.name = 'ComputerAsleepError';
+  }
+}
+
+export const computerRecovering =(message: string) => new ComputerdError('computer_recovering', message);

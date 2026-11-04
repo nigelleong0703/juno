@@ -60,6 +60,21 @@ export function registerScreenRoutes(app: Hono, deps: ComputerdDeps): void {
     }),
   );
 
+  // Holds (BACKEND §7.3b): a run in progress or an open screen asks that the computer is not paused. Placing or renewing one is passive:
+  // it never creates, resumes or starts anything (so it skips `handle`'s recovery too) and it lapses after `ttlMs` unless renewed.
+  app.put('/v1/computer/holds/:id', async (c) => {
+    const body: unknown = await c.req.json().catch(() => undefined);
+    const ttlMs = typeof body === 'object' && body !== null ? Reflect.get(body, 'ttlMs') : undefined;
+    if (typeof ttlMs !== 'number' || !Number.isFinite(ttlMs) || ttlMs <= 0) return c.json({ code: 'failed', message: 'ttlMs must be a positive number' }, 400);
+    deps.provider.hold(c.req.param('id'), ttlMs);
+    return c.json({ held: true });
+  });
+
+  app.delete('/v1/computer/holds/:id', (c) => {
+    deps.provider.release(c.req.param('id'));
+    return c.json({ held: false });
+  });
+
   app.get('/v1/screens', (c) =>
     handle(c, async () => c.json({ items: await deps.lifecycle.listScreens() })),
   );

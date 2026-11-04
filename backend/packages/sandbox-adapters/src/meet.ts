@@ -7,6 +7,7 @@
 import { meetResultSchema, type MeetInput, type MeetResult } from 'juno-agent/computer';
 import { BrowserDownError, failed } from './errors.js';
 import { screenPorts } from './ports.js';
+import { inAgentNetns } from './isolation-user.js';
 import { rootDir, shq } from './screen-boot.js';
 
 export { meetInputSchema, meetResultSchema } from 'juno-agent/computer';
@@ -17,13 +18,13 @@ export const MEET_HELPER = '/usr/local/bin/agent-meet';
 export const MEET_TIMEOUT_MS = 60_000;
 
 /**
- * Runs as root like agent-browser (it reaches the loopback CDP port), with the display's cookie from the root-only
- * record so xdotool can click on the agent's display.
+ * Runs as root like agent-browser, inside the agent's network namespace (that is where its loopback CDP port is), with the
+ * display's cookie from the root-only record so xdotool can click on the agent's display.
  */
-export function meetCommand(displayNo: number, input: MeetInput): string {
+export function meetCommand(agentId: string, displayNo: number, input: MeetInput): string {
   const port = screenPorts(displayNo).cdp;
   const auth = `XAUTHORITY="$(cat ${shq(rootDir(displayNo) + '/xauth')} 2>/dev/null)"; export XAUTHORITY`;
-  return `${auth}; ${MEET_HELPER} --port ${port} --display ${displayNo} --request ${shq(JSON.stringify(input))}`;
+  return `${auth}; ${inAgentNetns(agentId)} ${MEET_HELPER} --port ${port} --display ${displayNo} --request ${shq(JSON.stringify(input))}`;
 }
 
 export function parseMeetOutput(stdout: string, stderr: string, exitCode: number, action: MeetInput['action']): MeetResult {

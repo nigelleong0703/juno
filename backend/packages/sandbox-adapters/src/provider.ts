@@ -30,12 +30,24 @@ export interface EraseReport {
   removed: string[];
 }
 
+/** The longest a hold lasts without being renewed; a longer ask is cut to it, so a lost release can never keep a computer up for long. */
+export const MAX_HOLD_TTL_MS = 10 * 60_000;
+
 export interface ComputerProvider {
   readonly kind: ProviderKind;
+  /**
+   * Keep the computer from pausing for `ttlMs` (at most `MAX_HOLD_TTL_MS`), renewed by calling again with the same id (BACKEND §7.3b).
+   * Passive: it never resumes, starts or creates anything, and holds placed while the computer sleeps or does not exist yet count once it runs.
+   */
+  hold(holdId: string, ttlMs: number): void;
+  /** End a hold. When the last one ends the idle countdown starts from that moment. Unknown ids are fine. */
+  release(holdId: string): void;
   /** Create the sandbox for a new binding and wait until its `juno-link` has dialled in; it suspends itself after the idle timeout. */
   create(host: ComputerHostSpec, signal: AbortSignal): Promise<E2bBinding>;
   /** Connect to a binding, resuming (or cold-starting) it when it is not running. Idempotent. */
   connect(binding: E2bBinding, signal: AbortSignal): Promise<void>;
+  /** A computer already running when this process started (computerd restarted): start its idle timer so it is suspended like any other. No-op when it is tracked or not running. */
+  adopt?(binding: E2bBinding, signal: AbortSignal): Promise<void>;
   /** Suspend the whole computer (memory kept) where the platform can, else stop it (the next use is a cold start). */
   pause(binding: E2bBinding, signal: AbortSignal): Promise<void>;
   /** Remove the computer (and forget what is known about it). Durable storage is untouched; callers treat a failure as best effort. */
@@ -61,8 +73,9 @@ export interface ComputerProvider {
    * Run `fn` against the binding's shell and files, resuming a paused VM first. Needs no display: this is how
    * the user's `/juno` home is read and written (home.ts) without a screen or agent control. The runtime is always root (the
    * link's daemon is); `user: 'root'` also first migrates the computer to per-agent users when that has not happened yet.
+   * `passive`: a suspended or stopped computer is left alone (throws `ComputerAsleepError`) and the idle timer is not renewed.
    */
-  withRuntime<T>(binding: E2bBinding, signal: AbortSignal, fn: (runtime: SandboxRuntime) => Promise<T>, options?: { user?: 'root' }): Promise<T>;
+  withRuntime<T>(binding: E2bBinding, signal: AbortSignal, fn: (runtime: SandboxRuntime) => Promise<T>, options?: { user?: 'root'; passive?: boolean }): Promise<T>;
   /**
    * `computer_copy`: run `fn` against this agent's side of a copy (files and folders it may read and write as its own Linux
    * user). Counts as activity, needs no display.

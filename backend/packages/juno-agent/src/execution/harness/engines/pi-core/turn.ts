@@ -1,4 +1,4 @@
-/** pi-agent-core inner-turn driver: one inner turn per outer step; Restate stays the only journal. */
+/** pi-agent-core inner-turn driver: one inner turn per outer step; the runner stays the only journal. */
 import { type AssistantTurn, type ToolResult } from '../../../../contracts/index.js';
 import { runAgentLoop } from '@earendil-works/pi-agent-core';
 import { validateToolArguments, type ToolCall as PiToolCall } from '@earendil-works/pi-ai';
@@ -18,19 +18,20 @@ import { orderTools } from '../../../brain/tool-order.js';
 import { withoutJunoSearch } from '../../../brain/native-web-search.js';
 import { recordNativeSearches } from '../../services/native-search-steps.js';
 import { CANCELLED } from '../../services/cancel.js';
-import { childSuspendFromDetails, readChildChatRole } from '../../services/child-chat-role.js';
-import { ackStep, blockStreaming, citationsOf, discardStreamed, replyStep } from '../../services/final-reply.js';
-import { createBlockStreamer, postStreamedBubble, type BlockStreamer } from '../../services/block-stream.js';
+import { readSubagentChatRole } from '../../services/subagent-chat-role';
+import { unwrapProxyCalls } from '../../../brain/tool-proxy.js';
+import { ackStep, asksQuestion, isVoiceRun, citationsOf, emptyFinalStep, expectsReply, givesNothing, recordStep, replyStep } from '../../services/final-reply.js';
 import { drainAndAppend } from '../../services/run-input.js';
 import { holdWhileTyping } from '../../services/typing-hold.js';
 import { executeParallelToolCalls, executeSingleToolCall, supportsParallel } from '../../services/run-tools.js';
 import { budgetSpentAfterTools, chargeModelStep, chargeToolCall, checkBeforeTool, toolStepsLeft, type BudgetScope } from '../../services/model-budget.js';
-import { QUIET_EXIT_TOOL, QUIET_RESULT_PREFIX, quietReasonOf } from '../../../../modules/tools/tools/finishQuietly.js';
 import { handleCoreEvent, journalAssistantTurn } from './journal.js';
 import { coreModel, toolCallsOf, turnStream } from './messages.js';
 import { lengthDecision } from './length.js';
 import { handleSuspension } from './suspend.js';
-import { BUDGET_EXHAUSTED, prepareTurnContext, recoverModelTurn, type RecoveryBudget } from './recovery.js';
+import { BUDGET_EXHAUSTED, COMPACTION_THRASH, prepareTurnContext, recoverModelTurn, type RecoveryBudget } from './recovery.js';
+import { markRunBlocked } from '../../services/run-block.js';
+import { CONVERSATION_TOO_LONG } from '../../logic/plain-errors.js';
 import { discoverTools, isRecord, toAgentTools, toolIndexOf, type CoreToolCall } from './tools.js';
 import type { CoreTurnDeps, CoreTurnResult, TurnState } from './types.js';
 
@@ -49,7 +50,7 @@ export async function runCoreTurn(deps: CoreTurnDeps): Promise<CoreTurnResult> {
 }
 
 async function runCoreTurnOnVersion(deps: CoreTurnDeps): Promise<CoreTurnResult> {
-  const { ctx, services, input, runId, stepIndex, cancellation, deliveredTexts, citations, progress, gate, cardRetry, onDelta } = deps;
+  const { ctx, services, input, runId, stepIndex, cancellation, deliveredTexts, citations, progress, gate, cardRetry, noReply } = deps;
   const state: TurnState = { stopped: false, journaled: false, steeredInFlight: false, persisted: new Set() };
   let brainCtx = deps.brainCtx;
   let lastTurn: AssistantTurn | null = null;
@@ -59,13 +60,13 @@ async function runCoreTurnOnVersion(deps: CoreTurnDeps): Promise<CoreTurnResult>
   let batchSuspend: { suspend: NonNullable<ToolResult['suspend']>; details: ToolResult['details'] } | null = null;
   const recovery: RecoveryBudget = { transient: 0, compacted: false };
   let batchBlocked = false;
-  /** The reason of a finish_quietly call in this turn's batch: the run then ends with nothing delivered (BACKEND §3.3a). */
-  let quietReason: string | undefined;
+  /** A call of this model turn succeeded with `endsTurn`: after the tools the run finishes with no further model call. */
+  let endsTurn = false;
   const goalMode = deps.goalBrowserMode ?? false;
   // Owner-only tools (person_link) are offered only when the owner is alone with the agent in this run.
   const audience = await profileAudience(services.store, { agentId: input.agentId, conversationId: input.conversationId, wake: input.wakeEvents });
   // One model step is one turn: an MCP connection re-lists at most once within it (see McpRefreshOptions).
-  const discovered = await discoverTools(services.toolRegistry, input.agentId, cancellation.signal, { goalMode, reactions: deps.reactions === true, quietExit: deps.quietExit === true, ownerOnly: audience.ownerOnly, turn: runId + ':' + String(stepIndex) });
+  const discovered = await discoverTools(services.toolRegistry, input.agentId, cancellation.signal, { goalMode, reactions: deps.reactions === true, roomTalk: deps.roomTalk === true, ownerOnly: audience.ownerOnly, turn: runId + ':' + String(stepIndex) });
   if (discovered === null) return { outcome: 'stopped', brainCtx };
   // Stable order: the session's persisted order first, tools added since appended (see brain/tool-order.ts).
   // The run's frozen snapshot decides once whether the provider's own search replaces Juno's, so the list never changes mid-run.
@@ -74,21 +75,9 @@ async function runCoreTurnOnVersion(deps: CoreTurnDeps): Promise<CoreTurnResult>
     parseModelSnapshot(brainCtx)?.nativeWebSearch === true,
   );
   // CT-boundary: the child role is the journaled run row's stored parent link, never model text.
-  const childRun = await readChildChatRole(ctx, services, runId, stepIndex);
-  // No token preview while the model writes. The user sees paragraph bubbles as each closes (block streaming,
-  // below), the opening line (ackStep), the working state, and the rest of the final reply.
-  // Block streaming: each closed paragraph of a reply that will be shown is posted while the model writes (see block-stream.ts).
-  const blocks = !childRun && blockStreaming(input);
-  const newBlockStreamer = (): BlockStreamer | undefined => blocks
-    ? createBlockStreamer({
-        now: () => ctx.localDate?.now() ?? Date.now(),
-        wait: (ms) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }),
-        post: (index, markdown) => postStreamedBubble(services, input, runId, stepIndex, index, markdown),
-        isCancelled: () => cancellation.state.cancelled || cancellation.signal.aborted,
-        onError: (error) => services.log?.({ runId, error: error instanceof Error ? error.message : String(error) }, 'block streaming stopped'),
-      })
-    : undefined;
-  let blockStreamer = newBlockStreamer();
+  const subagentRun = await readSubagentChatRole(ctx, services, runId, stepIndex);
+  // No token preview while the model writes. The user sees the opening line (ackStep), the working state, and the final reply as one bubble.
+  const sendOnly = input.sendOnly === true;
   const scope: BudgetScope = { ctx, services, runId, budget: deps.budget };
 
   const modelTurn = (): AssistantTurn => {
@@ -99,23 +88,14 @@ async function runCoreTurnOnVersion(deps: CoreTurnDeps): Promise<CoreTurnResult>
     handleCoreEvent({ ctx, services, input, stepIndex, cancellation, gate, state, currentTurn: modelTurn }, event);
 
   const prepareRequest: PrepareRequest = async () => {
-    brainCtx = await prepareTurnContext(ctx, services, input, stepIndex, brainCtx, deps.budget, runId, tools);
+    brainCtx = await prepareTurnContext(ctx, services, input, stepIndex, brainCtx, deps.budget, runId, tools, deps.compactions);
   };
 
   const streamFn: StreamFn = async () => {
     const recovered = await recoverModelTurn({
       ctx, services, input, runId, stepIndex, brainCtx, tools, cancellation, recovery,
+      compactions: deps.compactions,
       budget: deps.budget,
-      onDelta: (text) => {
-        onDelta?.(text);
-        blockStreamer?.push(text);
-      },
-      afterProvider: async () => { await blockStreamer?.finish(); },
-      // A failed attempt starts over with a fresh block streamer, so no partial text is spliced in.
-      // Bubbles it streamed stay until the final layout is reconciled; the new attempt overwrites them by id.
-      onAttemptStart: async () => {
-        blockStreamer = newBlockStreamer();
-      },
     });
     if (recovered === CANCELLED) throw CORE_CANCELLED;
     brainCtx = recovered.brainCtx;
@@ -130,16 +110,14 @@ async function runCoreTurnOnVersion(deps: CoreTurnDeps): Promise<CoreTurnResult>
     lastTurn = raced;
     if (raced.webSearches !== undefined) citations.push(...await recordNativeSearches(ctx, services, runId, stepIndex, recovered.key, raced.webSearches, recovered.durationMs ?? 0));
     lengthStop = raced.stopReason === 'length';
-    if (raced.toolCalls.length > 0 && !progress.working) {
-      // Before the tools run, so the opening line shows while the work happens.
-      if (!childRun) {
-        const ack = await ackStep(ctx, services, input, stepIndex, raced.text, raced.toolCalls.map((call) => call.name), cancellation, deliveredTexts, runId);
+    if (raced.toolCalls.length > 0) {
+      // Before the tools run, so the opening line shows while the work happens. A question card's lead-in is posted in any turn of the run.
+      const asks = asksQuestion(unwrapProxyCalls(raced.toolCalls));
+      if (!subagentRun && (asks || !progress.working || isVoiceRun(input))) {
+        const ack = await ackStep(ctx, services, input, stepIndex, raced.text, unwrapProxyCalls(raced.toolCalls).map((call) => call.name), cancellation, deliveredTexts, runId, asks);
         if (ack === CANCELLED) throw CORE_CANCELLED;
       }
       progress.working = true;
-    } else if (raced.toolCalls.length > 0 && blocks) {
-      // Text between later tool calls stays private: anything streamed from it is taken back.
-      await discardStreamed(ctx, services, input, stepIndex, runId);
     }
     return turnStream(raced);
   };
@@ -223,10 +201,12 @@ async function runCoreTurnOnVersion(deps: CoreTurnDeps): Promise<CoreTurnResult>
       return { content: [], details: undefined, isError: true, terminate: true };
     }
     if (!(await chargeToolCall(scope, stepIndex, call.id, outcome.activeMs ?? 0)).ok) batchBlocked = true;
+    // The fifth identical failing attempt: the run ends blocked (its reason is already on the run row, run-tools.ts).
+    if (outcome.blockRun === true) batchBlocked = true;
     state.persisted.add(call.id);
-    if (call.name === QUIET_EXIT_TOOL) quietReason = quietReasonOf(outcome.result);
     if (outcome.result.isError !== true) citations.push(...citationsOf(outcome.result.details));
-    const suspend = outcome.result.suspend ?? childSuspendFromDetails(outcome.result.details) ?? null;
+    if (outcome.result.isError !== true && outcome.result.endsTurn === true) endsTurn = true;
+    const suspend = outcome.result.suspend ?? null;
     batchSuspend = suspend === null ? null : { suspend, details: outcome.result.details };
     return {
       content: outcome.result.content,
@@ -243,19 +223,6 @@ async function runCoreTurnOnVersion(deps: CoreTurnDeps): Promise<CoreTurnResult>
     return undefined;
   };
 
-  /**
-   * finish_quietly: the run ends like a completed one, but no reply is posted, whatever text this run wrote (it stays in the steps).
-   * The todo gate still decides: with a plan or a helper still open the run goes on (and the reason is dropped). A helper's result is
-   * the parent's input, so a child run reports the same line instead of staying silent.
-   */
-  const finishQuietly = async (reason: string): Promise<CoreTurnResult['outcome']> => {
-    const settle = await gate.settleFinal(`quiet:${stepIndex}`);
-    if (settle !== 'completed') return settle;
-    await ctx.run(`quiet-exit:${stepIndex}`, async () => { await services.store.patch('runs', runId, { quietReason: reason }); return true; });
-    if (childRun && await replyStep(ctx, services, input, stepIndex, QUIET_RESULT_PREFIX + reason, cancellation, deliveredTexts, runId) === CANCELLED) state.stopped = true;
-    return settle;
-  };
-
   const finishTurn: FinishTurn = async (turn) => {
     if (state.stopped) return { action: 'end' };
     if (toolCallsOf(turn.message).length > 0) {
@@ -268,19 +235,17 @@ async function runCoreTurnOnVersion(deps: CoreTurnDeps): Promise<CoreTurnResult>
       if (after === CANCELLED) state.stopped = true;
       else if (after) await gate.reconcile(`tools:${stepIndex}`);
       else if (batchBlocked || (await budgetSpentAfterTools(scope, stepIndex))) settled = 'blocked';
-      else if (quietReason !== undefined) {
-        settled = await finishQuietly(quietReason);
-        quietReason = undefined;
-      }
+      // A tool said "now wait for the person" (a question card): the run is done, with no further model call, no final reply and no
+      // empty-final retry. The person's answer starts the next run.
+      else if (endsTurn) settled = 'completed';
     } else {
-      // The reply is ready: wait for the user to stop typing; a message sent meanwhile is picked up just below.
-      const held = await holdWhileTyping(ctx, services, input, stepIndex, cancellation, childRun);
+      // The reply is ready: wait for the user to stop typing; a message sent meanwhile is picked up just below. A record line has no reader to wait for.
+      const held = await holdWhileTyping(ctx, services, input, stepIndex, cancellation, subagentRun || sendOnly);
       const steered = held === CANCELLED ? CANCELLED : await drainAndAppend(ctx, services, input, cancellation, `model:${stepIndex}`);
       if (steered === CANCELLED) state.stopped = true;
       else if (steered) {
-        // A correction supersedes this final turn: its preview is retracted with the turn.
+        // A correction supersedes this final turn.
         state.steeredInFlight = true;
-        if (blocks) await discardStreamed(ctx, services, input, stepIndex, runId);
         await gate.reconcile(`inflight:${stepIndex}`);
       }
       else if (lengthStop) await journalAssistantTurn(ctx, services, input, stepIndex, modelTurn());
@@ -290,14 +255,28 @@ async function runCoreTurnOnVersion(deps: CoreTurnDeps): Promise<CoreTurnResult>
         // CT-boundary: the hint the gate appends must follow this turn in the transcript, and a
         // held run publishes nothing.
         const settle = await gate.settleFinal(`final:${stepIndex}`);
-        if (settle === 'continued') {
-          if (blocks) await discardStreamed(ctx, services, input, stepIndex, runId);
-        } else {
-          // Only a run that would finish may send the reply back; a blocked one posts what it can.
-          const posted = await replyStep(ctx, services, input, stepIndex, finalTurn.text, cancellation, deliveredTexts, runId, citations, settle === 'completed' ? cardRetry : undefined);
-          if (posted === CANCELLED) state.stopped = true;
-          else if (typeof posted === 'object') await gate.hint(`card-retry:${stepIndex}`, posted.retry);
-          else settled = settle;
+        if (settle !== 'continued') {
+          // A person is waiting and this turn gives them nothing (empty, or the provider declined): one retry with a short note, then the run fails
+          // (BACKEND §3.3 "empty or refused final reply"). Anything this run already said to them makes the empty turn fine.
+          const nothing = settle === 'completed' && !subagentRun && givesNothing(finalTurn) && expectsReply(input)
+            ? await emptyFinalStep(ctx, services, runId, finalTurn, deliveredTexts, noReply)
+            : 'unchecked';
+          if (typeof nothing === 'object') {
+            await gate.hint(`no-reply:${stepIndex}`, nothing.retry);
+            settled = 'continued';
+          } else if (nothing === 'fine' && finalTurn.stopReason === 'refusal') {
+            // Already answered by other means: the provider's refusal text is not a second message.
+            settled = settle;
+          } else {
+            // Only a run that would finish may send the reply back; a blocked one posts what it can.
+            // A run that speaks only through send_message keeps its final text as the task's record line and delivers nothing (a child's text is still its result for the parent).
+            const posted = sendOnly && !subagentRun
+              ? await recordStep(ctx, services, stepIndex, runId, finalTurn.text)
+              : await replyStep(ctx, services, input, stepIndex, finalTurn.text, cancellation, deliveredTexts, runId, citations, settle === 'completed' ? cardRetry : undefined);
+            if (posted === CANCELLED) state.stopped = true;
+            else if (typeof posted === 'object') await gate.hint(`card-retry:${stepIndex}`, posted.retry);
+            else settled = settle;
+          }
         }
       }
     }
@@ -319,6 +298,11 @@ async function runCoreTurnOnVersion(deps: CoreTurnDeps): Promise<CoreTurnResult>
   } catch (error) {
     if (error === CORE_CANCELLED) return { outcome: 'stopped', brainCtx };
     if (error === CORE_BLOCKED || error === BUDGET_EXHAUSTED) return { outcome: 'blocked', brainCtx };
+    if (error === COMPACTION_THRASH) {
+      // Compacting twice in a few steps did not make the history fit: the run ends here with one plain sentence on the run and its task.
+      await ctx.run('thrash-block', () => markRunBlocked(services.store, runId, 'limit', CONVERSATION_TOO_LONG));
+      return { outcome: 'blocked', brainCtx };
+    }
     throw error;
   }
   if (state.stopped) return { outcome: 'stopped', brainCtx };

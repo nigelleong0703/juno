@@ -1,11 +1,20 @@
 import { z } from 'zod';
 
 /**
- * The iPhone app as a device (BACKEND 7.13). While the app is open and its event stream is connected it declares what the
- * owner has allowed (EventKit): reading and writing calendar events, reading and writing reminders. The server never wakes a
- * phone; a call is sent over the live stream and the app answers with a POST.
+ * The iPhone app as a device (BACKEND 7.13, 7.13b). While the app is open and its event stream is connected it declares what the
+ * owner has switched on and the system has allowed (EventKit, Contacts, ...): one or two actions per part of the phone. The server
+ * never wakes a phone; a call is sent over the live stream and the app answers with a POST.
  */
-export const PHONE_ACTIONS = ['calendar.read', 'calendar.write', 'reminders.read', 'reminders.write'] as const;
+export const PHONE_ACTIONS = [
+  'calendar.read', 'calendar.write',
+  'reminders.read', 'reminders.write',
+  'contacts.read', 'contacts.write',
+  'location.read',
+  'health.read',
+  'photos.read',
+  'music.read', 'music.control',
+  'home.read', 'home.write',
+] as const;
 export const phoneActionSchema = z.enum(PHONE_ACTIONS);
 export type PhoneAction = z.infer<typeof phoneActionSchema>;
 
@@ -33,6 +42,18 @@ export const PHONE_CALL_ACTIONS = [
   'reminders.create',
   'reminders.update',
   'reminders.delete',
+  'contacts.search',
+  'contacts.create',
+  'contacts.add_detail',
+  'location.current',
+  'health.query',
+  'photos.search',
+  'photos.send',
+  'music.now_playing',
+  'music.play',
+  'music.transport',
+  'home.list',
+  'home.set',
 ] as const;
 export const phoneCallActionSchema = z.enum(PHONE_CALL_ACTIONS);
 export type PhoneCallAction = z.infer<typeof phoneCallActionSchema>;
@@ -51,6 +72,21 @@ export const PHONE_CALL_NEEDS: Record<PhoneCallAction, readonly PhoneAction[]> =
   'reminders.create': ['reminders.write'],
   'reminders.update': ['reminders.write'],
   'reminders.delete': ['reminders.write'],
+  'contacts.search': ['contacts.read'],
+  'contacts.create': ['contacts.write'],
+  // Adding to a contact that exists means finding it first.
+  'contacts.add_detail': ['contacts.read', 'contacts.write'],
+  'location.current': ['location.read'],
+  'health.query': ['health.read'],
+  // Sending a photo reads the library and uploads one picture; the owner is asked each time, so it is not a separate switch.
+  'photos.search': ['photos.read'],
+  'photos.send': ['photos.read'],
+  'music.now_playing': ['music.read'],
+  'music.play': ['music.control'],
+  'music.transport': ['music.control'],
+  'home.list': ['home.read'],
+  // Setting a value means finding the accessory first.
+  'home.set': ['home.read', 'home.write'],
 };
 
 /** `POST /v1/phone/calls/:callId/result`: the app's answer to one call. */

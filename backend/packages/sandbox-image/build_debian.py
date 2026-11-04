@@ -1,4 +1,4 @@
-# Build the Debian 13 / Chrome desktop template against the self-hosted E2B here.
+# Build the Debian 13 / Chrome desktop template on E2B cloud (run via build.sh).
 import os
 
 from e2b import Template, default_build_logger

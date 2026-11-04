@@ -4,6 +4,7 @@ import type { Goal, GoalActivity } from '@agent-desktop/public-contracts';
 import { appendGoalActivity, createGoalInputSchema, goalStatusSchema, updateGoalInputSchema } from '@agent-desktop/public-contracts';
 import { queueGoalWake } from 'juno-agent/modules/goals/checkin';
 import { clampNextCheck } from 'juno-agent/modules/goals/schedule';
+import { deleteAnnounced } from 'juno-agent/modules/deleted-rows';
 import { getOwnerId } from '../auth.js';
 import type { AgentdDeps } from './index.js';
 import { canMutateAgent, docOwnerId, listAll, paginateFiltered } from './relationships.js';
@@ -107,8 +108,7 @@ export function registerGoals(app: Hono, deps: AgentdDeps) {
   app.delete('/v1/goals/:id', async (c) => {
     const row = await ownRow(deps, c);
     if (row === undefined) return notFound(c);
-    await deps.store.delete('goals', row.id);
-    await deps.store.emit({ type: 'goal.deleted', goalId: row.id });
+    await deleteAnnounced(deps.store, 'goals', row.id);
     return c.json({});
   });
 }

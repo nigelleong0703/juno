@@ -1,6 +1,6 @@
 /**
  * LIVE Spaces (BACKEND 5.12) against a real throwaway container of the local desktop image: the real local provider, the
- * real Bun install script and gateway, two agents with real Linux users, the real iptables owner rules. Skipped unless
+ * real Bun install script and gateway, two agents with real Linux users and network namespaces, the real namespace bridge. Skipped unless
  * LIVE_DOCKER=1 (needs Docker, the image `juno-desktop:local` and network for apt, GitHub and npm). It starts its own
  * container and removes it afterwards; it never touches another one.
  *
@@ -135,9 +135,9 @@ live('Spaces on a real container', () => {
 
   it('refuses to register what is not the agent\'s own loopback listener, and stops forwarding when someone else takes the port', async () => {
     await expect(provider.registerSpace(binding, { agentId: A, spaceId: 'spacenone012345678', port: 7103, gatewayKey: KEY }, signal())).rejects.toThrow(/nothing is listening on port 7103/);
-    // Another agent (its user exists once it has done anything) asks to wire A's port.
+    // Another agent (its user exists once it has done anything) asks to wire A's port: A's app is in A's namespace, B does not even see it.
     await asAgent(B, 'true');
-    await expect(provider.registerSpace(binding, { agentId: B, spaceId: 'spacestolen0123456', port: 7100, gatewayKey: KEY }, signal())).rejects.toThrow(/not this agent's/);
+    await expect(provider.registerSpace(binding, { agentId: B, spaceId: 'spacestolen0123456', port: 7100, gatewayKey: KEY }, signal())).rejects.toThrow(/nothing is listening on port 7100/);
     // An app open to every interface is refused.
     await asAgent(A, 'setsid nohup python3 -m http.server 7102 >/dev/null 2>&1 </dev/null &');
     await new Promise((done) => setTimeout(done, 1500));

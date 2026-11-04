@@ -1,6 +1,6 @@
 /**
  * Where one outer step's wall time goes: the model call, the tools, and our own harness work
- * (context rebuild, store writes, budget charges), with the rest being Restate journaling and
+ * (context rebuild, store writes, budget charges), with the rest being journaling and
  * waits that run outside any action (inbox drain, cancel peek). Only actions that really execute
  * are timed, so a replayed step (no action runs) logs nothing.
  */

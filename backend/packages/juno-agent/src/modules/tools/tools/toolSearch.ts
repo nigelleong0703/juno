@@ -28,7 +28,6 @@ import { z } from 'zod';
 import type { Tool, ToolContext, ToolResult } from '../../../contracts/index.js';
 import { createToolNameAliases } from '../../../execution/brain/toolNames.js';
 import { invalidArguments } from '../toolArguments.js';
-import { scopeQuietExit } from './finishQuietly.js';
 import { lexicalHits, rankCandidates } from './candidateRanking.js';
 import type { ToolScope } from '../scope.js';
 import { toolTurn } from './mcpTools.js';
@@ -100,7 +99,7 @@ export function createToolSearchTool(source: ToolSearchSource): Tool {
       const parsed = searchSchema.safeParse(args ?? {});
       if (!parsed.success) return invalidArguments(tool.name, args, parsed.error);
       const { query, namespace } = parsed.data;
-      const { all, visible } = await scopeQuietExit(ctx, ...(await Promise.all([source.all(ctx.agentId, ctx.signal, ctx.toolScope, toolTurn(ctx)), source.visible(ctx.agentId, ctx.signal, ctx.toolScope, toolTurn(ctx))])));
+      const [all, visible] = await Promise.all([source.all(ctx.agentId, ctx.signal, ctx.toolScope, toolTurn(ctx)), source.visible(ctx.agentId, ctx.signal, ctx.toolScope, toolTurn(ctx))]);
       const pool = all.filter((entry) => !isDiscoveryTool(entry.name));
       const groups = groupNamespaces(all);
       const native = ctx.toolSearch === 'responses-tool-search';
@@ -207,7 +206,7 @@ export function createToolLoadTool(source: ToolSearchSource): Tool {
     async execute(args: unknown, ctx: ToolContext): Promise<ToolResult> {
       const parsed = loadSchema.safeParse(args ?? {});
       if (!parsed.success) return invalidArguments(tool.name, args, parsed.error);
-      const { all, visible } = await scopeQuietExit(ctx, ...(await Promise.all([source.all(ctx.agentId, ctx.signal, ctx.toolScope, toolTurn(ctx)), source.visible(ctx.agentId, ctx.signal, ctx.toolScope, toolTurn(ctx))])));
+      const [all, visible] = await Promise.all([source.all(ctx.agentId, ctx.signal, ctx.toolScope, toolTurn(ctx)), source.visible(ctx.agentId, ctx.signal, ctx.toolScope, toolTurn(ctx))]);
       const pool = all.filter((entry) => !isDiscoveryTool(entry.name));
       // Exact canonical names: deterministic whole-schema fetch with no ranking and no System One call.
       // Unknown names are reported honestly; nothing executes here and nothing is guessed.
@@ -302,8 +301,8 @@ export function presentForModel(tools: readonly Tool[], env: Record<string, stri
 export interface ModelToolOptions {
   /** The chat takes reactions (and the react tool would accept it): `react` is then one of the core tools. */
   reactions?: boolean;
-  /** The run nobody is waiting on (`offersQuietExit`): `finish_quietly` is then shown with the core tools. It is filtered out of every other run before this (`discoverTools`). */
-  quietExit?: boolean;
+  /** The chat is an app room with other agents in it: `message_agent` is then one of the core tools (no tool_search round trip before every reply). */
+  roomTalk?: boolean;
 }
 
 /**
@@ -330,7 +329,7 @@ function splitForModel(tools: readonly Tool[], env: Record<string, string | unde
   tools = tools.filter(tool => goalMode ? (tool.name !== COMPUTER_BATCH_TOOL && (!tool.name.startsWith('browser.') || GOAL_BROWSER_NAMES.some(name => name === tool.name))) : !GOAL_BROWSER_NAMES.some(name => name === tool.name));
   if (goalMode) tools = tools.map(tool => GOAL_BROWSER_NAMES.some(name => name === tool.name) ? { ...tool, deferLoading: false } : tool);
   if (options.reactions === true) tools = tools.map(tool => tool.name === 'react' ? { ...tool, deferLoading: false } : tool);
-  if (options.quietExit === true) tools = tools.map(tool => tool.unattendedOnly === true ? { ...tool, deferLoading: false } : tool);
+  if (options.roomTalk === true) tools = tools.map(tool => tool.name === 'message_agent' ? { ...tool, deferLoading: false } : tool);
   // Fixed harness schemas precede discovered tools, independent of registry refresh order.
   const fixed = [...CORE_TOOL_NAMES, ...GOAL_BROWSER_NAMES];
   const rank = new Map(fixed.map((name, index) => [name, index]));

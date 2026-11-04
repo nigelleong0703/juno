@@ -7,7 +7,7 @@
  * field that the client zod models do not declare).
  */
 
-import type { Collection, Doc, Store } from '@agent-desktop/contracts';
+import type { Collection, Doc, ListQuery, Store } from '@agent-desktop/contracts';
 import type { Agent, Conversation } from '@agent-desktop/public-contracts';
 
 export interface RelationshipError {
@@ -135,6 +135,16 @@ export async function listAll<C extends Collection>(
     cursor = page.nextCursor;
   }
   return { items, truncated: true };
+}
+
+/** Every row of one collection (optionally one indexed filter) of a scoped store, page by page, with no cap: for deletes that must see everything. */
+export async function* rowsOf<C extends Collection>(store: Store, collection: C, where?: ListQuery['where']): AsyncGenerator<Doc<C>> {
+  let cursor: string | undefined;
+  do {
+    const page = await store.list(collection, { limit: 200, ...(where === undefined ? {} : { where }), ...(cursor === undefined ? {} : { cursor }) });
+    yield* page.items;
+    cursor = page.nextCursor;
+  } while (cursor !== undefined);
 }
 
 export interface Paginated<T> {

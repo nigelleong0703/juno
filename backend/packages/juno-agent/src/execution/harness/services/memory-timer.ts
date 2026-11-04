@@ -2,7 +2,7 @@
  * MemoryTimer Virtual Object (BACKEND §5.4): one hidden schedule per user, keyed by ownerId. Every hour at the user's own minute it
  * starts the goal check-ins and the daily goal briefing that are due, and in the 3 a.m. hour of the user's clock the nightly memory job
  * after them. The memory of a chat is not read here: the ChatDigest object does that once the chat goes quiet. This file is only the
- * Restate adapter (durable clock, generation check, journaled checkpoints); the jobs live in `modules/` and know nothing about Restate.
+ * durable adapter (durable clock, generation check, journaled checkpoints); the jobs live in `modules/` and know nothing about the runner.
  * The schedule is not shown in the app and is not a routine.
  */
 import { object, rpc, type ObjectContext } from '@agent-desktop/durable';

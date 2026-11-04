@@ -19,7 +19,8 @@ interface Pending {
 
 /**
  * Embeds one batch and stores each vector against its item's text (a text changed meanwhile keeps none). The count stored, or -1 when
- * the embedder did not answer. A vector of another length than the embedder asks for is not stored.
+ * the embedder did not answer. A vector of another length than the column's throws (Postgres refuses it): `alignVectors` at boot makes the
+ * column fit the model, so this is a misconfiguration to see in the log, never a silent skip.
  */
 async function embedBatch(items: MemoryItems, embedder: Embedder, batch: readonly Pending[]): Promise<number> {
   const vectors = await embedder.embed(batch.map((entry) => entry.text));
@@ -27,7 +28,7 @@ async function embedBatch(items: MemoryItems, embedder: Embedder, batch: readonl
   let stored = 0;
   for (const [index, entry] of batch.entries()) {
     const embedding = vectors[index];
-    if (embedding === undefined || (embedder.dimensions !== undefined && embedding.length !== embedder.dimensions)) continue;
+    if (embedding === undefined) continue;
     if (await items.setVector(entry.ownerId, entry.id, entry.text, { embedding, embedModel: embedder.model })) stored += 1;
   }
   return stored;
@@ -94,6 +95,18 @@ export function createVectorWriter(opts: { items: MemoryItems; embedder: Embedde
       pending.clear();
     },
   };
+}
+
+/**
+ * Makes the vector column as long as the embedder's vectors: `dimensions` when configured, else the length of a probe embedding. When the
+ * column differs (a new model) the stored vectors are dropped for the backfill to embed again. Returns the dimension, or undefined when
+ * the embedder did not answer (nothing changed; the next boot tries again).
+ */
+export async function alignVectors(opts: { items: MemoryItems; embedder: Embedder }): Promise<number | undefined> {
+  const dimension = opts.embedder.dimensions ?? (await opts.embedder.embed(['dimension probe']))?.[0]?.length;
+  if (dimension === undefined) return undefined;
+  await opts.items.alignVectorDimension(dimension);
+  return dimension;
 }
 
 /**

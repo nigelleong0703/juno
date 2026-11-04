@@ -1,7 +1,7 @@
 /**
  * What an agent knows about the owner's Feed when it wakes (BACKEND §10.10): the owner's local clock, the posts this
  * routine made lately (so it does not repeat itself) and the owner's feedback on the agent's posts. Pure reads and
- * fixed wording; nothing here knows about Restate, routines' timers or the tools.
+ * fixed wording; nothing here knows about the runner, routines' timers or the tools.
  */
 import type { FeedPost } from '@agent-desktop/public-contracts';
 import type { Store } from '../../contracts/index.js';

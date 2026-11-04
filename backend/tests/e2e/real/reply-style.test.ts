@@ -3,9 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { createAccount, listenEvents, runReport } from '../harness/client';
 
 /**
- * Reply style with a real model (BACKEND.md, "Reply style"): a final reply arrives as short bubbles,
- * plain sentences in chat, and a card only for structured content. Checks shape, never wording:
- * bubble count and length, no markdown headings/bold/list lines in chat bubbles, card or no card.
+ * Reply style with a real model (BACKEND.md, "Reply style"): a final reply is one short message
+ * (several only when the model chose send_message messages), plain sentences in chat, and a card
+ * only for structured content. Checks shape, never wording: bubble count and length, no markdown
+ * headings/bold/list lines in chat bubbles, card or no card.
  */
 interface Bubble { markdown: string; ui?: unknown }
 
@@ -96,12 +97,18 @@ describe('real model: reply style', () => {
       expect(tripText.split(/\s+/).length, show(trip)).toBeLessThanOrEqual(130);
       expect(trip.some((b) => b.ui !== undefined), show(trip)).toBe(true);
 
+      // An errand in the user's own words (2026-11-02 Mint chat): an opening line, then one result; the result does not acknowledge again, and
+      // several messages appear only when the model chose them (send_message messages), never because of blank lines.
+      const errand = await ask('那就 KillineyGO，帮我查一下地址和开门时间');
+      plainChat(errand);
+      expect(errand.length, show(errand)).toBeLessThanOrEqual(4);
+
       const words = (bubbles: Bubble[]) => prose(bubbles).split(/\s+/).filter(Boolean).length;
       // eslint-disable-next-line no-console
-      console.log('reply-style metrics', Object.fromEntries(Object.entries({ greeting, fact, compare, feeling, abilities, trip })
+      console.log('reply-style metrics', Object.fromEntries(Object.entries({ greeting, fact, compare, feeling, abilities, trip, errand })
         .map(([key, bubbles]) => [key, { bubbles: bubbles.length, words: words(bubbles), dashes: (prose(bubbles).match(/—/g) ?? []).length, card: bubbles.some((b) => b.ui !== undefined) }])));
       // eslint-disable-next-line no-console
-      console.log('reply-style transcript', { greeting: show(greeting), fact: show(fact), compare: show(compare), feeling: show(feeling), abilities: show(abilities), trip: show(trip) });
+      console.log('reply-style transcript', { greeting: show(greeting), fact: show(fact), compare: show(compare), feeling: show(feeling), abilities: show(abilities), trip: show(trip), errand: show(errand) });
     } finally {
       events.close();
     }

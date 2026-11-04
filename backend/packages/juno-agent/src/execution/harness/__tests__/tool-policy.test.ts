@@ -5,7 +5,7 @@
  */
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { Doc, Store, Tool, ToolRegistry, ToolResult, WakeEvent } from '../../../contracts/index.js';
 import type { Plugin, Request, Rule, ToolPermission } from '@agent-desktop/public-contracts';
@@ -15,9 +15,10 @@ import { mcpToolName } from '../../../modules/mcp/registry.js';
 import { rememberPage } from '../../../modules/tools/computer/purchase.js';
 import { APPROVAL_WINDOW_MS, toPublicRequest } from '../../../contracts/requests.js';
 import type { ToolOrigin } from '../../../contracts/index.js';
-import { deriveFor, evaluateToolPolicy, freshRefusal, readToolPolicyConfig, scopeChildTools, type ToolCallContext, type ToolPolicyConfig } from '../services/tool-policy.js';
+import { deriveFor, evaluateToolPolicy, freshRefusal, readToolPolicyConfig, scopeSubagentTools, type ToolCallContext, type ToolPolicyConfig } from '../services/tool-policy.js';
 import { presentForModel } from '../../../modules/tools/tools/toolSearch.js';
 import { usesMac } from '../services/decision/mac.js';
+import { PHONE_ACCESS_CASES } from '../../../modules/tools/__tests__/phone-cases.js';
 import { RESULT_TEXT_BUDGET } from '../services/tool-projection.js';
 import { ScriptedModel } from '../testing/stubs.js';
 import type { RunContext, RunInput, RunServices } from '../services/run-types.js';
@@ -37,7 +38,7 @@ function wake(overrides: Partial<WakeEvent> = {}): WakeEvent {
 
 /** A journaling context with a controllable awakeable, like the SDK's durable one. */
 interface TestContext extends ToolCallContext {
-  /** Resolve the pending awakeable, as an approval route would through Restate. */
+  /** Resolve the pending awakeable, as an approval route would through the runner. */
   decide(value: unknown): void;
 }
 
@@ -50,20 +51,20 @@ function testContext(ids: string[] = ['s1']): { ctx: TestContext; journal: Map<s
     journal,
     ctx: {
       rand: { uuidv4: () => ids[Math.min(next++, ids.length - 1)] ?? 'sx' },
-      run<T>(name: string, action: () => Promise<T>): RestatePromise<T> {
-        if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-        return RestatePromise.resolve(action().then((value) => {
+      run<T>(name: string, action: () => Promise<T>): DurablePromise<T> {
+        if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+        return DurablePromise.resolve(action().then((value) => {
           journal.set(name, structuredClone(value));
           return value;
         }));
       },
-      awakeable<T>(): { id: string; promise: RestatePromise<T> } {
+      awakeable<T>(): { id: string; promise: DurablePromise<T> } {
         const promise = new Promise<T>((resolver) => {
           settle = (value) => resolver(value as T);
         });
-        return { id: 'awk-1', promise: RestatePromise.resolve(promise) };
+        return { id: 'awk-1', promise: DurablePromise.resolve(promise) };
       },
-      drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+      drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
       decide: resolve,
     },
   };
@@ -167,15 +168,15 @@ async function stepsFor(store: Store): Promise<Array<Doc<'steps'>>> {
 }
 
 describe('tool policy: rules and permissions', () => {
-  // The real Restate cancel promise stays pending until a stop fires. A source that resolves
-  // `false` instead makes `RestatePromise.race` pick the cancel branch, so this pins the shape the
+  // The real cancel promise stays pending until a stop fires. A source that resolves
+  // `false` instead makes `DurablePromise.race` pick the cancel branch, so this pins the shape the
   // production wiring must have (see the report: execution-owner's fixture uses the resolved form).
   it('does not abort while the durable cancel promise is still pending', async () => {
     const store = createMemoryStore();
     const executions: number[] = [];
     const services = servicesFor(store, registryOf([toolFor('effect', executions)]));
     const pending = new Promise<boolean>(() => {});
-    const cancellation = createRunCancellation({ peek: async () => false, get: () => RestatePromise.resolve(pending) });
+    const cancellation = createRunCancellation({ peek: async () => false, get: () => DurablePromise.resolve(pending) });
     await ensureRun(store);
     const outcome = await executeSingleToolCall(
       testContext().ctx, services, input, 'run-1', 0, 0, { id: 'c-1', name: 'effect', arguments: {} }, cancellation, [],
@@ -408,7 +409,7 @@ describe('tool policy: durable approval', () => {
     const services = servicesFor(store, registryOf([toolFor('send', executions)]));
     let cancelled: Promise<boolean | undefined> = new Promise<boolean | undefined>(() => {});
     const never = new Promise<boolean>(() => {});
-    const cancellation: RunCancellation = createRunCancellation({ peek: () => cancelled, get: () => RestatePromise.resolve(never) });
+    const cancellation: RunCancellation = createRunCancellation({ peek: () => cancelled, get: () => DurablePromise.resolve(never) });
     const { ctx } = testContext();
     await ensureRun(store);
     const running = executeSingleToolCall(ctx, services, input, 'run-1', 0, 0, { id: 'call-1', name: 'send', arguments: {} }, cancellation, []);
@@ -1152,9 +1153,9 @@ describe('My Mac policy', () => {
     expect(evaluateToolPolicy({ ...apps, macAccess: false }, 'mac_mail_search', wake(), {})).toMatchObject({ kind: 'deny', ruleId: 'builtin.mac-off' });
   });
 
-  it('iPhone calendar and reminders: reads run, every change asks, and the brief is committing, or irreversible for a delete or a whole series', () => {
-    const reads = ['phone_calendar_list_calendars', 'phone_calendar_list_events', 'phone_reminders_list'];
-    const writes = ['phone_calendar_create_event', 'phone_calendar_update_event', 'phone_calendar_delete_event', 'phone_reminders_create', 'phone_reminders_update', 'phone_reminders_delete'];
+  it('iPhone calendar and reminders: reads and adding or changing a reminder run, calendar changes and deletes ask, and the brief is committing, or irreversible for a delete or a whole series', () => {
+    const reads = ['phone_calendar_list_calendars', 'phone_calendar_list_events', 'phone_reminders_list', 'phone_reminders_create', 'phone_reminders_update'];
+    const writes = ['phone_calendar_create_event', 'phone_calendar_update_event', 'phone_calendar_delete_event', 'phone_reminders_delete'];
     const phone: ToolPolicyConfig = { ...base, exposed: new Set([...reads, ...writes]) };
     for (const tool of reads) {
       expect(verdict(phone, tool, {}), tool).toBe('allow');
@@ -1162,13 +1163,33 @@ describe('My Mac policy', () => {
     }
     for (const tool of writes) expect(evaluateToolPolicy(phone, tool, wake(), {}), tool).toMatchObject({ kind: 'ask', ruleId: 'builtin.phone-write' });
     expect(evaluateToolPolicy(phone, 'phone_calendar_create_event', wake(), { title: 'Dentist', start: '2026-10-23T09:00' })).toMatchObject({ reason: expect.stringContaining('"Dentist"') });
-    for (const [tool, args] of [['phone_calendar_create_event', { title: 'x' }], ['phone_calendar_update_event', { id: 'e1', title: 'y' }], ['phone_reminders_create', { title: 'x' }], ['phone_reminders_update', { id: 'r1', completed: true }]] as const) {
+    for (const [tool, args] of [['phone_calendar_create_event', { title: 'x' }], ['phone_calendar_update_event', { id: 'e1', title: 'y' }]] as const) {
       expect(deriveFor(phone, tool, args).brief.categories, tool).toEqual(['committing']);
     }
-    for (const [tool, args] of [['phone_calendar_delete_event', { id: 'e1' }], ['phone_reminders_delete', { id: 'r1' }], ['phone_calendar_update_event', { id: 'e1', title: 'y', span: 'future' }]] as const) {
+    for (const [tool, args] of [['phone_calendar_delete_event', { id: 'e1' }], ['phone_reminders_delete', { reminders: [{ id: 'r1', title: 'x' }] }], ['phone_calendar_update_event', { id: 'e1', title: 'y', span: 'future' }]] as const) {
       expect(deriveFor(phone, tool, args).brief.categories, tool).toEqual(['irreversible']);
     }
+    // Deleting several reminders is ONE approval that lists them (title and due), not one card each.
+    const several = { reminders: [{ id: 'r1', title: 'Watch Crime Scene', due: '2026-08-08T22:00:00+08:00' }, { id: 'r2', title: 'Pay rent' }] };
+    expect(evaluateToolPolicy(phone, 'phone_reminders_delete', wake(), several)).toMatchObject({ kind: 'ask', ruleId: 'builtin.phone-write', reason: 'Delete 2 reminders on your iPhone' });
+    expect(deriveFor(phone, 'phone_reminders_delete', several).brief.facts.targets).toEqual([{ kind: 'record', label: 'Watch Crime Scene · 2026-08-08 22:00' }, { kind: 'record', label: 'Pay rent' }]);
     expect(deriveFor(phone, 'phone_calendar_update_event', { id: 'e1', title: 'y', span: 'this' }).brief.categories).toEqual(['committing']);
+  });
+
+  it('iPhone contacts, location, health, photos, music and home: a read runs, a change or a private photo leaving asks, with the decision the tool declares', () => {
+    const phone: ToolPolicyConfig = { ...base, exposed: new Set(PHONE_ACCESS_CASES.map((c) => c.tool)) };
+    for (const { tool, args, decision } of PHONE_ACCESS_CASES) {
+      if (decision === undefined) {
+        expect(verdict(phone, tool, args), tool).toBe('allow');
+        expect(deriveFor(phone, tool, args).brief.categories, tool).toEqual([]);
+      } else {
+        expect(evaluateToolPolicy(phone, tool, wake(), args), tool).toMatchObject({ kind: 'ask', ruleId: 'builtin.phone-write' });
+        expect(deriveFor(phone, tool, args).brief.categories, tool).toEqual([decision]);
+        expect(deriveFor(phone, tool, args).brief.platform.name, tool).toBe('Your iPhone');
+      }
+    }
+    expect(evaluateToolPolicy(phone, 'phone_contacts_create', wake(), { givenName: 'Mei', familyName: 'Tan' })).toMatchObject({ reason: expect.stringContaining('"Mei Tan"') });
+    expect(evaluateToolPolicy(phone, 'phone_home_set', wake(), { accessory: 'Desk lamp', property: 'power', value: false })).toMatchObject({ reason: 'Home: set power of "Desk lamp" to off' });
   });
 
   it('allows ordinary Mac screen and browser work authorized by Mac access, and asks only to start recording', () => {
@@ -1261,25 +1282,25 @@ describe('child tool narrowing (child_spawn tools)', () => {
   it('a child may call only the tools its parent listed, however the agent exposes', async () => {
     const store = createMemoryStore();
     await ensureRun(store);
-    const childId = 'run-child-narrow';
-    const childRow = { id: childId, agentId: AGENT, conversationId: CONV, parentRunId: 'run-parent', allowedTools: ['shell.run'], title: 'child', status: 'running' as const, kind: 'background' as const, steps: [], usage: { inputTokens: 0, outputTokens: 0, computeSeconds: 0, costUsd: 0, steps: 0 }, startedAt: AT, lastActivityAt: AT };
-    await store.put('runs', childRow, { agentId: AGENT, conversationId: CONV });
+    const subagentId = 'run-child-narrow';
+    const subagentRow = { id: subagentId, agentId: AGENT, conversationId: CONV, parentRunId: 'run-parent', allowedTools: ['shell.run'], title: 'child', status: 'running' as const, kind: 'background' as const, steps: [], usage: { inputTokens: 0, outputTokens: 0, computeSeconds: 0, costUsd: 0, steps: 0 }, startedAt: AT, lastActivityAt: AT };
+    await store.put('runs', subagentRow, { agentId: AGENT, conversationId: CONV });
     const tools: Tool[] = ['shell.run', 'web_fetch'].map((name) => ({ name, description: name, parameters: { type: 'object', properties: {}, additionalProperties: false }, replay: 'safe', sideEffect: false, execute: async () => ({ content: [{ type: 'text', text: 'ok' }] }) }));
     const services = { store, toolRegistry: { forAgent: async () => tools, get: (name: string) => tools.find((tool) => tool.name === name) }, enqueuer: new NoopEnqueuer() } as unknown as RunServices;
-    const input: RunInput = { agentId: AGENT, conversationId: CONV, sessionKey: AGENT + ':' + CONV + '::child:' + childId, wakeEvents: [wake()] };
+    const input: RunInput = { agentId: AGENT, conversationId: CONV, sessionKey: AGENT + ':' + CONV + '::child:' + subagentId, wakeEvents: [wake()] };
     expect((await freshRefusal(services, input, 'web_fetch', {}, false))?.isError).toBe(true);
     expect(await freshRefusal(services, input, 'shell.run', { command: 'ls' }, false)).toBeNull();
   });
 
   it('a child narrowed to tools the agent defers is offered exactly those tools, directly', async () => {
     const store = createMemoryStore();
-    const childId = 'run-child-presented';
-    const childRow = { id: childId, agentId: AGENT, conversationId: CONV, parentRunId: 'run-parent', allowedTools: ['tasks_list'], title: 'child', status: 'running' as const, kind: 'background' as const, steps: [], usage: { inputTokens: 0, outputTokens: 0, computeSeconds: 0, costUsd: 0, steps: 0 }, startedAt: AT, lastActivityAt: AT };
-    await store.put('runs', childRow, { agentId: AGENT, conversationId: CONV });
+    const subagentId = 'run-child-presented';
+    const subagentRow = { id: subagentId, agentId: AGENT, conversationId: CONV, parentRunId: 'run-parent', allowedTools: ['tasks_list'], title: 'child', status: 'running' as const, kind: 'background' as const, steps: [], usage: { inputTokens: 0, outputTokens: 0, computeSeconds: 0, costUsd: 0, steps: 0 }, startedAt: AT, lastActivityAt: AT };
+    await store.put('runs', subagentRow, { agentId: AGENT, conversationId: CONV });
     const tools: Tool[] = ['tasks_list', 'web_fetch'].map((name) => ({ name, description: name, parameters: { type: 'object', properties: {}, additionalProperties: false }, replay: 'safe', sideEffect: false, deferLoading: true, execute: async () => ({ content: [{ type: 'text', text: 'ok' }] }) }));
     const services = { store, toolRegistry: { forAgent: async () => tools, get: (name: string) => tools.find((tool) => tool.name === name) }, enqueuer: new NoopEnqueuer() } as unknown as RunServices;
-    const input: RunInput = { agentId: AGENT, conversationId: CONV, sessionKey: AGENT + ':' + CONV + '::child:' + childId, wakeEvents: [wake()] };
-    const scoped = await scopeChildTools({ run: async (_name: string, action: () => Promise<unknown>) => action() } as unknown as RunContext, services, input);
+    const input: RunInput = { agentId: AGENT, conversationId: CONV, sessionKey: AGENT + ':' + CONV + '::child:' + subagentId, wakeEvents: [wake()] };
+    const scoped = await scopeSubagentTools({ run: async (_name: string, action: () => Promise<unknown>) => action() } as unknown as RunContext, services, input);
     expect(presentForModel(await scoped.toolRegistry.forAgent(AGENT), {}).map((tool) => tool.name)).toEqual(['tasks_list']);
   });
 });

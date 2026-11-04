@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { invalidArguments } from '../toolArguments.js';
 import type { Store, Tool, ToolContext, ToolResult } from '../../../contracts/index.js';
 import { docOwner } from '../../../execution/execution-owner.js';
-import { configuredClientFor, platformKeyConfigured, withoutCoveredComposio, type CatalogEntry, type ConnectorCatalog } from '../../mcp/index.js';
+import { offeredEntries, platformKeyConfigured, type CatalogEntry, type ConnectorCatalog } from '../../mcp/index.js';
 import { listAll } from '../../memory/util.js';
 import type { AppProblem } from '@agent-desktop/public-contracts';
 import { agentAppSettings, appProblem } from '../../apps/agent-apps.js';
@@ -40,7 +40,6 @@ function stateOf(entry: CatalogEntry, problem: AppProblem | undefined, env: Reco
   if (problem === 'not_enabled') return 'turned_off';
   if (problem === 'expired' || problem === 'needs_reconnect' || problem === 'scope_missing') return problem;
   if (entry.platformKey === true && !platformKeyConfigured(entry.id, env)) return 'needs_key';
-  if (entry.configuredClientIssuer !== undefined && configuredClientFor(entry.configuredClientIssuer, env) === undefined) return 'needs_server';
   return 'available';
 }
 
@@ -87,7 +86,7 @@ export function createConnectorSearchTool(opts: { store: Store; catalog: Connect
       const problemOf = (id: string): AppProblem | undefined => appProblem(connections, settings, id);
       const env = opts.env ?? process.env;
       const words = query?.toLowerCase().split(/\s+/) ?? [];
-      const matches = withoutCoveredComposio(opts.catalog.list(), env).filter((entry) => {
+      const matches = offeredEntries(opts.catalog.list(), env, (id) => problemOf(id) !== 'not_added').filter((entry) => {
         if (category !== undefined && entry.category !== category) return false;
         if (onlyUnconnected === true && problemOf(entry.id) === undefined) return false;
         const text = (entry.id + ' ' + entry.name + ' ' + entry.description).toLowerCase();

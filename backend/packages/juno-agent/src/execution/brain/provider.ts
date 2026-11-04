@@ -21,6 +21,7 @@ import { aliasToolNamesInMessages, aliasToolNamesInResult, createToolNameAliases
 import { createModelLimitsSource, type ModelLimits, type ModelLimitsSource } from './model-limits.js';
 import { createStreamWatchdog } from './stream-watchdog.js';
 import { ModelTurnError } from './model-turn-error.js';
+import { isRefusalEvent, isRefusalStop } from './model-refusal.js';
 import { classifyProviderFailure, ProviderFailureError } from './model-failure.js';
 import { assistantWireCompatFor, responsesModelFor, wireModelFor, type WireModelRequest } from './provider-wire-compat.js';
 import { stripReplayedThinking } from './replay-sanitize.js';
@@ -34,7 +35,13 @@ import { toAssistantUsage } from './provider-usage.js';
 
 export interface ModelProvider {
   getLimits?(): Promise<ModelLimits>;
-  call(options: { messages: Message[]; tools: Tool[]; signal: AbortSignal; onDelta?: (text: string) => void; sessionKey?: string; onStats?: (stats: ModelCallStats) => void }): Promise<AssistantTurn & { message?: AssistantMessage }>;
+  /**
+   * Open (and leave pooled) the connection the next call will use: one credential-free GET of the endpoint's model list through the
+   * call's own fetch, so the TLS handshake is paid ahead of the call. `skipped` where the call goes over a WebSocket (that socket is
+   * opened by the call, with the headers its SDK builds). Sends no key and no model tokens; throws on a network failure.
+   */
+  warmConnection?(signal: AbortSignal): Promise<'warm' | 'skipped'>;
+  call(options: { messages: Message[]; tools: Tool[]; signal: AbortSignal; onDelta?: (text: string) => void; sessionKey?: string; onStats?: (stats: ModelCallStats) => void; /** Caps this one call's output (cache warm-up asks for a token or two); never raises the model's own limit. */ maxOutputTokens?: number }): Promise<AssistantTurn & { message?: AssistantMessage }>;
 }
 
 
@@ -132,6 +139,23 @@ function imageLoad(messages: readonly Message[]): { images: number; imageKB: num
   return { images, imageKB: Math.round(chars / 1024) };
 }
 
+const NOTE_PREFIX = '<context_update>';
+
+/** Characters of each part of the request that is really sent (image data excluded: `imageKB` counts it). */
+function requestSections(messages: readonly Message[], sentTools: readonly unknown[]): Pick<ModelCallStats, 'toolsSent' | 'toolChars' | 'systemChars' | 'noteChars' | 'historyChars'> {
+  let systemChars = 0;
+  let noteChars = 0;
+  let historyChars = 0;
+  for (const message of messages) {
+    const content: unknown = message.content;
+    const size = typeof content === 'string' ? content.length : JSON.stringify(content, (key, value: unknown) => (key === 'data' && typeof value === 'string' && value.length > 1000 ? '' : value)).length;
+    if (message.role === 'system') systemChars += size;
+    else if (message.role === 'user' && typeof content === 'string' && content.startsWith(NOTE_PREFIX)) noteChars += size;
+    else historyChars += size;
+  }
+  return { toolsSent: sentTools.length, toolChars: JSON.stringify(sentTools).length, systemChars, noteChars, historyChars };
+}
+
 /**
  * With `supportsImages:false` pi-ai replaces every image block with a placeholder text instead of
  * sending it (api/transform-messages.js downgradeUnsupportedImages), so a screenshot silently becomes
@@ -222,8 +246,17 @@ export function createModelProvider(source: ModelSource, providerOptions: OpenAI
 
   return {
     getLimits: () => source.limits.getLimits(),
+    async warmConnection(signal) {
+      const model = (await source.resolve()).buildModel(await source.limits.getLimits());
+      const base = model.baseUrl.replace(/\/+$/, '');
+      if (wsTransport !== undefined && model.api === 'openai-responses' && defaultEndpoint(base + '/responses') !== undefined) return 'skipped';
+      const response = await (source.fetch ?? fetch)(base + '/models', { method: 'GET', signal });
+      // The body is read to the end so the socket goes back to the pool instead of being closed.
+      await response.arrayBuffer();
+      return 'warm';
+    },
     async call(options) {
-      const { messages: messagesInput, tools, signal, onDelta, sessionKey, onStats } = options;
+      const { messages: messagesInput, tools, signal, onDelta, sessionKey, onStats, maxOutputTokens: callMaximum } = options;
       const started = Date.now();
 
       if (!supportsImages) {
@@ -270,7 +303,7 @@ export function createModelProvider(source: ModelSource, providerOptions: OpenAI
         // Only a requested or published output maximum may cap the call; remaining context
         // clamps that cap but never invents one alone, so a context-only registry leaves
         // maxTokens absent and the gateway keeps its own default.
-        const requestedMaximum = smallestKnown(limits.maxOutputTokens, providerOptions.maxOutputTokens);
+        const requestedMaximum = smallestKnown(limits.maxOutputTokens, providerOptions.maxOutputTokens, callMaximum);
         const outputMaximum = requestedMaximum === undefined ? undefined : available === undefined ? requestedMaximum : Math.min(requestedMaximum, available);
         // Direct stream leaves an unpublished output limit to the provider; streamSimple invents one.
         // The adapter surfaces each HTTP response, which is the only qualified status evidence.
@@ -285,13 +318,18 @@ export function createModelProvider(source: ModelSource, providerOptions: OpenAI
           ? createToolSearchTap({ deferred, messages: messagesInput, supportsStrictMode: model.compat?.supportsStrictMode === true })
           : undefined;
         const taps = [toolSearchTap, searchTap].flatMap((tap) => (tap === undefined ? [] : [tap]));
+        // A Responses refusal item arrives as ordinary text on a completed response: only the stream event says the provider declined.
+        let refusalEvent = false;
         const streamOptions = {
-          ...(taps.length === 0 ? {} : {
-            onPayload: (payload: unknown) => taps.reduce((current, tap) => tap.payload(current) ?? current, payload),
-            onProviderStreamEvent: (event: unknown) => { for (const tap of taps) tap.observe(event); },
-          }),
+          ...(taps.length === 0 ? {} : { onPayload: (payload: unknown) => taps.reduce((current, tap) => tap.payload(current) ?? current, payload) }),
+          onProviderStreamEvent: (event: unknown) => {
+            if (isRefusalEvent(event)) refusalEvent = true;
+            for (const tap of taps) tap.observe(event);
+          },
           apiKey,
           signal: watchdog.signal,
+          // This Muse route accepts 24h retention; keep its cache across pauses between chat and calls.
+          ...(model.provider === 'opencode-go' && model.id === 'muse-spark-1.3-contributor' ? { cacheRetention: 'long' as const } : {}),
           // Prompt-cache affinity: the gateway routes a session to the same cache by its session id
           // (Codex sends session-id/thread-id the same way). Without it almost nothing is cached.
           ...(sessionKey === undefined ? {} : { headers: cacheAffinityHeaders(sessionKey) }),
@@ -311,6 +349,7 @@ export function createModelProvider(source: ModelSource, providerOptions: OpenAI
         const eventStream = streamFor(model, messages, { streamOptions, reasoningEffort, temperature, provider: resolved.provider });
 
         const toolCalls: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = [];
+        let refused = false;
 
         const iterator = eventStream[Symbol.asyncIterator]();
         while (true) {
@@ -331,6 +370,8 @@ export function createModelProvider(source: ModelSource, providerOptions: OpenAI
               arguments: event.toolCall.arguments || {},
             });
           } else if (event.type === 'error') {
+            // The provider declined: not a failure of the request, a turn with no answer (the run decides what that means).
+            if (isRefusalStop(event.error.rawStopReason)) { refused = true; continue; }
             const failure = classifyProviderFailure(event.error, observed, limits.contextWindow);
             throw new ProviderFailureError({ ...failure, message: redactSecrets(failure.message, [apiKey]) });
           }
@@ -340,6 +381,8 @@ export function createModelProvider(source: ModelSource, providerOptions: OpenAI
         const wire = wsCall?.info();
         onStats?.({
           ...imageLoad(messagesInput),
+          ...(sessionKey === undefined ? {} : { sessionHash: hashedSessionId(sessionKey) }),
+          ...requestSections(messagesInput, piTools),
           ...(wire === undefined ? {} : { transport: wire.transport, delta: wire.delta, ...(wire.deltaItems === undefined ? {} : { deltaItems: wire.deltaItems }), ...(wire.fallback === undefined ? {} : { wsFallback: wire.fallback }) }),
           prepMs,
           ...(firstEventMs === undefined ? {} : { firstEventMs }),
@@ -348,6 +391,11 @@ export function createModelProvider(source: ModelSource, providerOptions: OpenAI
           ...(result.usage.reasoning === undefined ? {} : { reasoningTokens: result.usage.reasoning }),
         });
         const fullText = result.content.filter(c => c.type === 'text').map(c => c.text).join('');
+        if (refused || (refusalEvent && toolCalls.length === 0)) {
+          // Stored as an ordinary stopped turn, so the history stays valid for every wire; the run sees `refusal`.
+          const { errorMessage: _declined, ...kept } = result;
+          return { message: { ...kept, stopReason: 'stop' }, text: fullText, toolCalls: [], usage: toAssistantUsage(result.usage, providerOptions.pricing), stopReason: 'refusal' };
+        }
         if (result.stopReason === 'length' && fullText.trim().length === 0 && toolCalls.length === 0) {
           throw new ModelTurnError('output_budget', 'Model exhausted its output budget without a reply or tool action. Please retry.');
         }

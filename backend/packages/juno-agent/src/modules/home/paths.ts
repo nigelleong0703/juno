@@ -108,3 +108,7 @@ export function relativeToHome(path: string): string | undefined {
   const resolved = posix.normalize(path);
   return resolved.startsWith(HOME_ROOT + '/') ? resolved.slice(HOME_ROOT.length + 1) : undefined;
 }
+
+/** Tools that can change files in the home (BACKEND 5.3): the home is synced again after one of them. */
+const FILE_CHANGING_TOOLS = new Set(['files.write', 'files.edit', 'files.restore']);
+export const changesFiles = (name: string): boolean => FILE_CHANGING_TOOLS.has(name) || name.startsWith('shell.');

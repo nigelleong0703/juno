@@ -106,7 +106,7 @@ export interface MemoryPort {
     currentOf(ownerId: string, personId: string): Promise<RelationView[]>;
   };
   /** Read: the digest's context for one chat, before its model call: what the owner's memory holds, the claims known, the people in it. */
-  digestContext(input: { ownerId: string; items: readonly SourceItem[]; agents: ReadonlyArray<{ id: string; name: string }>; log?: DigestLog }): Promise<{ context: ClaimsContext; prompt: string }>;
+  digestContext(input: { ownerId: string; agentId: string; items: readonly SourceItem[]; agents: ReadonlyArray<{ id: string; name: string }>; log?: DigestLog }): Promise<{ context: ClaimsContext; prompt: string }>;
   /** Write: the digest's answer. Its claims are checked and written (the views rendered into `home`), then the relations they state are recorded. */
   applyDigest(input: { ownerId: string; agentId: string; items: readonly SourceItem[]; claims: readonly unknown[]; context: ClaimsContext; now: Date; home?: HomeComputer; log?: DigestLog }): Promise<{ claims: ClaimsResult; relations: RelationsResult }>;
   /** LEAK (see the module comment): the concrete graph, for the nightly memory job and the goal briefing only. */

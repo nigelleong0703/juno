@@ -1,6 +1,6 @@
 /**
  * IdeasTimer Virtual Object (BACKEND §5.10): one hidden schedule per user, keyed by ownerId, that runs the daily ideas job once a
- * day in the morning of the user's clock. Only the Restate adapter lives here (durable clock, generation check, journaled
+ * day in the morning of the user's clock. Only the durable adapter lives here (durable clock, generation check, journaled
  * checkpoint); the job is `modules/ideas/job.ts`. Same shape as the MemoryTimer, and not a routine.
  */
 import { object, rpc, type ObjectContext } from '@agent-desktop/durable';

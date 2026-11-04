@@ -142,9 +142,18 @@ describe('web_search summary', () => {
   }
   const withFast = (quickText: ToolContext['quickText']) => ({ signal: new AbortController().signal, agentId: 'agt-1', quickText } as unknown as ToolContext);
 
-  it('returns the query, the links, the fast-model summary and the reminder; the prompt delimits untrusted results', async () => {
+  it('a standard search returns the list at once without calling the fast model', async () => {
+    let called = false;
+    const result = await make([]).execute({ query: 'q' }, withFast(async () => { called = true; return 'summary'; }));
+    expect(called).toBe(false);
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain('1. Doc <one> (2026-10-01)');
+    expect(text).not.toContain('x'.repeat(701));
+  });
+
+  it('an extended search returns the query, the links, the fast-model summary and the reminder; the prompt delimits untrusted results', async () => {
     const prompts: string[] = [];
-    const result = await make([]).execute({ query: 'what is x' }, withFast(async (prompt) => { prompts.push(prompt); return '  X is a thing (Doc one).  '; }));
+    const result = await make([]).execute({ query: 'what is x', mode: 'extended' }, withFast(async (prompt) => { prompts.push(prompt); return '  X is a thing (Doc one).  '; }));
     expect(result.isError).toBeUndefined();
     expect(result.content[0]).toEqual({ type: 'text', text: 'Web search results for query: "what is x"\n\nLinks: [{"title":"Doc <one>","url":"https://a.example/1"},{"title":"Two","url":"https://b.example/2"}]\n\nX is a thing (Doc one).\n\nREMINDER: Cite the sources you use in your reply as markdown links.' });
     const prompt = prompts[0]!;
@@ -156,9 +165,9 @@ describe('web_search summary', () => {
     expect(prompt.length).toBeLessThan(5000);
   });
 
-  it('falls back to the raw list when the fast model is missing, returns nothing or throws', async () => {
+  it('an extended search falls back to the raw list when the fast model is missing, returns nothing or throws', async () => {
     for (const quick of [undefined, async () => null, async () => '  ', async () => { throw new Error('down'); }]) {
-      const result = await make([]).execute({ query: 'q' }, withFast(quick));
+      const result = await make([]).execute({ query: 'q', mode: 'extended' }, withFast(quick));
       expect(result.isError).toBeUndefined();
       const text = (result.content[0] as { text: string }).text;
       expect(text).toContain('Links: [');

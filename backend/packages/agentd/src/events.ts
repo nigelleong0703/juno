@@ -11,7 +11,8 @@
 
 import type { Context } from 'hono';
 import { toPublicRequest } from '@agent-desktop/contracts';
-import type { EventBus, Store, StoredEvent } from '@agent-desktop/contracts';
+import type { EventBus, LiveRunEvent, Store, StoredEvent } from '@agent-desktop/contracts';
+import type { LiveRuns } from 'juno-agent/execution/live-runs';
 import { EventType, normalizeStoredAgentEvent, type AgentEvent, type Item, type Message } from '@agent-desktop/public-contracts';
 import { createLogger } from '@agent-desktop/log';
 import { isConversationVisible } from './routes/relationships.js';
@@ -356,4 +357,111 @@ function formatEvent(event: StoredEvent): string {
 function formatTransientEvent(event: AgentEvent): string {
   const name = event.type.includes('delta') ? 'delta' : event.type;
   return `event: ${name}\ndata: ${JSON.stringify(publicEvent(event))}\n\n`;
+}
+
+/**
+ * A durable event that ends one run's stream. The wire run segment closes with RUN_FINISHED (a waiting run closes it with an
+ * interrupt outcome, so it ends here too) or RUN_ERROR; both carry the run id.
+ */
+function endsRun(event: AgentEvent, runId: string): boolean {
+  if (event.type === EventType.RUN_FINISHED) return event.runId === runId;
+  if (event.type === EventType.RUN_ERROR) return (event.metadata as { juno?: { runId?: unknown } } | undefined)?.juno?.runId === runId;
+  return false;
+}
+
+/** The durable events of one run this stream carries: its reply items and its end. */
+function runEventOf(event: AgentEvent, runId: string, conversationId: string): boolean {
+  if (event.type === 'item.added') return event.conversationId === conversationId && 'runId' in event.item && event.item.runId === runId;
+  return endsRun(event, runId);
+}
+
+/**
+ * One run's internal stream (the voice bridge's push channel). Subscribes to the live hub (in memory; see juno-agent live-runs) and the owner's durable tail FIRST,
+ * sends `event: ready`, then replays the durable events of this run after `after`, then forwards live text and new durable events.
+ * Live text is never replayed (it is not stored): a consumer that connects late gets the durable reply item instead. The stream
+ * closes after the run's end event; a consumer that drops mid-run reconnects with the id of the last durable frame it saw.
+ */
+export async function streamRunEvents(options: {
+  durable: EventBus;
+  live: LiveRuns;
+  conversationId: string;
+  runId: string;
+  ownerId: string;
+  after: number;
+}): Promise<Response> {
+  const { durable, live, conversationId, runId, ownerId } = options;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let unsubscribers: Array<() => Promise<void> | void> = [];
+  let closed = false;
+
+  const release = async (): Promise<void> => {
+    closed = true;
+    if (heartbeat !== undefined) clearInterval(heartbeat);
+    heartbeat = undefined;
+    const unsubs = unsubscribers;
+    unsubscribers = [];
+    for (const unsub of unsubs) await unsub();
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const enqueue = (chunk: string): void => {
+        if (!closed) controller.enqueue(encoder.encode(chunk));
+      };
+      const finish = async (): Promise<void> => {
+        if (closed) return;
+        await release();
+        controller.close();
+      };
+      let replaying = true;
+      const pending: StoredEvent[] = [];
+      let lastId = options.after;
+      const sendDurable = (stored: StoredEvent): void => {
+        if (stored.id <= lastId || closed) return;
+        lastId = stored.id;
+        enqueue(`id: ${stored.id}\nevent: ${stored.event.type}\ndata: ${JSON.stringify(stored.event)}\n\n`);
+        if (endsRun(stored.event, runId)) void finish();
+      };
+      try {
+        // The hub replays the current attempt's text to a subscriber that joins mid-run, synchronously inside `subscribe`: hold it
+        // (and anything live that follows) until `ready` has gone out, so `ready` stays the first frame.
+        let announced = false;
+        const held: string[] = [];
+        unsubscribers.push(live.subscribe({ ownerId, conversationId, runId }, (event: LiveRunEvent) => {
+          const frame = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+          if (announced) enqueue(frame);
+          else held.push(frame);
+        }));
+        unsubscribers.push(await durable.subscribe((stored) => {
+          if (closed || !runEventOf(stored.event, runId, conversationId)) return;
+          if (replaying) pending.push(stored);
+          else sendDurable(stored);
+        }));
+        enqueue('event: ready\ndata: {}\n\n');
+        announced = true;
+        for (const frame of held) enqueue(frame);
+        held.length = 0;
+        let cursor = options.after;
+        for (;;) {
+          const page = await durable.since(cursor, BACKLOG_PAGE);
+          for (const stored of page) if (runEventOf(stored.event, runId, conversationId)) sendDurable(stored);
+          const last = page[page.length - 1];
+          if (page.length < BACKLOG_PAGE || last === undefined) break;
+          cursor = last.id;
+        }
+        replaying = false;
+        for (const stored of pending.sort((a, b) => a.id - b.id)) sendDurable(stored);
+        pending.length = 0;
+        if (!closed) heartbeat = setInterval(() => enqueue(': heartbeat\n\n'), HEARTBEAT_MS);
+      } catch (error) {
+        log.error({ err: error }, 'run stream error');
+        if (!closed) controller.error(error);
+        await release();
+      }
+    },
+    async cancel() {
+      await release();
+    },
+  });
+  return new Response(stream, { headers: SSE_HEADERS });
 }

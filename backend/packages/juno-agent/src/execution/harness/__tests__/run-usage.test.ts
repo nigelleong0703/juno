@@ -6,7 +6,7 @@
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { Usage } from '@earendil-works/pi-ai';
 import type { Brain, BrainContext, Store, ToolRegistry, WakeEvent } from '../../../contracts/index.js';
@@ -53,17 +53,17 @@ function replayContext(): RunContext {
   let seq = 0;
   return {
     rand: { uuidv4: () => 'id-' + String(seq++) },
-    run: <T>(name: string, action: () => Promise<T>): RestatePromise<T> => {
-      if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-      return RestatePromise.resolve(
+    run: <T>(name: string, action: () => Promise<T>): DurablePromise<T> => {
+      if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+      return DurablePromise.resolve(
         action().then((value) => {
           journal.set(name, structuredClone(value));
           return value;
         }),
       );
     },
-    awakeable: <T>() => ({ id: 'awake-' + String(seq++), promise: RestatePromise.resolve(new Promise<T>(() => {})) }),
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    awakeable: <T>() => ({ id: 'awake-' + String(seq++), promise: DurablePromise.resolve(new Promise<T>(() => {})) }),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
 }
 

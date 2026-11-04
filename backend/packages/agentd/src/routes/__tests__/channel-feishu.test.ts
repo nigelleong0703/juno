@@ -97,9 +97,9 @@ describe('parseFeishuMessage', () => {
     expect(e?.chatType).toBe('group');
     expect(e?.text).toBe('hi @_user_2');
   });
-  it('ignores group chatter without a bot mention, non-text and app senders', () => {
-    expect(parseFeishuMessage(event({ chat_type: 'group', mentions: [{ key: '@_user_1', id: { open_id: 'ou_x' } }] }), BOT)).toBeNull();
-    expect(parseFeishuMessage(event({ chat_type: 'group' }), BOT)).toBeNull();
+  it('marks group chatter without a bot mention as observed; ignores non-text and app senders', () => {
+    expect(parseFeishuMessage(event({ chat_type: 'group', mentions: [{ key: '@_user_1', id: { open_id: 'ou_x' } }] }), BOT)).toMatchObject({ addressed: false });
+    expect(parseFeishuMessage(event({ chat_type: 'group' }), BOT)).toMatchObject({ addressed: false });
     expect(parseFeishuMessage(event({ message_type: 'image' }), BOT)).toBeNull();
     expect(parseFeishuMessage(event({ sender_type: 'app' }), BOT)).toBeNull();
   });

@@ -10,10 +10,10 @@ import { createMemoryStore } from '../../../testing/store.js';
 import { sessionKey, type Brain, type ToolRegistry } from '../../../contracts/index.js';
 import { wakeMessage } from '../../brain/messages.js';
 import { runKindFor, runTitleFor } from '../logic/busy.js';
-import { buildCompletionWake, childCompletionRoute, taskDoneWake } from '../services/completion-wake.js';
+import { buildCompletionWake, subagentCompletionRoute, taskDoneWake } from '../services/completion-wake.js';
 import { drainInboxEvents, receiveEvent, runFinishedEvent, type SessionIo, type SessionState } from '../services/session.js';
 import type { RunInput } from '../services/run-types.js';
-import type { ChildRun } from '../../../modules/tasks/childRead.js';
+import type { SubagentRun } from '../../../modules/tasks/subagentRead.js';
 
 const AT = '2026-10-09T00:00:00.000Z';
 const OWNER = 'owner-cw';
@@ -65,7 +65,7 @@ describe('completion wakes', () => {
     expect(runTitleFor([done])).toBe('Wrapping up a task');
     const report = buildCompletionWake(target, 'hand_back', 'r-2', { text: 'step 2 of 3: /tmp/notes.md', taskId: 'child-1' }, AT);
     expect(runTitleFor([report], 'Find rain jackets')).toBe('Update on: Find rain jackets');
-    expect(runTitleFor([report])).toBe('Update from a child task');
+    expect(runTitleFor([report])).toBe('Update from a subagent');
     expect(runKindFor('user_message')).toBe('chat');
   });
 
@@ -121,13 +121,13 @@ describe('completion wakes', () => {
     const store = createMemoryStore();
     const scoped = store.forOwner === undefined ? store : store.forOwner(OWNER);
     const usage = { inputTokens: 0, outputTokens: 0, computeSeconds: 0, costUsd: 0, steps: 0 };
-    const childKey = sessionKey(AGENT, CONV) + '::child:run-child';
-    const child: ChildRun = { id: 'run-child', agentId: AGENT, conversationId: CONV, title: 't', kind: 'background', parentRunId: 'run-parent', childSessionKey: childKey, status: 'running', steps: [], usage, startedAt: AT, lastActivityAt: AT };
+    const subagentKey = sessionKey(AGENT, CONV) + '::child:run-child';
+    const child: SubagentRun = { id: 'run-child', agentId: AGENT, conversationId: CONV, title: 't', kind: 'background', parentRunId: 'run-parent', childSessionKey: subagentKey, status: 'running', steps: [], usage, startedAt: AT, lastActivityAt: AT };
     await scoped.put('runs', child, { agentId: AGENT, conversationId: CONV });
     const wake = taskDoneWake(target, { taskId: 'shell-3', taskKind: 'shell', status: 'completed', summary: 'z', originRunId: 'run-child' }, AT);
-    const routed = await childCompletionRoute(scoped, wake);
-    expect(routed).toMatchObject({ sessionKey: childKey, wake: { kind: 'child_task', mode: 'steer', sessionKey: childKey, payload: { childRunId: 'run-child', parentRunId: 'run-parent', taskId: 'shell-3' } } });
+    const routed = await subagentCompletionRoute(scoped, wake);
+    expect(routed).toMatchObject({ sessionKey: subagentKey, wake: { kind: 'subagent_task', mode: 'steer', sessionKey: subagentKey, payload: { childRunId: 'run-child', parentRunId: 'run-parent', taskId: 'shell-3' } } });
     await scoped.put('runs', { ...child, status: 'completed' }, { agentId: AGENT, conversationId: CONV });
-    expect(await childCompletionRoute(scoped, wake)).toBeNull();
+    expect(await subagentCompletionRoute(scoped, wake)).toBeNull();
   });
 });

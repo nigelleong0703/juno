@@ -9,7 +9,7 @@
  */
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise, type RestatePromise as RestatePromiseType } from '@agent-desktop/durable';
+import { DurablePromise, type DurablePromise as DurablePromiseType } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type {
   AssistantTurn,
@@ -39,7 +39,7 @@ function steeringWake(id: string, text: string): WakeEvent {
     origin: { type: 'user' },
     trusted: true,
     priority: 'user',
-    payload: { text, addressed: 'direct' },
+    payload: { text, addressed: 'direct', itemId: `item-${id}` },
     at,
     status: 'accepted',
   };
@@ -88,12 +88,12 @@ function inboxContext(): Inbox {
     },
     ctx: {
       rand: { uuidv4: () => 'id' + ids++ },
-      run: <T>(_name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
-      awakeable: <T>(): { id: string; promise: RestatePromise<T> } => ({
+      run: <T>(_name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()),
+      awakeable: <T>(): { id: string; promise: DurablePromise<T> } => ({
         id: 'awake',
-        promise: RestatePromise.resolve(new Promise<T>(() => {})),
+        promise: DurablePromise.resolve(new Promise<T>(() => {})),
       }),
-      drainInbox: () => RestatePromise.resolve<WakeEvent[]>(queued.splice(0, queued.length)),
+      drainInbox: () => DurablePromise.resolve<WakeEvent[]>(queued.splice(0, queued.length)),
     },
   };
 }
@@ -162,7 +162,7 @@ function cancelOnSteerDrain(): RunCancellation {
     async peek(): Promise<boolean> {
       return state.cancelled;
     },
-    async race<T>(start: () => RestatePromiseType<T>): Promise<T | typeof CANCELLED> {
+    async race<T>(start: () => DurablePromiseType<T>): Promise<T | typeof CANCELLED> {
       races += 1;
       if (races >= 2) {
         state.cancelled = true;
@@ -195,9 +195,10 @@ describe('active in-flight steering', () => {
     const model = deferredFirstStep(store, finalTurn('answer to the correction'));
     const inbox = inboxContext();
 
-    const pending = runLoop(inbox.ctx, servicesFor(store, model.brain, [probe]), input, runDoc.id, {
-      sessionKey: input.sessionKey,
-      agentId: input.agentId,
+    const runInput = { ...input };
+    const pending = runLoop(inbox.ctx, servicesFor(store, model.brain, [probe]), runInput, runDoc.id, {
+      sessionKey: runInput.sessionKey,
+      agentId: runInput.agentId,
     }, NEVER_CANCELLED);
     // The correction arrives while the first model call is still thinking (queued in this session).
     inbox.push(steeringWake('steer-1', 'actually the correction'));
@@ -211,6 +212,8 @@ describe('active in-flight steering', () => {
     expect(executed).toEqual([]);
     // Only the post-correction answer is posted; the discarded turn's reply never appears.
     expect(await postedMessages(store)).toEqual(['answer to the correction']);
+    const reply = (await store.list('items', { limit: 50 })).items.find((item) => item.type === 'agent_message');
+    expect(reply).toMatchObject({ contextItemIds: ['item-wake-1', 'item-steer-1'] });
     // The rebuilt step-2 context sees the correction as a user turn.
     expect(model.contexts).toHaveLength(1);
     expect(JSON.stringify(model.contexts[0])).toContain('actually the correction');

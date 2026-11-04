@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import type { Brain, Store, ToolResult, WakeEvent } from '../../../contracts/index.js';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
@@ -35,10 +35,10 @@ function baseCtx(extra?: Partial<RunBodyContext>): RunBodyContext {
   return {
     key: 'run-disclosure',
     rand: { uuidv4: () => 'id-' + String((next += 1)) },
-    run: (_name, action) => RestatePromise.resolve(action()),
-    awakeable: <T>() => ({ id: 'awake', promise: RestatePromise.resolve(new Promise<T>(() => {})) }),
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
-    cancel: { peek: async () => false, get: () => RestatePromise.resolve(new Promise<boolean>(() => {})) },
+    run: (_name, action) => DurablePromise.resolve(action()),
+    awakeable: <T>() => ({ id: 'awake', promise: DurablePromise.resolve(new Promise<T>(() => {})) }),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
+    cancel: { peek: async () => false, get: () => DurablePromise.resolve(new Promise<boolean>(() => {})) },
     runFinished: async () => {},
     ...extra,
   };
@@ -117,9 +117,10 @@ describe('first-model tool disclosure', () => {
     const journal = new Map<string, unknown>();
     const replayCtx = (): RunBodyContext => baseCtx({
       run: ((name: string, action: () => Promise<unknown>) => {
-        if (name !== 'tool-disclosure') return RestatePromise.resolve(action());
-        if (journal.has(name)) return RestatePromise.resolve(journal.get(name));
-        return RestatePromise.resolve(action().then((value) => { journal.set(name, value); return value; }));
+        // The real journal keeps persist-wake as well: a replay that skipped it would start the preparation again beside it.
+        if (name !== 'tool-disclosure' && name !== 'persist-wake') return DurablePromise.resolve(action());
+        if (journal.has(name)) return DurablePromise.resolve(journal.get(name));
+        return DurablePromise.resolve(action().then((value) => { journal.set(name, value); return value; }));
       }) as RunBodyContext['run'],
     });
     const services = () => ({ store, brain: stubBrain(), blobs: createMemoryBlobStore(), enqueuer: new NoopEnqueuer(), toolRegistry: registry, engines: stubEngines() });
@@ -136,7 +137,7 @@ describe('first-model tool disclosure', () => {
     let calls = 0;
     const prepare = async (): Promise<ToolResult> => { calls += 1; return { content: [{ type: 'text', text: 'LATE' }] }; };
     const registry = { forAgent: async () => [], get: () => undefined, prepareForModel: prepare };
-    const ctx = baseCtx({ cancel: { peek: async () => true, get: () => RestatePromise.resolve(new Promise<boolean>(() => {})) } });
+    const ctx = baseCtx({ cancel: { peek: async () => true, get: () => DurablePromise.resolve(new Promise<boolean>(() => {})) } });
     await runWorkflowBody(ctx, {
       store, brain: stubBrain(), blobs: createMemoryBlobStore(), enqueuer: new NoopEnqueuer(),
       toolRegistry: registry, engines: stubEngines(),
@@ -151,7 +152,7 @@ describe('first-model tool disclosure', () => {
     const brain: Brain = { ...stubBrain(), buildContext: async () => { contexts += 1; return { sessionKey: 'agent-1:conv-1', agentId: 'agent-1' }; } };
     const prepare = (): Promise<ToolResult> => new Promise<ToolResult>(() => {});
     const registry = { forAgent: async () => [], get: () => undefined, prepareForModel: prepare };
-    const ctx = baseCtx({ cancel: { peek: async () => false, get: () => RestatePromise.resolve(true) } });
+    const ctx = baseCtx({ cancel: { peek: async () => false, get: () => DurablePromise.resolve(true) } });
     await runWorkflowBody(ctx, {
       store, brain, blobs: createMemoryBlobStore(), enqueuer: new NoopEnqueuer(),
       toolRegistry: registry, engines: stubEngines(),

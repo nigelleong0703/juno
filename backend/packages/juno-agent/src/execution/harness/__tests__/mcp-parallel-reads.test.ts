@@ -3,7 +3,7 @@
  * (executeParallelToolCalls). A tool classified as a change, or unmarked, still runs alone and in order.
  */
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import type { Store, Tool, ToolRegistry, WakeEvent } from '../../../contracts/index.js';
 import { createMcpTool } from '../../../modules/mcp/registry.js';
 import { classifyTool } from '../../../modules/mcp/tool-access.js';
@@ -30,11 +30,11 @@ function journaling(): ToolCallContext {
   const journal = new Map<string, unknown>();
   return {
     rand: { uuidv4: () => 'm' + String(next++) },
-    run<T>(name: string, action: () => Promise<T>): RestatePromise<T> {
-      if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-      return RestatePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
+    run<T>(name: string, action: () => Promise<T>): DurablePromise<T> {
+      if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+      return DurablePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
     },
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
 }
 

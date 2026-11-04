@@ -12,7 +12,7 @@ import { withBrowserCompletionGate } from '../services/browser-completion.js';
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it, vi } from 'vitest';
 import { CHECK_TIMEOUT_MS } from '../services/check-runner.js';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { Store, Tool, ToolRegistry, ToolResult, WakeEvent } from '../../../contracts/index.js';
 import { writeTaskPlan, setTodoChecks } from '../../../modules/tasks/plan-write.js';
@@ -45,9 +45,9 @@ function directContext(): RunContext {
   let next = 0;
   return {
     rand: { uuidv4: () => 'id-' + String(next++) },
-    run: <T>(name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
-    awakeable: <T>() => ({ id: 'awk', promise: RestatePromise.resolve(new Promise<T>(() => {})) }),
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    run: <T>(name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()),
+    awakeable: <T>() => ({ id: 'awk', promise: DurablePromise.resolve(new Promise<T>(() => {})) }),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
 }
 

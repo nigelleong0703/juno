@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { createAccount, listenEvents, scriptModel } from '../harness/client';
+import { createAccount, listenEvents, scriptModel, toolCall } from '../harness/client';
 
 /**
  * Routine fire (ported from the old b3 skipped scenario): a scheduled routine created through the
  * public API is armed durably, fires on its cron (seconds-level here, to keep the test short), wakes
- * the agent in its delivery chat as a routine run, and stops firing once toggled off. The final reply is
- * the one exit for a routine run like any other (H-17): a run with something to say posts it once, a run
- * whose final reply is blank posts nothing.
+ * the agent in its delivery chat as a routine run, and stops firing once toggled off. A routine run is one
+ * nobody waits on (BACKEND §3.3b): it speaks through send_message, a run with something to say posts it once,
+ * and its final text is only a record (the quiet run posts nothing).
  */
 describe('routine', () => {
   it('fires on schedule into its delivery chat as a routine run', async () => {
@@ -20,8 +20,9 @@ describe('routine', () => {
       expect(chat.status).toBe(201);
       const conversationId: string = chat.body.id;
       const digest = `DIGEST-${randomUUID().slice(0, 8)}`;
-      // First fire has nothing to say (a blank final reply), the next ones say the digest as their final reply.
-      scriptModel(`${agent.body.id}:${conversationId}`, [{ text: '' }, { text: digest }, { text: digest }, { text: digest }]);
+      // First fire has nothing to say (a blank final text), the next ones say the digest with send_message and end with a record line.
+      const say = { toolCalls: [toolCall('say', 'send_message', { kind: 'text', purpose: 'result', text: digest })] };
+      scriptModel(`${agent.body.id}:${conversationId}`, [{ text: '' }, say, { text: 'posted' }, say, { text: 'posted' }, say, { text: 'posted' }]);
 
       const routine = await account.api('POST', '/v1/routines', {
         name: 'Every few seconds', agentId: agent.body.id, instructions: 'post the digest', enabled: true,
@@ -38,7 +39,7 @@ describe('routine', () => {
       expect(run.data.metadata.juno.run.kind).toBe('routine');
       expect(run.data.metadata.juno.run.status).toBe('completed');
       expect(String(run.data.metadata.juno.run.title)).toMatch(/^Routine:/);
-      // The run that said the digest posted it exactly once, and the quiet run (a blank final reply) posted nothing.
+      // The run that said the digest posted it exactly once (its record line is not a message), and the quiet run (a blank final text) posted nothing.
       const mine = events.events.filter((e) => e.data.type === 'item.added' && e.data.conversationId === conversationId && e.data.item.runId === reply.data.item.runId);
       expect(mine.map((e) => String(e.data.item.markdown))).toEqual([digest]);
       const runs = events.events.filter((e) => e.data.type === 'RUN_STARTED' && e.data.metadata.juno.run.conversationId === conversationId).map((e) => String(e.data.metadata.juno.run.id));
@@ -70,7 +71,10 @@ describe('routine', () => {
       const agent = await account.api('POST', '/v1/agents', { name: 'Chatty' });
       const chat = await account.api('POST', '/v1/conversations', { kind: 'direct', memberAgentIds: [agent.body.id] });
       const conversationId: string = chat.body.id;
-      scriptModel(`${agent.body.id}:${conversationId}`, Array.from({ length: 10 }, (_, i) => ({ text: 'update ' + String(i + 1) })));
+      scriptModel(`${agent.body.id}:${conversationId}`, Array.from({ length: 10 }, (_, i) => [
+        { toolCalls: [toolCall('say-' + String(i + 1), 'send_message', { kind: 'text', purpose: 'result', text: 'update ' + String(i + 1) })] },
+        { text: 'posted' },
+      ]).flat());
       const routine = await account.api('POST', '/v1/routines', {
         name: 'Unread spam', agentId: agent.body.id, instructions: 'post an update', enabled: true,
         trigger: { kind: 'schedule', cron: '*/4 * * * * *', human: 'every 4 seconds', tz: 'UTC' },

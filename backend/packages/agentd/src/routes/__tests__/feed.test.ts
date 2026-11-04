@@ -61,7 +61,7 @@ describe('GET /v1/today', () => {
     await request('r2', 'Book the flight');
     await request('r3', 'Old one', 'approved');
     await store.put('requests', { id: 'r-foreign', kind: 'approval', status: 'pending', title: 'Not mine', summary: '', payload: { kind: 'approval' }, ...base, ownerId: OTHER } as never);
-    await store.put('runs', { id: 'run-1', agentId: 'agt-1', title: 'Researching flights', status: 'running', kind: 'chat', steps: [], startedAt: NOW } as never);
+    await store.put('runs', { id: 'run-1', agentId: 'agt-1', title: 'Researching flights', status: 'running', kind: 'chat', steps: [{ id: 'stp-1', runId: 'run-1', index: 0, kind: 'mcp', status: 'completed', startedAt: NOW, durationMs: 1 }], startedAt: NOW } as never);
     await store.put('runs', { id: 'run-child', agentId: 'agt-1', parentRunId: 'run-1', title: 'child', status: 'running', kind: 'chat', steps: [], startedAt: NOW } as never);
     await store.put('runs', { id: 'run-routine', agentId: 'agt-1', routineId: 'rtn-news', title: 'Routine: news', status: 'completed', kind: 'routine', steps: [], startedAt: NOW, finishedAt: NOW } as never);
     const post = (id: string, title: string, createdAt: string, routineId?: string) => store.put('feedPosts', { id, agentId: 'agt-1', title, summary: 's', liked: false, createdAt, updatedAt: createdAt, ...(routineId === undefined ? {} : { routineId }) } as never);

@@ -1,6 +1,6 @@
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, it, expect } from 'vitest';
-import { RestatePromise, TerminalError } from '@agent-desktop/durable';
+import { DurablePromise, TerminalError } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type {
   AssistantTurn,
@@ -46,7 +46,7 @@ class ScriptedTurns implements Brain {
 }
 
 function sendText(id: string, text: string): AssistantTurn {
-  return { text: '', toolCalls: [{ id, name: 'send_message', arguments: { kind: 'text', text } }], usage, stopReason: 'tool_calls' };
+  return { text: '', toolCalls: [{ id, name: 'send_message', arguments: { kind: 'text', purpose: 'progress', text } }], usage, stopReason: 'tool_calls' };
 }
 
 function final(text: string): AssistantTurn {
@@ -65,12 +65,12 @@ function runContext(): RunContext {
   let ids = 0;
   return {
     rand: { uuidv4: () => `id${ids++}` },
-    run: <T>(_name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
-    awakeable: <T>(): { id: string; promise: RestatePromise<T> } => ({
+    run: <T>(_name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()),
+    awakeable: <T>(): { id: string; promise: DurablePromise<T> } => ({
       id: 'awake',
-      promise: RestatePromise.resolve(new Promise<T>(() => {})),
+      promise: DurablePromise.resolve(new Promise<T>(() => {})),
     }),
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
 }
 
@@ -181,8 +181,8 @@ describe('run loop reply delivery', () => {
       {
         text: '',
         toolCalls: [
-          { id: 'c1', name: 'send_message', arguments: { kind: 'text', text: 'Flight LH441 lands 18:05.' } },
-          { id: 'c2', name: 'send_message', arguments: { kind: 'text', text: 'Gate B12, 25 minute delay.' } },
+          { id: 'c1', name: 'send_message', arguments: { kind: 'text', purpose: 'progress', text: 'Flight LH441 lands 18:05.' } },
+          { id: 'c2', name: 'send_message', arguments: { kind: 'text', purpose: 'progress', text: 'Gate B12, 25 minute delay.' } },
         ],
         usage,
         stopReason: 'tool_calls',
@@ -297,9 +297,9 @@ describe('run loop timing logs', () => {
     return {
       ...runContext(),
       rand: { uuidv4: () => `id${ids++}` },
-      run: <T>(name: string, action: () => Promise<T>): RestatePromise<T> => {
-        if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-        return RestatePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
+      run: <T>(name: string, action: () => Promise<T>): DurablePromise<T> => {
+        if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+        return DurablePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
       },
     };
   }

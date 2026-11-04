@@ -4,7 +4,7 @@
  */
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { Store, Tool, ToolRegistry, ToolResult, WakeEvent } from '../../../contracts/index.js';
 import { executeParallelToolCalls, supportsParallel } from '../services/run-tools.js';
@@ -29,12 +29,12 @@ function journaling(journal = new Map<string, unknown>()) {
   let next = 0;
   const ctx: ToolCallContext = {
     rand: { uuidv4: () => 'u' + String(next++) },
-    run<T>(name: string, action: () => Promise<T>): RestatePromise<T> {
+    run<T>(name: string, action: () => Promise<T>): DurablePromise<T> {
       created.push(name);
-      if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-      return RestatePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
+      if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+      return DurablePromise.resolve(action().then((value) => { journal.set(name, structuredClone(value)); return value; }));
     },
-    drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+    drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
   };
   return { ctx, created, journal };
 }

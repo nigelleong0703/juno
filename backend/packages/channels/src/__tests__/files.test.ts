@@ -95,8 +95,8 @@ describe('Telegram files', () => {
       message: { message_id: 6, from: { id: 9, first_name: 'Amy' }, chat: { id: 9, type: 'private' }, photo: [{ file_id: 'P1', file_size: 10 }, { file_id: 'P2', file_size: 900 }] },
     }, 'juno_bot');
     expect(photo).toMatchObject({ text: '', files: [{ fileId: 'P2', name: 'photo.jpg', mimeType: 'image/jpeg', sizeBytes: 900 }] });
-    // A file in a group that does not address the bot is not the agent's business.
-    expect(parseTelegramUpdate({ update_id: 3, message: { message_id: 7, from: { id: 9, first_name: 'Amy' }, chat: { id: -100, type: 'group' }, document: { file_id: 'F2' } } }, 'juno_bot')).toBeNull();
+    // A file in a group that does not address the bot is only observed.
+    expect(parseTelegramUpdate({ update_id: 3, message: { message_id: 7, from: { id: 9, first_name: 'Amy' }, chat: { id: -100, type: 'group' }, document: { file_id: 'F2' } } }, 'juno_bot')).toMatchObject({ addressed: false });
   });
 });
 
@@ -255,10 +255,10 @@ describe('Feishu files', () => {
       message: { message_id: 'om_2', chat_id: 'oc_p', chat_type: 'p2p', message_type: 'image', content: '{"image_key":"img_k"}' },
     }, 'ou_bot');
     expect(image).toMatchObject({ files: [{ fileId: 'img_k', name: 'image' }] });
-    // A file in a group has no mention to address the bot with, so it is not heard.
+    // A file in a group has no mention to address the bot with: the agent only observes it.
     expect(parseFeishuMessage({
       sender: { sender_id: { open_id: 'ou_1' }, sender_type: 'user' },
       message: { message_id: 'om_3', chat_id: 'oc_g', chat_type: 'group', message_type: 'file', content: '{"file_key":"file_k","file_name":"a.pdf"}' },
-    }, 'ou_bot')).toBeNull();
+    }, 'ou_bot')).toMatchObject({ addressed: false });
   });
 });

@@ -16,6 +16,7 @@ import { emitAgentStatus } from 'juno-agent/execution/agent-status';
 import { allowMacApp } from 'juno-agent/modules/mac-apps';
 import { settleEffectReview } from 'juno-agent/modules/tasks/effect-review';
 import { settleSilenceQuestion } from 'juno-agent/modules/proactive/silence';
+import { settlePreviewQuestion } from 'juno-agent/modules/tasks/routines/preview';
 import { getOwnerId } from '../auth.js';
 import { parseListQueryWithWhere } from './query-helpers.js';
 import { upsertDelegation } from './delegations.js';
@@ -95,14 +96,11 @@ function reconstructedResolution(request: StoredRequest): Record<string, unknown
  * suspends its run: its answer is delivered as a user message instead (answerAsMessage).
  */
 function runOwnsWake(request: StoredRequest): boolean {
-  return (request.kind !== 'question' || request.reconciliation !== undefined) && request.interrupted !== true && typeof request.runId === 'string' && request.runId.length > 0;
+  return request.kind !== 'question' && request.interrupted !== true && typeof request.runId === 'string' && request.runId.length > 0;
 }
 
 function needsDelivery(request: StoredRequest): boolean {
-  if (request.kind === 'question') return request.reconciliation !== undefined
-    ? (request.status === 'answered' && (request.awakeableId !== undefined || request.interrupted === true))
-      || (request.status === 'denied' && request.awakeableId !== undefined)
-    : request.status === 'answered';
+  if (request.kind === 'question') return request.status === 'answered';
   // A card that timed out is told to its run (to ask again); one that was only withdrawn or cancelled has nobody waiting.
   if ((request.status === 'expired' && request.decision?.reason !== 'timeout') || request.kind === 'connect') return false;
   if (request.awakeableId) return true;
@@ -119,15 +117,6 @@ function wakePayload(value: unknown): Record<string, unknown> {
  * tool call was never performed, so the agent is told what was decided and what to do about it.
  */
 function lateDecisionText(request: StoredRequest): string {
-  if (request.reconciliation !== undefined) {
-    const state = request.reconciliation.state;
-    const decision = state === 'user_reported_succeeded'
-      ? 'The owner reports success, but this is not a verified external receipt.'
-      : state === 'user_confirmed_not_executed'
-        ? 'The owner reports that it did not happen and authorized one retry; this is not machine evidence, and current permissions must be checked before acting.'
-        : 'The outcome remains unknown, so the action must stay blocked until checked.';
-    return `[system note, from the user's reconciliation card] This run stopped waiting before the decision arrived; the external action may or may not have happened. ${decision}`;
-  }
   if (request.status === 'expired') return `[system note, from the user's tap on a card] The user approved "${request.title}" only after the approval had expired, so it was NOT performed. If it is still wanted, make the call again: that asks the user again.`;
   const decision = request.status === 'approved' ? 'approved' : request.status === 'answered' ? 'answered' : 'declined';
   const head = `[system note, from the user's tap on a card] The user ${decision} "${request.title}", which you stopped waiting for because they sent a message. That action was NOT performed.`;
@@ -236,10 +225,9 @@ async function answerAsMessage(deps: DecisionDeps, ownerId: string, request: Sto
   // A room wakes only mentioned agents, so the answer mentions the agent that asked (and nobody else), as the app's composer would.
   const mentions = asker === null ? [] : [{ kind: 'agent' as const, id: asker.id, label: '@' + asker.name }];
   const answer = answerText(request.payload.ui, request.payload.answers ?? {});
-  const text = request.reconciliation !== undefined && request.interrupted === true
-    ? answer + '\n\n' + lateDecisionText(request)
-    : answer;
-  const admitted = await admitUserMessage(deps, conv, ownerId, { text, mentions, attachments: [] }, { messageId: 'itm-answer-' + request.id });
+  // The answer to an uncertain-action question is just their message ("Send again"): the harness lets one identical call through when it was yes
+  // (recovery-ledger.ts priorUnresolvedRecovery) and holds it back when it was no, so no note rides along in the chat.
+  const admitted = await admitUserMessage(deps, conv, ownerId, { text: answer, mentions, attachments: [] }, { messageId: 'itm-answer-' + request.id });
   if (!admitted.ok) throw new Error(admitted.error.message);
 }
 
@@ -256,11 +244,6 @@ async function deliverResolution(
   value: unknown
 ): Promise<void> {
   if (request.kind === 'question') {
-    if (request.reconciliation !== undefined) {
-      if (request.awakeableId) await deps.enqueuer.resolveAwakeable(request.awakeableId, value);
-      else if (request.interrupted === true && request.status === 'answered') await answerAsMessage(deps, ownerId, request);
-      return;
-    }
     if (request.channelClaim !== undefined) {
       // "Is this you?" for an unbound channel: the answer binds (or declines) the sender, not a chat message.
       if (request.status === 'answered') await settleOwnerClaim(deps, ownerId, request);
@@ -269,6 +252,11 @@ async function deliverResolution(
     if (request.silenceQuestion !== undefined) {
       // "Want fewer of these?": yes writes a soft rule; the answer is not a chat message and wakes nobody.
       await settleSilenceQuestion({ store: deps.store, ...(deps.computerd?.home === undefined ? {} : { home: deps.computerd.home }) }, ownerId, request);
+      return;
+    }
+    if (request.previewQuestion !== undefined) {
+      // The trial-run card of a routine the agent started on its own: the answer turns the routine on or off, it is not a chat message.
+      await settlePreviewQuestion(deps.store, request);
       return;
     }
     if (request.status === 'answered') await answerAsMessage(deps, ownerId, request);
@@ -385,12 +373,10 @@ export async function recordDecision(
   };
   if (request.reconciliation !== undefined) {
     const choice = input.action === 'answer' ? input.answers?.['recovery_outcome'] : undefined;
-    const state = choice === 'reported_done' ? 'user_reported_succeeded'
-      : choice === 'confirmed_absent_retry' ? 'user_confirmed_not_executed'
-        : 'still_unknown';
-    patch.reconciliation = { ...request.reconciliation, state, source: 'owner_report' };
+    // "Do it again" lets one identical call through; anything else (leave it, dismissed) keeps the action held back.
+    patch.reconciliation = { ...request.reconciliation, state: choice === 'redo' ? 'authorized' : 'declined' };
   }
-  // A review card's answer also settles (or keeps open) the run's effect review, in the same transaction.
+  // The answer to an uncertain-action question settles the run's effect review, in the same transaction.
   const decided = await deps.store.tx(async (tx) => {
     const row = await patchWhen(tx, 'requests', request.id, (current) => current.status === 'pending', patch);
     if (row !== undefined && row.reconciliation !== undefined) await settleEffectReview(tx, row);

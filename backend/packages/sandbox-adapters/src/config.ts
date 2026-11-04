@@ -1,6 +1,6 @@
 /** computerd's environment, parsed once. Separate from the backend config so the service can boot alone. */
 import { z } from 'zod';
-import { DEFAULT_SCREEN_RESOLUTION } from '@agent-desktop/contracts';
+import { DEFAULT_IDLE_PAUSE_MINUTES, DEFAULT_SCREEN_RESOLUTION } from '@agent-desktop/contracts';
 import { computerStorage } from './storage.js';
 
 export const computerConfigSchema = z.object({
@@ -21,6 +21,8 @@ export const computerConfigSchema = z.object({
   COMPUTERD_MAC_LINK_URL: z.string().default(''),
   /** Bearer the runner's client and agentd's proxy send. */
   COMPUTERD_TOKEN: z.string().default(''),
+  /** Names this deployment on the local containers it makes, so orphan reaping never touches another deployment's. Empty: derived from COMPUTERD_TOKEN. */
+  COMPUTERD_DEPLOYMENT_ID: z.string().default(''),
   /** HMAC key for the short-lived per-screen stream tickets. */
   SCREEN_TICKET_SECRET: z.string().default(''),
   /** JSON file the agent→display pool is persisted to; empty keeps the pool in memory. */
@@ -40,7 +42,8 @@ export const computerConfigSchema = z.object({
   COMPUTER_TIMEZONE: z.string().regex(/^[A-Za-z0-9_+\-/]+$/, 'COMPUTER_TIMEZONE must be an IANA name like Asia/Singapore').default('UTC'),
   /** Sandbox TTL. The self-hosted server caps this at 1h; it is refreshed on every attach. */
   COMPUTER_TIMEOUT_MS: z.coerce.number().int().default(60 * 60 * 1000),
-  COMPUTER_IDLE_PAUSE_MINUTES: z.coerce.number().int().default(30),
+  /** Minutes without use before the computer is paused (paused is not billed); 0 keeps it for the whole lifetime. */
+  COMPUTER_IDLE_PAUSE_MINUTES: z.coerce.number().int().default(DEFAULT_IDLE_PAUSE_MINUTES),
   /** Unset: 2 GB (E2B) or 4 GB (local Docker, see `computerSize`). */
   COMPUTER_RAM_GB: z.coerce.number().optional(),
   /** Unset: 2 vCPU. */

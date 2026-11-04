@@ -3,7 +3,7 @@ import { createAccount, listenEvents, scriptedChat, toolCall, transcriptTexts } 
 
 /**
  * Two read-only calls in one model response run together through the real runner journal (one
- * RestatePromise.all, raced against the stop once) and are answered in call order; the run continues.
+ * DurablePromise.all, raced against the stop once) and are answered in call order; the run continues.
  */
 describe('parallel read-only tool calls', () => {
   it('runs both calls of one response and continues to the reply', async () => {

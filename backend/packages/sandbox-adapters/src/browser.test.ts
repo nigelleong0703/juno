@@ -5,21 +5,22 @@
 import { describe, expect, it } from 'vitest';
 import { BROWSER_HELPER, browserCommand, parseBrowserOutput, type BrowserInput } from './browser.js';
 import { BrowserDownError } from './errors.js';
+import { inAgentNetns } from './isolation-user.js';
 import { screenPorts } from './ports.js';
 import { shq } from './screen-boot.js';
 
 describe('browser helper invocation', () => {
-  it('targets the display CDP port with a single-quoted request, as root with root-only state', () => {
+  it('targets the display CDP port with a single-quoted request, as root inside the agent\'s network namespace with root-only state', () => {
     const input: BrowserInput = { action: 'type', ref: 'e7', text: "o'clock" };
-    const command = browserCommand(3, input);
+    const command = browserCommand('agent-a', 3, input);
     const port = screenPorts(3).cdp;
-    expect(command).toBe(`AGENT_BROWSER_STATE=/run/juno/browser ${BROWSER_HELPER} --port ${port} --request ${shq(JSON.stringify(input))}`);
+    expect(command).toBe(`${inAgentNetns('agent-a')} env AGENT_BROWSER_STATE=/run/juno/browser ${BROWSER_HELPER} --port ${port} --request ${shq(JSON.stringify(input))}`);
     expect(port).toBe(9222 + 3);
   });
 
   it('a fill_secret request is ciphertext only: the program text carries the sealed value and ids, never a plaintext', () => {
     const sealed = { epk: 'AAAA', nonce: 'BBBB', ciphertext: 'CCCC' };
-    const command = browserCommand(3, { action: 'fill_secret', ref: 'e7', requestId: 'req1', fieldId: 'f1', sealed });
+    const command = browserCommand('agent-a', 3, { action: 'fill_secret', ref: 'e7', requestId: 'req1', fieldId: 'f1', sealed });
     expect(command).toContain(shq(JSON.stringify({ action: 'fill_secret', ref: 'e7', requestId: 'req1', fieldId: 'f1', sealed })));
     expect(command).not.toContain('JUNO_SECRET');
   });

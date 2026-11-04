@@ -1,7 +1,7 @@
 /**
  * Provider failure classification (PH5).
  *
- * Restate retries any thrown error unboundedly, so the run must decide what a provider failure means
+ * The runner retries any thrown error unboundedly, so the run must decide what a provider failure means
  * from the SDK's own signals, never from a loosened message parse. The qualified mechanics are the
  * adapter's `onResponse` hook (HTTP status + headers), pi-ai's `isRetryableAssistantError` and
  * `isContextOverflow` predicates over the failed AssistantMessage, and the `retry-after` HTTP header
@@ -23,7 +23,7 @@ export interface ProviderFailure {
   retryAfterMs?: number;
 }
 
-/** A provider failure with its classification, so the run can decide rather than Restate retrying it. */
+/** A provider failure with its classification, so the run can decide rather than the runner retrying it. */
 export class ProviderFailureError extends Error {
   constructor(readonly failure: ProviderFailure) {
     super(failure.message);

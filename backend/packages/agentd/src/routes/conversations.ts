@@ -9,6 +9,7 @@ import { getOwnerId } from '../auth.js';
 import { parseListQueryWithWhere } from './query-helpers.js';
 import type { AgentdDeps } from './index.js';
 import { deleteConversationCascade } from './conversation-delete.js';
+import { withDelivery } from '../outbox/delivery-state.js';
 import { admitUserMessage, firstMessageViolation, idempotentConversationId, idempotentMessageId, missingAttachment, withKeyLock } from './message-admission.js';
 import { routinesDeliveringTo } from 'juno-agent/execution/harness/services/routineTimer-delivery';
 import { withLiveActivity } from 'juno-agent/execution/conversation-activity';
@@ -45,6 +46,8 @@ export function registerConversations(app: Hono, deps: AgentdDeps) {
     const visible: Conversation[] = [];
     for (const conv of loaded.items) {
       if (!isConversationVisible(conv, ownerId)) continue;
+      // A group conversation made only by observing (nobody addressed the agent in it yet, BACKEND 6.8) is not a chat in the list.
+      if ((conv as { observedOnly?: unknown }).observedOnly === true) continue;
       if (agentFilter !== undefined && agentFilter !== '' && !conv.agentIds.includes(agentFilter)) continue;
       if (kindFilter !== undefined && kindFilter !== '' && conv.kind !== kindFilter) continue;
       if (memberFilter !== undefined && memberFilter !== '' && !conv.memberIds.includes(memberFilter)) continue;
@@ -191,7 +194,8 @@ export function registerConversations(app: Hono, deps: AgentdDeps) {
       order: query.order ?? 'asc',
       where: { ...query.where, conversationId: convId },
     });
-    return c.json({ items: page.items, nextCursor: page.nextCursor });
+    // A reply that goes to a platform chat says whether it got there (`delivery`, BACKEND 5.7.11); read from the outbox, never stored on the item.
+    return c.json({ items: await withDelivery(deps.store, page.items), nextCursor: page.nextCursor });
   });
 
 

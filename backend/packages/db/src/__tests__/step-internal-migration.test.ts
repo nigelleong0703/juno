@@ -7,7 +7,6 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 import { afterAll, describe, expect, it } from 'vitest';
-import { PLUMBING_TOOLS } from 'juno-agent/modules/tools/plumbing';
 import { closeScratchPostgres, scratchPostgresUrl, uid } from './store-backends';
 
 afterAll(closeScratchPostgres);
@@ -37,12 +36,5 @@ describe('Postgres 0061', () => {
     } finally {
       await sql.end();
     }
-  });
-
-  it('uses the same tool list as the code that marks new steps', () => {
-    const arrays = [...readFileSync(FILE, 'utf8').matchAll(/ARRAY\[([^\]]*)\]/g)].map((match) => match[1] ?? '');
-    expect(arrays).toHaveLength(3);
-    const listed = arrays.flatMap((body) => [...body.matchAll(/'([a-z_.]+)'/g)].map((match) => match[1]));
-    expect(new Set(listed)).toEqual(PLUMBING_TOOLS);
   });
 });

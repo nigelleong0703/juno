@@ -4,6 +4,7 @@
   "type": "module",
   "packageManager": "pnpm@12.9.1",
   "scripts": {
+    "postinstall": "node scripts/dev/pgvector-test-shim.mjs",
     "typecheck": "pnpm --filter './packages/**' --filter './tests/**' --filter './services/**' -r typecheck",
     "contracts:check": "node scripts/verify/single-source.mjs",
     "build": "pnpm --filter './packages/**' --filter './tests/**' --filter './services/**' -r build",

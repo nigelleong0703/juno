@@ -1,10 +1,10 @@
 # Debian 13 desktop modelled on OpenAI dots: XFCE window manager with a bottom
 # dock (no top panel, icons, notifications or power manager), Debian Chromium,
 # LibreOffice Writer/Calc/Impress, Orchis theme with Papirus icons and Inter, user "agent" WITHOUT sudo (agents get their own juno-<id> users at runtime, BACKEND 7.9), working directory /workspace.
-# juno-link (BACKEND 7.11) is the start command: a root daemon that dials out to computerd and serves everything the platform does inside the computer.
+# juno-link (BACKEND 7.11) is a root daemon computerd starts after create that dials out to computerd and serves everything the platform does inside the computer.
 # The E2B desktop SDK waits for xfce4-session, xfwm4 and xfdesktop at startup,
 # so those still run; xfdesktop just draws a plain color.
-from e2b import CopyItem, Template, wait_for_timeout
+from e2b import CopyItem, Template
 
 XFCONF = "/home/agent/.config/xfce4/xfconf/xfce-perchannel-xml"
 
@@ -78,8 +78,10 @@ template = (
             "npm",
             # durable storage (BACKEND 7.10): the JuiceFS client mounts /juno and /workspace through FUSE
             "fuse3",
-            # per-agent isolation (BACKEND 7.9): CDP/VNC port rules by owner uid, /workspace default ACL
-            "iptables",
+            # per-agent isolation (BACKEND 7.9): one network namespace per agent (iproute2: ip netns, veth; nftables: the forward and NAT
+            # rules), /workspace default ACL. E2B's base image already has iproute2 and nftables; the local Docker image needs these lines.
+            "iproute2",
+            "nftables",
             "acl",
             "netcat-openbsd",
             "desktop-file-utils",
@@ -120,7 +122,7 @@ template = (
             "groupadd juno",
             "useradd -m -s /bin/bash -G juno agent",
             "mkdir -p /workspace /etc/chromium/policies/managed /etc/juno",
-            # /etc/juno holds the link token (juno-link reads /etc/juno/link.json when the platform could not inject an environment): root only
+            # /etc/juno holds the platform's root-only state (routes, keys, markers)
             "chmod 0700 /etc/juno",
             "chgrp juno /workspace && chmod 2770 /workspace && setfacl -d -m g:juno:rwX /workspace",
             # Execute-only Chromium (BACKEND 8.7): the kernel marks a process whose binary the user cannot read as non-dumpable, so the
@@ -195,6 +197,6 @@ template = (
     .run_cmd(["sh /opt/juno/reach/install-opencli.sh"])
 )
 
-# The start command runs as root (the daemon needs it); the default user of commands stays "agent". The platform does not run anything
-# in the computer after boot except through this daemon (BACKEND 7.11).
-template_with_user_workdir = template.set_user("agent").set_workdir("/workspace").set_start_cmd("/usr/local/bin/juno-link", wait_for_timeout(2000))
+# No start command: E2B runs it as the template user ("agent"), but the daemon needs root, so computerd starts /usr/local/bin/juno-link
+# as root right after create (e2b-driver.ts). Everything else the platform does in the computer goes through that daemon (BACKEND 7.11).
+template_with_user_workdir = template.set_user("agent").set_workdir("/workspace")

@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { BRAND_ICON_FILES } from '../brand-icons.js';
+import { BRAND_ICON_FILES, brandIconUrl } from '../brand-icons.js';
+import { CONNECTOR_CATALOG } from './builtin-catalog.js';
 import { createApiApp, type ApiAuth } from '../server.js';
 
 const resolve = vi.fn(async () => ({ ownerId: 'owner-1' }));
@@ -27,6 +28,16 @@ describe('brand icons', () => {
       expect((await app.request(path)).status).toBe(404);
     }
     expect((await app.request('/v1/brand-icons/gmail.svg', { method: 'POST' })).status).toBeGreaterThanOrEqual(400);
+  });
+
+  it('every catalog app, chat platform and web app has a brand icon the route serves', async () => {
+    const ids = [...CONNECTOR_CATALOG.map((entry) => entry.id), 'telegram', 'slack', 'discord', 'feishu', 'youtube-videos', 'bilibili', 'xiaohongshu'];
+    for (const id of ids) {
+      expect(brandIconUrl(id), id).toBeDefined();
+      const response = await app.request(`/v1/brand-icons/${id}.png`);
+      expect(response.status, id).toBe(200);
+      expect(response.headers.get('content-type'), id).toBe('image/png');
+    }
   });
 
   it('every mapped file exists', () => {

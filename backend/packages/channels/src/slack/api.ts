@@ -53,7 +53,8 @@ export function parseSlackEvent(body: unknown, botUserId: string): SlackChannelE
   if (event.channel === undefined || event.user === undefined || event.ts === undefined || event.text === undefined) return null;
   if (event.user === botUserId) return null;
   const isDm = event.type === 'message' && event.channel_type === 'im';
-  if (!isDm && event.type !== 'app_mention') return null;
+  const heard = !isDm && isChannelMessage(event, botUserId);
+  if (!isDm && !heard && event.type !== 'app_mention') return null;
   const text = isDm ? event.text.trim() : event.text.split('<@' + botUserId + '>').join('').trim();
   const files = slackFiles(event.files);
   if (text.length === 0 && files.length === 0) return null;
@@ -61,12 +62,28 @@ export function parseSlackEvent(body: unknown, botUserId: string): SlackChannelE
   return {
     chatId: event.channel,
     chatType: isDm ? 'private' : 'group',
-    threadId: threadTs === undefined ? event.channel : event.channel + ':' + threadTs,
+    // A message of the channel itself that nobody addressed is kept in the channel's own conversation (thread id = the chat id); one in a thread, in that thread's.
+    threadId: threadTs === undefined || (heard && !isReply(event)) ? event.channel : event.channel + ':' + threadTs,
     externalMessageId: event.channel + ':' + event.ts,
     from: { id: event.user, name: '' },
     text,
     ...(files.length === 0 ? {} : { files }),
+    ...(heard ? { addressed: false } : {}),
   };
+}
+
+/** A reply inside a thread (a thread's first message carries its own ts as `thread_ts`). */
+export function isReply(event: { ts?: string | undefined; thread_ts?: string | undefined }): boolean {
+  return event.thread_ts !== undefined && event.thread_ts !== event.ts;
+}
+
+/**
+ * A message in a public or private channel that does not mention the agent (`message.channels` / `message.groups`: `channel_type`
+ * `channel` / `group`; docs.slack.dev/reference/events/message.channels). One that mentions it also arrives as `app_mention`, which
+ * is the one the agent answers, so this is only for the messages nobody addressed to it.
+ */
+export function isChannelMessage(event: { type: string; channel_type?: string | undefined; text?: string | undefined }, botUserId: string): boolean {
+  return event.type === 'message' && (event.channel_type === 'channel' || event.channel_type === 'group') && !(event.text ?? '').includes('<@' + botUserId + '>');
 }
 
 /** The agent's own name and picture on a shared app's message (needs chat:write.customize). */

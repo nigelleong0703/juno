@@ -41,6 +41,8 @@ export function connectionInstallation(connection: Connection, appId: string, ap
     appId,
     label: connection.account ?? appName,
     status: standing,
+    // The provider said the sign-in lacks a permission (kept on the row until the owner signs in again).
+    ...(typeof Reflect.get(connection, 'needsScope') === 'string' ? { needsScope: true } : {}),
     ...(connection.connectedAt === undefined ? {} : { connectedAt: connection.connectedAt }),
     agents: [],
   };

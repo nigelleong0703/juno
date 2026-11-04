@@ -24,8 +24,20 @@ export const STRANGER_ALLOWED: ReadonlySet<string> = new Set([
   'group_rule',
 ]);
 
+/**
+ * What a teammate (a known person in a group the owner put the agent in, BACKEND 6.8) may ask on top of that: the agent's own work.
+ * Child tasks, its task list and schedule, waiting, and reading what it was sent. Nothing here reaches the owner's accounts or data
+ * (connectors, the Mac, private memory and files are not offered in a group at all, or ask the owner as for anyone else).
+ */
+export const TEAMMATE_ALLOWED: ReadonlySet<string> = new Set([
+  'subagent_start', 'subagent_message', 'task_update', 'task_stop', 'tasks_list', 'read_task', 'output_read',
+  'attachment_read', 'state_update', 'schedule_add', 'wait_for', 'wake_at', 'pdf_lookup',
+]);
+
 /** Tools that take a `path`: allowed inside this chat's folder, asked for anywhere else. */
 export const STRANGER_PATH_TOOLS: ReadonlySet<string> = new Set(['files.read', 'files.write', 'artifact_publish']);
+/** More path tools a teammate may use inside this chat's folder. */
+const TEAMMATE_PATH_TOOLS: ReadonlySet<string> = new Set(['files.edit', 'files.search']);
 
 /** What the policy knows about the chat a stranger-woken run is in (filled by `readToolPolicyConfig`, only for such a run). */
 export interface ChatPolicy {
@@ -33,6 +45,10 @@ export interface ChatPolicy {
   title?: string;
   /** Someone other than the owner woke this run: their name as the platform gave it. */
   stranger?: { name?: string };
+  /** Every non-owner wake of the run is from a teammate (the ingress decided: a known person in a group that is not shared with outsiders). */
+  teammate?: boolean;
+  /** The kinds of decision the owner delegated to this group: a teammate's ask in one of them runs without asking the owner. */
+  delegated?: readonly string[];
   /** The chat whose folder the call's `path` points into, when it is another chat's (found by the reader from the hash in the name). */
   other?: { id: string; title?: string };
 }
@@ -68,14 +84,28 @@ export type StrangerScope =
 
 /** The chat folder (its hash) a path tool's `path` points into; undefined for any other path, the Mac, or a tool without a path. */
 export function folderHashOf(toolName: string, args: unknown): string | undefined {
-  if (!STRANGER_PATH_TOOLS.has(toolName) || onMac(args)) return undefined;
+  if (!(STRANGER_PATH_TOOLS.has(toolName) || TEAMMATE_PATH_TOOLS.has(toolName)) || onMac(args)) return undefined;
   const path = pathOf(args);
   return path === '' ? undefined : chatHashOfPath(path);
 }
 
+/** A teammate's wake (BACKEND 6.8): a stranger wake the ingress marked as a known person of an internal group. */
+export function isTeammateWake(wake: WakeEvent | undefined): boolean {
+  return isStrangerWake(wake) && wake?.payload['teammate'] === true;
+}
+
+/** Whether every kind of decision a call carries was delegated to the group; a call with no kind is never covered. */
+export function groupGrantCovers(categories: readonly DecisionCategory[], delegated: readonly string[] | undefined): boolean {
+  return categories.length > 0 && delegated !== undefined && categories.every((category) => delegated.includes(category));
+}
+
+/** Whether the run is held to the teammate rules rather than the stranger's. */
+const teammateRun = (config: { chat?: ChatPolicy }, wake: WakeEvent | undefined): boolean => config.chat?.teammate === true || isTeammateWake(wake);
+
 export function strangerScope(config: { chat?: ChatPolicy }, wake: WakeEvent | undefined, toolName: string, args: unknown): StrangerScope {
-  if (STRANGER_ALLOWED.has(toolName)) return { kind: 'free' };
-  if (!STRANGER_PATH_TOOLS.has(toolName)) return { kind: 'ask' };
+  const teammate = teammateRun(config, wake);
+  if (STRANGER_ALLOWED.has(toolName) || (teammate && TEAMMATE_ALLOWED.has(toolName))) return { kind: 'free' };
+  if (!STRANGER_PATH_TOOLS.has(toolName) && !(teammate && TEAMMATE_PATH_TOOLS.has(toolName))) return { kind: 'ask' };
   const path = pathOf(args);
   const hash = folderHashOf(toolName, args);
   if (hash === undefined) return { kind: 'private', path };

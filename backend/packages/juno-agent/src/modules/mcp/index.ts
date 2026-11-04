@@ -20,12 +20,12 @@ export { mergeScopes, parseChallenge, type Challenge } from './challenge.js';
 export * from './catalog.js';
 export * from './composio.js';
 export * from './probe.js';
-export { missingDefaultConnections, platformKeyConfigured, PLATFORM_KEY_SERVERS } from './platform-keys.js';
+export { missingDefaultConnections, platformKeyConfigured, PLATFORM_KEY_SERVERS, UPSTREAM_AUTHORIZATION_HEADER } from './platform-keys.js';
 export { createOAuthAuthorizer, type OAuthAuthorizerInput } from './oauth-tokens.js';
 export type { McpTransport, McpRequestOptions } from './transport.js';
 export type { SandboxStdioBridge, SandboxStdioChannel } from './stdio-transport.js';
 export { HttpMcpTransport } from './http-transport.js';
-export { createGuardedFetch, createModelFetch, guardedFetch, mcpUrlRefused, modelUrlRefused, privateHostsAllowed, MCP_ALLOW_PRIVATE_HOSTS, HOSTED_MCP_PATH, SG_MCP_PATH } from '../tools/net/guardedFetch.js';
+export { createGuardedFetch, createModelFetch, guardedFetch, hostedEndpointUrl, hostedPathOfUrl, isStoredHostedEndpoint, storedEndpointUrl, mcpUrlRefused, modelUrlRefused, privateHostsAllowed, MCP_ALLOW_PRIVATE_HOSTS, HOSTED_MCP_PATH } from '../tools/net/guardedFetch.js';
 export { StdioMcpTransport } from './stdio-transport.js';
 
 export interface McpRuntimeDeps {

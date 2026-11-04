@@ -2,14 +2,15 @@
 import { describe, expect, it } from 'vitest';
 import { MEET_HELPER, meetCommand, parseMeetOutput } from './meet.js';
 import { BrowserDownError } from './errors.js';
+import { inAgentNetns } from './isolation-user.js';
 import { screenPorts } from './ports.js';
 import { rootDir, shq } from './screen-boot.js';
 
 describe('meet helper invocation', () => {
   it('passes the display CDP port, the display number and a quoted request, with the display cookie', () => {
     const input = { action: 'join', url: 'https://meet.google.com/abc-defg-hij', name: "O'Neil" } as const;
-    const command = meetCommand(3, input);
-    expect(command).toContain(`${MEET_HELPER} --port ${screenPorts(3).cdp} --display 3 --request ${shq(JSON.stringify(input))}`);
+    const command = meetCommand('agent-a', 3, input);
+    expect(command).toContain(`${inAgentNetns('agent-a')} ${MEET_HELPER} --port ${screenPorts(3).cdp} --display 3 --request ${shq(JSON.stringify(input))}`);
     expect(command).toContain(`${rootDir(3)}/xauth`);
   });
 });

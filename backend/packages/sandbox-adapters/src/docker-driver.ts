@@ -44,6 +44,8 @@ export const IDLE_LABEL = 'dev.agent-desktop.idle-minutes';
 export const LIFETIME_LABEL = 'dev.agent-desktop.lifetime-ms';
 /** Label carrying the computer link id, for whoever inspects the container. */
 export const LINK_LABEL = 'dev.agent-desktop.link';
+/** Label naming the deployment that made the container (see `deploymentId`). */
+export const DEPLOYMENT_LABEL = 'dev.agent-desktop.deployment';
 
 const DEFAULT_IDLE_MINUTES = 30;
 const DEFAULT_LIFETIME_MS = 3_600_000;
@@ -57,29 +59,33 @@ export interface DockerDriverOptions {
   docker?: DockerCli;
   /** Where /juno and /workspace live (BACKEND 7.10); absent keeps them on the container's own disk. */
   storage?: ComputerStorage;
+  /** Which deployment (one computerd and its database) made the containers; written as a label so orphan reaping only touches its own. */
+  deployment?: string;
 }
 
 /** `docker run` arguments for a new computer. No `-p`: nothing is published. Exported so the "no ports" rule has a test. */
-export function runArguments(input: { name: string; hash: string; spec: CreateSpec; storageArgs: string[] }): string[] {
-  const { name, hash, spec, storageArgs } = input;
+export function runArguments(input: { name: string; hash: string; spec: CreateSpec; storageArgs: string[]; deployment?: string }): string[] {
+  const { name, hash, spec, storageArgs, deployment = '' } = input;
   return [
     'run', '-d',
     '--init',
-    // If juno-link (the start command) ever exits, Docker starts the computer again; an explicit `docker stop` is respected.
-    '--restart', 'unless-stopped',
+    // No restart policy: Docker must not bring a computer back by itself (after a Docker or host restart every container ever
+    // made, orphans included, came back). computerd starts a stopped computer on its next active use.
     '--name', name,
     '--label', `${OWNER_LABEL}=${hash}`,
     '--label', `${MANAGED_LABEL}=1`,
     '--label', `${IDLE_LABEL}=${spec.host.idlePauseMinutes}`,
     '--label', `${LIFETIME_LABEL}=${spec.host.timeoutMs}`,
     '--label', `${LINK_LABEL}=${spec.env.JUNO_LINK_ID}`,
+    ...(deployment === '' ? [] : ['--label', `${DEPLOYMENT_LABEL}=${deployment}`]),
     '--memory', `${spec.host.ramGb}g`,
     '--cpus', String(spec.host.vcpu),
     // juno-link runs as root (the image's start command); the image's own default user is for E2B's sake.
     '--user', 'root',
-    // iptables rules that keep one agent off another's browser and VNC ports (BACKEND §7.9). hidepid needs
-    // SYS_ADMIN; it is not granted here, so it is skipped (and logged) on local Docker.
+    // One network namespace per agent (BACKEND §7.9): veth, routes and nft rules need NET_ADMIN, and `ip netns add` (a mount and an
+    // unshare) needs SYS_ADMIN. That also lets the `/proc` hidepid remount work.
     '--cap-add', 'NET_ADMIN',
+    '--cap-add', 'SYS_ADMIN',
     // How the container reaches computerd on the host (Docker Desktop has it; Linux needs the mapping).
     '--add-host', 'host.docker.internal:host-gateway',
     '-e', `JUNO_LINK_URL=${spec.env.JUNO_LINK_URL}`,
@@ -107,12 +113,24 @@ export function createDockerDriver(options: DockerDriverOptions): LifecycleDrive
   }
 
   /**
-   * The owned container, for a cold boundary (resume or start; a running computer never comes here). One built from an
-   * older image than its tag now points to is removed and reported stale, so computerd's normal recovery creates a new one
-   * on the same durable volumes. An image that cannot be inspected keeps the container.
+   * A container made before agents got network namespaces (BACKEND §7.9a) lacks SYS_ADMIN, which `ip netns add` needs. It is
+   * handled exactly like one with an outdated image: removed (its named volumes stay) and reported stale for normal recovery.
+   */
+  async function replaceWithoutNetnsCapability(binding: E2bBinding, info: ContainerInfo, signal: AbortSignal): Promise<void> {
+    if (info.capAdd.includes('SYS_ADMIN')) return;
+    log.warn({ container: shortId(info.id) }, 'container lacks SYS_ADMIN (made before network namespaces); replacing it on the same storage');
+    await driver.destroy(binding, signal);
+    throw new StaleComputerError('image_outdated', `container ${shortId(info.id)} was made without SYS_ADMIN, which agent network namespaces need; replaced on the next start`, binding.sandboxId);
+  }
+
+  /**
+   * The owned container, for a cold boundary (resume or start). One without SYS_ADMIN, or built from an older image than its tag
+   * now points to, is removed and reported stale, so computerd's normal recovery creates a new one on the same durable volumes.
+   * An image that cannot be inspected keeps the container.
    */
   async function upToDate(binding: E2bBinding, signal: AbortSignal): Promise<ContainerInfo> {
     const info = await owned(binding, signal);
+    await replaceWithoutNetnsCapability(binding, info, signal);
     const current = await cli.run(['image', 'inspect', '-f', '{{.Id}}', info.imageName], { timeoutMs: PROBE_TIMEOUT_MS, signal }).catch(() => undefined);
     const currentId = current?.exitCode === 0 ? current.stdout.trim() : '';
     if (currentId === '') {
@@ -127,13 +145,17 @@ export function createDockerDriver(options: DockerDriverOptions): LifecycleDrive
   const driver: LifecycleDriver = {
     kind: 'local',
 
+    async assertCurrent(binding, signal) {
+      await replaceWithoutNetnsCapability(binding, await owned(binding, signal), signal);
+    },
+
     async create(spec, signal) {
       try {
         await ensureImage(cli, spec.image, signal);
         parseResolution(spec.host.resolution);
         const name = `agent-local-${hash.slice(0, 8)}-${randomUUID().slice(0, 8)}`;
         const storageArgs = (await options.storage?.dockerArgs(cli, options.ownerId, signal)) ?? [];
-        const result = await cli.run(runArguments({ name, hash, spec, storageArgs }), {
+        const result = await cli.run(runArguments({ name, hash, spec, storageArgs, ...(options.deployment ? { deployment: options.deployment } : {}) }), {
           timeoutMs: CREATE_TIMEOUT_MS,
           signal,
           env: { JUNO_LINK_TOKEN: spec.env.JUNO_LINK_TOKEN },

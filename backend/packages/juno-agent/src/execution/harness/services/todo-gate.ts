@@ -28,13 +28,13 @@ import {
   type RunTaskState,
 } from './task-hooks.js';
 import type { RunCancellation } from './cancel.js';
-import { activeChildren, childBlockedReason, childContinueHint, childSignature } from './child-completion.js';
+import { activeSubagents, subagentBlockedReason, subagentContinueHint, subagentSignature } from './subagent-completion';
 import { markRunBlocked, runBlockCause } from './run-block.js';
 import { runTodoChecks } from './verification.js';
 import type { RunBudget } from './run-budget.js';
-import { isChildPlan } from '../../../modules/tasks/state.js';
+import { isSubagentPlan } from '../../../modules/tasks/state.js';
 import type { WakeKind } from '../../../contracts/index.js';
-import type { ChildStatus } from '../../../modules/tasks/child.js';
+import type { SubagentStatus } from '../../../modules/tasks/subagent.js';
 import type { RunContext, RunInput, RunServices } from './run-types.js';
 
 /** Wakes that can carry what a task blocked on input was waiting for. */
@@ -58,8 +58,8 @@ export function createTodoGate(ctx: RunContext, services: RunServices, input: Ru
   let finalsSinceProgress = 0;
   let toolTurnsSinceFinal = 0;
   let verificationAttempts = 0;
-  let lastChildSignature: string | null = null;
-  let childFinalsSinceProgress = 0;
+  let lastSubagentSignature: string | null = null;
+  let subagentFinalsSinceProgress = 0;
 
   const taskState = (key: string): Promise<RunTaskState> =>
     ctx.run('tasks:' + key, () => readRunTasks(services.store, input.agentId, input.conversationId, runId));
@@ -73,26 +73,28 @@ export function createTodoGate(ctx: RunContext, services: RunServices, input: Ru
   };
 
   /** CT-boundary: hold the run over live children; the same set without tool work stalls to a block. */
-  const settleWithChildren = async (key: string, active: ChildStatus[]): Promise<SettleDecision> => {
-    const signature = childSignature(active);
-    const progressed = signature !== lastChildSignature || toolTurnsSinceFinal > 0;
-    childFinalsSinceProgress = progressed ? 0 : childFinalsSinceProgress + 1;
-    lastChildSignature = signature;
+  const settleWithSubagents = async (key: string, active: SubagentStatus[]): Promise<SettleDecision> => {
+    const signature = subagentSignature(active);
+    const progressed = signature !== lastSubagentSignature || toolTurnsSinceFinal > 0;
+    subagentFinalsSinceProgress = progressed ? 0 : subagentFinalsSinceProgress + 1;
+    lastSubagentSignature = signature;
     toolTurnsSinceFinal = 0;
-    if (childFinalsSinceProgress >= MAX_UNCHANGED_FINALS) {
+    if (subagentFinalsSinceProgress >= MAX_UNCHANGED_FINALS) {
       await ctx.run('child-block:' + key, async () => {
-        await markRunBlocked(services.store, runId, 'no_progress', childBlockedReason(active, false));
+        await markRunBlocked(services.store, runId, 'no_progress', subagentBlockedReason(active, false));
       });
       return 'blocked';
     }
-    await appendHint(key, childContinueHint(active));
+    await appendHint(key, subagentContinueHint(active));
     return 'continued';
   };
 
   const journalBlock = async (key: string, cause: BlockCause): Promise<void> => {
     await ctx.run('todo-block:' + key, async () => {
-      const reason = blockedReason(await readRunTasks(services.store, input.agentId, input.conversationId, runId), cause);
-      await markRunBlocked(services.store, runId, runBlockCause(cause), reason);
+      const state = await readRunTasks(services.store, input.agentId, input.conversationId, runId);
+      // The parse detail is for the log; the run and its task only carry the plain line (blockedReason).
+      if (state.kind === 'unreadable') services.log?.({ runId, reason: state.reason }, 'task state unreadable');
+      await markRunBlocked(services.store, runId, runBlockCause(cause), blockedReason(state, cause));
     });
   };
 
@@ -104,14 +106,14 @@ export function createTodoGate(ctx: RunContext, services: RunServices, input: Ru
     }
     // CT-boundary: a parent may not finish while a child it spawned is still live, even when its
     // own plan is done or absent; the hold carries a child-tools hint instead of a public final.
-    const live = await ctx.run('child-read:settle:' + key, () => activeChildren(services.store, runId));
-    if (live.length > 0) return settleWithChildren('settle:' + key, live);
+    const live = await ctx.run('child-read:settle:' + key, () => activeSubagents(services.store, runId));
+    if (live.length > 0) return settleWithSubagents('settle:' + key, live);
     if (state.kind === 'none') return 'completed';
     if (openTodos(state).length === 0) {
       // A child has no user to answer, so its blocked tasks end it blocked and report up. In the user's
       // chat, tasks left `blocked` wait for the user's answer: the reply that asks or answers is a normal
       // end of the run, and they stay blocked in the plan so the next user message continues them.
-      if (blockedTodos(state).length > 0 && isChildPlan(state.plan)) {
+      if (blockedTodos(state).length > 0 && isSubagentPlan(state.plan)) {
         await journalBlock('settle:' + key, 'waiting');
         return 'blocked';
       }
@@ -174,7 +176,7 @@ export function createTodoGate(ctx: RunContext, services: RunServices, input: Ru
   const announceBlocked = async (key: string): Promise<void> => {
     if (!input.wakeEvents.some((wake) => ANSWER_WAKES.has(wake.kind))) return;
     const state = await taskState('announce:' + key);
-    if (state.kind !== 'plan' || isChildPlan(state.plan)) return;
+    if (state.kind !== 'plan' || isSubagentPlan(state.plan)) return;
     await appendHint('announce:' + key, blockedInputHint(state));
   };
 
@@ -185,10 +187,10 @@ export function createTodoGate(ctx: RunContext, services: RunServices, input: Ru
       return 'blocked';
     }
     // CT-boundary: the step limit is truthful about live children even without a plan.
-    const live = await ctx.run('child-read:limit', () => activeChildren(services.store, runId));
+    const live = await ctx.run('child-read:limit', () => activeSubagents(services.store, runId));
     if (live.length > 0) {
       await ctx.run('child-block:limit', async () => {
-        await markRunBlocked(services.store, runId, 'limit', childBlockedReason(live, true));
+        await markRunBlocked(services.store, runId, 'limit', subagentBlockedReason(live, true));
       });
       return 'blocked';
     }

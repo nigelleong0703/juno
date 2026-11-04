@@ -3,7 +3,7 @@ import type { AssistantTurn } from '../../../contracts/index.js';
 import type { BudgetCheck } from '../../usage/index.js';
 import { chargeActive, chargeCompaction, chargeFailedAttempt } from './model-charges.js';
 import { markRunBlocked } from './run-block.js';
-import { checkWithChildren, type RunBudget } from './run-budget.js';
+import { checkWithSubagents, type RunBudget } from './run-budget.js';
 import type { RunContext, RunServices } from './run-types.js';
 
 // Pure per-action charges live in model-charges.ts; re-exported so existing import paths hold.
@@ -40,7 +40,7 @@ export async function chargeModelStep(options: {
     durationMs,
   );
   await persistRunUsage(options.ctx, options.services, options.runId, key, budget, options.model);
-  const within = await checkWithChildren(options.ctx, options.services, options.runId, budget, key);
+  const within = await checkWithSubagents(options.ctx, options.services, options.runId, budget, key);
   if (!within.ok) await blockOnBudget(options.ctx, options.services, options.runId, key, within.reason);
   return within;
 }
@@ -56,7 +56,7 @@ export async function chargeFailedAttemptStep(options: {
 }): Promise<BudgetCheck> {
   chargeFailedAttempt(options.budget, options.key, options.durationMs);
   await persistRunUsage(options.ctx, options.services, options.runId, options.key, options.budget);
-  const within = await checkWithChildren(options.ctx, options.services, options.runId, options.budget, options.key);
+  const within = await checkWithSubagents(options.ctx, options.services, options.runId, options.budget, options.key);
   if (!within.ok) await blockOnBudget(options.ctx, options.services, options.runId, options.key, within.reason);
   return within;
 }
@@ -72,7 +72,7 @@ export async function chargeCompactionStep(options: {
 }): Promise<BudgetCheck> {
   chargeCompaction(options.budget, options.key, options.context);
   await persistRunUsage(options.ctx, options.services, options.runId, options.key, options.budget);
-  const within = await checkWithChildren(options.ctx, options.services, options.runId, options.budget, options.key);
+  const within = await checkWithSubagents(options.ctx, options.services, options.runId, options.budget, options.key);
   if (!within.ok) await blockOnBudget(options.ctx, options.services, options.runId, options.key, within.reason);
   return within;
 }
@@ -120,7 +120,7 @@ export async function chargeToolCall(scope: BudgetScope, stepIndex: number, call
   chargeActive(scope.budget, 'tool:' + String(stepIndex) + ':' + callId, activeMs);
   await persistRunUsage(scope.ctx, scope.services, scope.runId, 'tools:' + String(stepIndex) + ':' + callId, scope.budget);
   const key = 'tool:' + String(stepIndex) + ':' + callId;
-  const within = await checkWithChildren(scope.ctx, scope.services, scope.runId, scope.budget, key);
+  const within = await checkWithSubagents(scope.ctx, scope.services, scope.runId, scope.budget, key);
   if (!within.ok) await blockOnBudget(scope.ctx, scope.services, scope.runId, key, within.reason);
   return within;
 }
@@ -140,14 +140,14 @@ export function toolStepsLeft(scope: BudgetScope): number {
 /** Check BEFORE one tool effect: a spent budget blocks truthfully without running the effect. */
 export async function checkBeforeTool(scope: BudgetScope, stepIndex: number, callId: string): Promise<BudgetCheck> {
   const key = 'tool:' + String(stepIndex) + ':' + callId;
-  const within = await checkWithChildren(scope.ctx, scope.services, scope.runId, scope.budget, key);
+  const within = await checkWithSubagents(scope.ctx, scope.services, scope.runId, scope.budget, key);
   if (!within.ok) await blockOnBudget(scope.ctx, scope.services, scope.runId, key, within.reason);
   return within;
 }
 
 /** After a tool batch: a spent budget stops the run before another proposal or reply, truthfully. */
 export async function budgetSpentAfterTools(scope: BudgetScope, stepIndex: number): Promise<boolean> {
-  const within = await checkWithChildren(scope.ctx, scope.services, scope.runId, scope.budget, 'tools:' + String(stepIndex));
+  const within = await checkWithSubagents(scope.ctx, scope.services, scope.runId, scope.budget, 'tools:' + String(stepIndex));
   if (within.ok) return false;
   await blockOnBudget(scope.ctx, scope.services, scope.runId, 'tools:' + String(stepIndex), within.reason);
   return true;
@@ -168,7 +168,7 @@ export async function blockOnBudget(
 
 /** PH10 seam: check BEFORE one configured effect (a completion check) under its stable key. */
 export async function checkBeforeEffect(scope: BudgetScope, key: string): Promise<BudgetCheck> {
-  const within = await checkWithChildren(scope.ctx, scope.services, scope.runId, scope.budget, key);
+  const within = await checkWithSubagents(scope.ctx, scope.services, scope.runId, scope.budget, key);
   if (!within.ok) await blockOnBudget(scope.ctx, scope.services, scope.runId, key, within.reason);
   return within;
 }
@@ -177,7 +177,7 @@ export async function checkBeforeEffect(scope: BudgetScope, key: string): Promis
 export async function chargeEffect(scope: BudgetScope, key: string, activeMs: number): Promise<BudgetCheck> {
   chargeActive(scope.budget, key, activeMs);
   await persistRunUsage(scope.ctx, scope.services, scope.runId, key, scope.budget);
-  const within = await checkWithChildren(scope.ctx, scope.services, scope.runId, scope.budget, key);
+  const within = await checkWithSubagents(scope.ctx, scope.services, scope.runId, scope.budget, key);
   if (!within.ok) await blockOnBudget(scope.ctx, scope.services, scope.runId, key, within.reason);
   return within;
 }

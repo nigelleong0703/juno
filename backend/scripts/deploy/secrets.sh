@@ -21,6 +21,7 @@ secrets=(
   "SPACE_URL_SECRET:openssl rand -hex 32"
   "COMPUTERD_TOKEN:openssl rand -hex 32"
   "INTERNAL_AGENTD_TOKEN:openssl rand -hex 32"
+  "HOSTED_MCP_TOKEN:openssl rand -hex 32"
   "BETTER_AUTH_SECRET:openssl rand -hex 32"
 )
 

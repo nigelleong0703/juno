@@ -14,6 +14,7 @@ const KNOWN_CODES: readonly ComputerErrorCode[] = [
   'aborted',
   'home_conflict',
   'computer_recovering',
+  'computer_asleep',
   'failed',
 ];
 

@@ -7,6 +7,7 @@ import { ComputerError } from '../computer/contract.js';
 import { actionResult, computerFailure, noteBrowserRestart, ON_PROPERTY, ON_SCHEMA } from '../computer/shared.js';
 import { withSnapshot } from './computerBrowserActions.js';
 import { withNotices } from '../computer/purchase.js';
+import { addScreenCard } from '../computer/screenCard.js';
 
 const schema = z.object({
   url: z.string().url().refine((url) => url.startsWith('http://') || url.startsWith('https://'), {
@@ -46,11 +47,13 @@ export function createBrowserNavigateTool(opts: { computer?: ComputerClientProvi
         if (!client.browser) {
           if (parsed.tab !== undefined) throw new ComputerError('unavailable', 'Tabs are not available: this deployment has no sandbox browser helper.');
           const page = await client.navigate(ctx.agentId, parsed.url, ctx.signal, parsed.on);
+          await addScreenCard(ctx, page, parsed.on);
           return actionResult(`Navigated to ${page.title ? `${page.title} (${page.url})` : page.url}`, { url: page.url });
         }
         const page = await client.browser(ctx.agentId, { action: 'navigate', url: parsed.url, ...(parsed.tab === undefined ? {} : { tab: parsed.tab }) }, ctx.signal, parsed.on);
         noteBrowserRestart(ctx, page);
         if (page.action !== 'navigate') throw new ComputerError('failed', `browser navigate returned a ${page.action} result`);
+        await addScreenCard(ctx, page, parsed.on);
         const line = pageLine(`Navigated tab ${page.tab} to`, page, parsed.url);
         // A page still loading has nothing useful to list yet; its line already says to snapshot in a moment.
         if (page.loading && page.dialog === undefined) return actionResult(withNotices(line, page), { tab: page.tab, url: page.url, loading: true });

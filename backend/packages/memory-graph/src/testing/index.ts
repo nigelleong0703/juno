@@ -6,7 +6,7 @@
 import type { DurableDb } from '@agent-desktop/durable';
 import { createIdentity, type Account, type AccountInput, type Person } from '../identity/index.js';
 
-export { startTestDatabase, type TestDatabase } from './database.js';
+export { startRealPgvectorDatabase, startTestDatabase, type TestDatabase } from './database.js';
 export { seedSkill, type SkillSeed } from './skills.js';
 
 export interface ContactSeed {

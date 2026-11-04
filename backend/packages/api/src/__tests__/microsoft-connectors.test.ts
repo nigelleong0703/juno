@@ -6,7 +6,9 @@ import { CONNECTOR_CATALOG } from './builtin-catalog.js';
 import { googleMcpResourceMetadata, handleGoogleMcp, SERVICES } from '../modules/google-mcp.js';
 
 const GRAPH = 'https://graph.test/v1.0';
-const deps = (fetchImpl: typeof fetch) => ({ publicUrl: 'https://gw.example.com', apis: { graph: GRAPH }, fetchImpl });
+const deps = (fetchImpl: typeof fetch) => ({ publicUrl: 'https://gw.example.com', hostedToken: 'svc', apis: { graph: GRAPH }, fetchImpl });
+/** What agentd's MCP client sends a hosted connector: the service credential, and the owner's token in its own header. */
+const asAgentd = (upstream: string) => ({ authorization: 'Bearer svc', 'x-upstream-authorization': 'Bearer ' + upstream, 'content-type': 'application/json' });
 
 interface Seen { method: string; path: string; query: Record<string, string>; body: unknown; headers: Headers }
 
@@ -28,7 +30,7 @@ function graph(routes: Record<string, unknown>): { fetchImpl: typeof fetch; seen
 async function call(fetchImpl: typeof fetch, service: string, name: string, args: Record<string, unknown> = {}): Promise<{ text: string; isError: boolean }> {
   const response = await handleGoogleMcp(deps(fetchImpl), service, new Request('https://gw.example.com/mcp/google/' + service, {
     method: 'POST',
-    headers: { authorization: 'Bearer ms-token', 'content-type': 'application/json' },
+    headers: asAgentd('ms-token'),
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
   }));
   const result = ((await response.json()) as { result: { content: { text: string }[]; isError?: boolean } }).result;
@@ -37,7 +39,7 @@ async function call(fetchImpl: typeof fetch, service: string, name: string, args
 
 async function tools(service: string): Promise<{ name: string; title: string; annotations: Record<string, unknown> }[]> {
   const response = await handleGoogleMcp(deps(fetch), service, new Request('https://gw.example.com/mcp/google/' + service, {
-    method: 'POST', headers: { authorization: 'Bearer t', 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    method: 'POST', headers: asAgentd('t'), body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
   }));
   return ((await response.json()) as { result: { tools: { name: string; title: string; annotations: Record<string, unknown> }[] } }).result.tools;
 }
@@ -155,7 +157,7 @@ describe('Outlook mail on Graph', () => {
 
   it('a rejected token is HTTP 401 with the resource metadata challenge; other Graph errors name Graph', async () => {
     const rejected = await handleGoogleMcp(deps((async () => new Response(null, { status: 401 })) as typeof fetch), 'outlook-mail', new Request('https://gw.example.com/x', {
-      method: 'POST', headers: { authorization: 'Bearer old', 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_folders', arguments: {} } }),
+      method: 'POST', headers: asAgentd('old'), body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_folders', arguments: {} } }),
     }));
     expect(rejected.status).toBe(401);
     expect(rejected.headers.get('www-authenticate')).toContain('/.well-known/oauth-protected-resource/mcp/google/outlook-mail');

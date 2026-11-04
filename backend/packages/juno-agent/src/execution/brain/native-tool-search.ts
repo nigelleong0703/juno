@@ -56,6 +56,19 @@ export function searchCallBlock(call: { callId: string; itemId?: string; goal: s
   return { type: 'toolCall', id: wireId(call.callId), name: SEARCH_CALL_NAME, arguments: { query: call.goal }, nativeSearch: true, ...(call.itemId === undefined ? {} : { itemId: call.itemId }) };
 }
 
+/** How much of a hidden tool's description its declaration keeps. */
+const DECLARED_DESCRIPTION_CHARS = 120;
+
+/**
+ * What a hidden tool costs in the request. The gateway bills every declared definition as input (22k of 41k tokens on a fresh
+ * chat, whether deferred or not), so the declaration carries only the name and a short description; the full definition travels in
+ * the `tool_search_output` the model gets when it searches (`outputItem`), and the model calls the tool from there.
+ */
+function declaredForm(tool: PiTool): PiTool {
+  const text = tool.description.replace(/\s+/g, ' ').trim();
+  return { ...tool, description: text.length <= DECLARED_DESCRIPTION_CHARS ? text : text.slice(0, DECLARED_DESCRIPTION_CHARS - 1) + '…', parameters: { type: 'object', properties: {}, additionalProperties: true } };
+}
+
 /** A hidden tool as it goes on the wire: the protocol name (aliased) with its definition. */
 export interface DeferredTool {
   /** The registry name: what a stored search result lists as loaded. */
@@ -106,7 +119,7 @@ export function createToolSearchTap(input: { deferred: readonly DeferredTool[]; 
       if (!isRecord(payload)) return undefined;
       const tools = Array.isArray(payload['tools']) ? payload['tools'] : [];
       const items: unknown[] = Array.isArray(payload['input']) ? payload['input'] : [];
-      const next: Record<string, unknown> = { ...payload, tools: [...tools, NATIVE_SEARCH_TOOL, ...convertResponsesTools(input.deferred.map((entry) => entry.tool), options)] };
+      const next: Record<string, unknown> = { ...payload, tools: [...tools, NATIVE_SEARCH_TOOL, ...convertResponsesTools(input.deferred.map((entry) => declaredForm(entry.tool)), options)] };
       next['input'] = items.map((item) => {
         if (!isRecord(item)) return item;
         const callId = typeof item['call_id'] === 'string' ? item['call_id'] : '';

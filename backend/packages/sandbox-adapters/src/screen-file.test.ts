@@ -98,9 +98,9 @@ describe('model coordinates back to the framebuffer', () => {
 
   it('builds the click and the browser point check on the mapped point', () => {
     expect(xdotoolClick({ x: 10, y: 20 }, 1, 2)).toMatch(/^set -- .*; xdotool mousemove --sync "\$1" "\$2" click --repeat 2 --delay 100 1$/);
-    const point = browserCommand(3, { action: 'point', x: 10, y: 20 });
+    const point = browserCommand('agent-a', 3, { action: 'point', x: 10, y: 20 });
     expect(point).toContain(`export DISPLAY=:3; XAUTHORITY="$(cat '/run/juno/screen-3/xauth' 2>/dev/null)"; export XAUTHORITY; set -- $(xdotool getdisplaygeometry`);
     expect(point).toContain(`--request "$(printf '{"action":"point","x":%s,"y":%s}' "$1" "$2")"`);
-    expect(browserCommand(3, { action: 'point' })).toContain(`--request '{"action":"point"}'`);
+    expect(browserCommand('agent-a', 3, { action: 'point' })).toContain(`--request '{"action":"point"}'`);
   });
 });

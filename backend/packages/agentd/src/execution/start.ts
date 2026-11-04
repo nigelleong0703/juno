@@ -23,6 +23,8 @@ import type { PlatformSkillsService, SkillsService } from '@agent-desktop/memory
 import type { VoicePort } from 'juno-agent/modules/tools/tools/discordVoice';
 import type { PluginTool } from 'juno-agent/modules/tools/plugin-tool';
 import type { ComputerClient } from 'juno-agent/computer';
+import type { LiveRunSink } from 'juno-agent/execution/live-runs';
+import type { VomuAgent } from 'juno-agent';
 import { createLogger } from '@agent-desktop/log';
 import { requestScopedStore } from '../owner-scope.js';
 import { runWithOwner } from 'juno-agent/owner-context';
@@ -66,10 +68,16 @@ export interface ExecutionOptions {
   channels: ChannelRegistry;
   /** The connectors the loaded plugins registered (boot builds it once and also serves it to the gateway). */
   connectorCatalog: ConnectorCatalog;
+  /** Where the runs' live text goes: the in-process hub the HTTP stream reads (role `all`), or a worker's cross-process sink. */
+  live: LiveRunSink;
 }
 
 export interface ExecutionRuntime {
   stop: () => Promise<void>;
+  /** Warms a conversation's prompt cache with the runtime's own brain and tools (the voice warm route calls it). */
+  warm: VomuAgent['warm'];
+  /** Starts the reads a conversation's next run can do before the person has finished speaking (the voice prepare route calls it). */
+  prepare: VomuAgent['prepare'];
 }
 
 /**
@@ -99,7 +107,7 @@ export function createExecutionComputer(opts: { store: Store; config: BackendCon
       const owner = await resolveComputerOwner(agentId);
       const store = opts.store.forOwner?.(owner);
       if (store === undefined) throw new Error('Store.forOwner is required to record the owner computer');
-      await runWithOwner(owner, () => ensureComputer(store, computerd, owner, agentId, getConfig().COMPUTER_RESOLUTION, signal));
+      await runWithOwner(owner, () => ensureComputer(store, computerd, owner, agentId, getConfig(), signal));
     },
   };
 }
@@ -125,6 +133,7 @@ export async function startExecution(opts: ExecutionOptions): Promise<ExecutionR
     ...(opts.promptSections ? { promptSections: opts.promptSections } : {}),
     ...(opts.monitorChecks === undefined ? {} : { monitorChecks: opts.monitorChecks }),
     connectorCatalog: opts.connectorCatalog,
+    live: opts.live,
     channels: createChannelPort({ store: opts.store, channels: opts.channels }),
     log: (fields, message) => log.info(fields, message),
   });
@@ -134,6 +143,8 @@ export async function startExecution(opts: ExecutionOptions): Promise<ExecutionR
   log.info('Execution running');
 
   return {
+    warm: agent.warm,
+    prepare: agent.prepare,
     stop: async () => {
       try { await runner.stop(); }
       finally { await agent.tools.close?.(); }

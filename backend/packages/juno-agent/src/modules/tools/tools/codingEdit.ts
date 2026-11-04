@@ -14,6 +14,7 @@ import { computerFailure, ON_PROPERTY, ON_SCHEMA } from '../computer/shared.js';
 import { contentHash, countOccurrences, replaceOnce } from './codingHelpers.js';
 import { resolveToolPath, type FileToolOptions } from './codingPath.js';
 import { refuseProtectedHomePath, refuseServerReports } from './homeGuard.js';
+import { keepBeforeWrite } from './fileUndo.js';
 
 const editSchema = z.object({
   path: z.string().min(1),
@@ -67,13 +68,17 @@ export function createFileEditTool(opts: FileToolOptions): Tool {
         const nextContent = parsed.replaceAll === true
           ? current.content.split(parsed.oldText).join(parsed.newText)
           : replaceOnce(current.content, parsed.oldText, parsed.newText);
+        // The text just read is the old version; it is kept only when it is the file as it is on disk (valid UTF-8).
+        const kept = await keepBeforeWrite(client, ctx, { path, on: parsed.on ?? 'sandbox' }, 'files.edit', current.bytes === Buffer.byteLength(current.content, 'utf8') ? current.content : undefined);
+        if (!kept.ok) return kept.refusal;
         const written = await client.writeFile(ctx.agentId, { path, content: nextContent }, ctx.signal, parsed.on);
         const replaced = parsed.replaceAll === true ? occurrences : 1;
         return {
-          content: [{ type: 'text', text: `Edited ${written.path}: replaced ${replaced} occurrence(s)` }],
+          content: [{ type: 'text', text: `Edited ${written.path}: replaced ${replaced} occurrence(s)${kept.note}` }],
           details: {
             path: written.path,
             bytes: written.bytes,
+            ...(kept.snapshotId === undefined ? {} : { snapshotId: kept.snapshotId }),
             replaced,
             hash: contentHash(nextContent),
             previousHash: currentHash,

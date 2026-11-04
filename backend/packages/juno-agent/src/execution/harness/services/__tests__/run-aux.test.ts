@@ -8,7 +8,7 @@ import { createMemoryStore, NoopEnqueuer } from '../../../../testing/store.js';
 import type { Brain, Store } from '../../../../contracts/index.js';
 import type { Agent, Conversation, Run } from '@agent-desktop/public-contracts';
 import type { RunServices } from '../run-types.js';
-import { applyStepSummaries, nameRunByAgent, startRunAuxiliaries } from '../run-aux.js';
+import { applyStepSummaries, nameRunByAgent, startRoleSuggestion } from '../run-aux.js';
 import { runTitleFor } from '../../logic/busy.js';
 
 const AT = '2026-10-09T00:00:00.000Z';
@@ -70,7 +70,7 @@ describe('run auxiliaries', () => {
     const store = createMemoryStore();
     await store.put('runs', run(RAW_TITLE));
     const quickText = vi.fn(async () => null);
-    startRunAuxiliaries(fixtures(store, quickText), input, 'run-1');
+    startRoleSuggestion(fixtures(store, quickText), input);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect((await store.get('runs', 'run-1'))?.title).toBe(RAW_TITLE);
     expect(quickText.mock.calls.some((call) => String((call as unknown[])[0]).includes('short title'))).toBe(false);
@@ -84,13 +84,13 @@ describe('run auxiliaries', () => {
       await store.put('items', { id: 'item-' + index, type: 'user_message', conversationId: 'conv-1', authorId: 'u', text, attachments: [], mentions: [], at: '2026-10-09T00:00:0' + index + '.000Z' } as never, { conversationId: 'conv-1' });
     }
     const quickText = vi.fn(async (prompt: string) => (prompt.includes('Suggest the role') ? '{"title":"Running coach","description":"Tracks runs and recovery."}' : '“Track my runs”'));
-    startRunAuxiliaries(fixtures(store, quickText), input, 'run-1');
+    startRoleSuggestion(fixtures(store, quickText), input);
     await vi.waitFor(async () => expect((await store.get('agents', 'agent-1'))?.roleSuggestion).toBeDefined());
-    const suggestion = (await store.get('agents', 'agent-1'))?.roleSuggestion;
+    const suggestion =(await store.get('agents', 'agent-1'))?.roleSuggestion;
     expect(suggestion).toMatchObject({ title: 'Running coach', description: 'Tracks runs and recovery.' });
     // A suggestion that is already stored (or a dismissed one) is never asked for again.
     await store.put('agents', { ...agent('New agent'), roleSuggestionDismissedAt: AT } as Agent);
-    startRunAuxiliaries(fixtures(store, quickText), input, 'run-1');
+    startRoleSuggestion(fixtures(store, quickText), input);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(quickText.mock.calls.filter(([prompt]) => prompt.includes('Suggest the role'))).toHaveLength(1);
   });
@@ -99,7 +99,7 @@ describe('run auxiliaries', () => {
     const store = createMemoryStore();
     await seedDirectChat(store);
     const quickText = vi.fn(async (prompt: string) => (prompt.includes('Suggest the role') ? ROLE_REPLY : '“Track my runs”'));
-    startRunAuxiliaries(fixtures(store, quickText), input, 'run-1');
+    startRoleSuggestion(fixtures(store, quickText), input);
     await vi.waitFor(async () => expect((await store.get('agents', 'agent-1'))?.roleSuggestion).toBeDefined());
     const stored = (await store.get('agents', 'agent-1'))?.roleSuggestion;
     const cards = await roleSuggestionItems(store);
@@ -118,18 +118,32 @@ describe('run auxiliaries', () => {
     const store = createMemoryStore();
     await seedDirectChat(store);
     const quickText = vi.fn(async (prompt: string) => (prompt.includes('Suggest the role') ? ROLE_REPLY : '“Track my runs”'));
-    startRunAuxiliaries(fixtures(store, quickText), input, 'run-1');
-    startRunAuxiliaries(fixtures(store, quickText), input, 'run-2');
+    startRoleSuggestion(fixtures(store, quickText), input);
+    startRoleSuggestion(fixtures(store, quickText), input);
     await vi.waitFor(async () => expect((await store.get('agents', 'agent-1'))?.roleSuggestion).toBeDefined());
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(await roleSuggestionItems(store)).toHaveLength(1);
+  });
+
+  it('writes no card while a run of the chat is working; the suggestion stays eligible for the next run end', async () => {
+    const store = createMemoryStore();
+    await seedDirectChat(store);
+    await store.put('runs', run('Search flights'));
+    const quickText = vi.fn(async () => ROLE_REPLY);
+    startRoleSuggestion(fixtures(store, quickText), input);
+    await vi.waitFor(() => expect(quickText).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(await roleSuggestionItems(store)).toHaveLength(0);
+    await store.patch('runs', 'run-1', { status: 'completed' });
+    startRoleSuggestion(fixtures(store, quickText), input);
+    await vi.waitFor(async () => expect(await roleSuggestionItems(store)).toHaveLength(1));
   });
 
   it('writes no role_suggestion item when the model reply is not a usable suggestion', async () => {
     const store = createMemoryStore();
     await seedDirectChat(store);
     const quickText = vi.fn(async (prompt: string) => (prompt.includes('Suggest the role') ? 'no json here' : '“Track my runs”'));
-    startRunAuxiliaries(fixtures(store, quickText), input, 'run-1');
+    startRoleSuggestion(fixtures(store, quickText), input);
     await vi.waitFor(() => expect(quickText).toHaveBeenCalledTimes(1));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect((await store.get('agents', 'agent-1'))?.roleSuggestion).toBeUndefined();

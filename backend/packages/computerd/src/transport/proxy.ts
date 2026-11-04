@@ -9,6 +9,7 @@
  * closes it at once on a change, and every bridge re-reads the row every \`revalidateMs\` (2 s) and on its write frames, so a
  * hand-back made by ANOTHER computerd process also ends it (BACKEND 7.8b).
  */
+import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -34,9 +35,9 @@ export type VncProxyOptions = ({
   secret: string;
   log?: (fields: Record<string, unknown>, message: string) => void;
   /**
-   * While the user holds control of a screen, renew that sandbox this often so the idle policy
-   * cannot pause a session they are actively driving. A read-only watcher never renews. 0 disables
-   * it (tests).
+   * While anyone has a screen open (watching or driving), the computer is held awake (BACKEND §7.3b): the hold is renewed this often
+   * and lapses after three missed renewals, so a stream that dies without closing cannot keep a computer up. The idle countdown starts
+   * when the last stream closes. 0 disables it (idle pausing is off, or tests).
    */
   keepAliveMs?: number;
   /** How often a writable bridge re-reads its control row (default 2 s; the contract is "closes within 2 s of a hand-back"). */
@@ -48,7 +49,7 @@ export interface VncProxy {
 }
 
 interface ActiveStream {
-  /** Renew the owning sandbox's idle timer; called by the stream heartbeat. */
+  /** Renew this stream's hold on the computer; called by the stream heartbeat. */
   renew(): void;
   close(): void;
 }
@@ -65,10 +66,8 @@ export function createVncProxy(opts: VncProxyOptions): VncProxy {
   const keepAliveMs = opts.keepAliveMs ?? 0;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
 
-  // Only an authorized WRITABLE stream counts as activity: `control` is already the AND of the
-  // caller's request and the screen's live `controller === 'user'`, so a read-only watcher never
-  // renews. One timer serves every writable stream, started with the first and stopped with the
-  // last (including a take-over revocation, which closes the stream).
+  // Every open stream, watching or driving, holds its computer awake. One timer serves them all, started with the first and stopped
+  // with the last (including a take-over revocation, which closes the stream).
   const renewable = new Set<ActiveStream>();
   const startHeartbeat = () => {
     if (keepAliveMs <= 0 || heartbeat) return;
@@ -113,7 +112,6 @@ export function createVncProxy(opts: VncProxyOptions): VncProxy {
     let password: string;
     let control: boolean;
     let epoch = 0;
-    let renew = () => undefined;
     let scope: ComputerScope;
     try {
       scope = opts.forOwner ? opts.forOwner(claims.ownerId) : opts;
@@ -134,9 +132,6 @@ export function createVncProxy(opts: VncProxyOptions): VncProxy {
       control = claims.control && held.holder === 'user' && (claims.epoch === undefined || claims.epoch === held.epoch);
       const secrets = lifecycle.vncSecrets(screen);
       password = control ? secrets.controlPassword : secrets.viewPassword;
-      renew = () => {
-        void provider.connect(binding, new AbortController().signal).catch(() => undefined);
-      };
       stream = await provider.screenStream(binding, screen.displayNo, control, new AbortController().signal);
     } catch (error) {
       log({ err: error, screenId }, 'screen stream setup failed');
@@ -150,14 +145,18 @@ export function createVncProxy(opts: VncProxyOptions): VncProxy {
     wss.handleUpgrade(request, socket, head, (client) => {
       const guards: Array<() => void> = [];
       let stream: ActiveStream | null = null;
+      // This stream's hold on the computer, renewed by the shared heartbeat and ended with the stream (a no-op when idle pausing is off).
+      const { provider } = scope;
+      const holdId = `screen-stream:${randomUUID()}`;
       const release = () => {
         if (stream) renewable.delete(stream);
         stream = null;
         for (const stop of guards.splice(0)) stop();
         stopHeartbeatIfIdle();
+        if (keepAliveMs > 0) provider.release(holdId);
       };
       stream = {
-        renew,
+        renew: () => provider.hold(holdId, keepAliveMs * 3),
         close: () => {
           release();
           if (client.readyState === WebSocket.OPEN) client.close(1000, 'control revoked');
@@ -166,9 +165,12 @@ export function createVncProxy(opts: VncProxyOptions): VncProxy {
           }
         },
       };
-      if (control) {
+      if (keepAliveMs > 0) {
+        stream.renew();
         renewable.add(stream);
         startHeartbeat();
+      }
+      if (control) {
         // A writable bridge is valid only while the control row still says the person holds the screen at this epoch.
         const { lifecycle } = scope;
         const surface = { kind: 'screen', screenId } as const;

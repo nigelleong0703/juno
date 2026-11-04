@@ -169,6 +169,8 @@ const itemPatchSchema: z.ZodType<ItemPatch> = z.object({
   status: z.enum(ITEM_STATUSES).optional(),
   topic: z.enum(ITEM_TOPICS).nullable().optional(),
   aboutPersonId: nullableString.optional(),
+  /** Who keeps the item (BACKEND 5.4a): null shares it with every agent. */
+  agentId: nullableString.optional(),
 });
 const topicViewSchema: z.ZodType<TopicView> = z.object({
   topic: z.enum(ITEM_TOPICS),
@@ -223,7 +225,7 @@ export const routes = {
   },
   digestContext: {
     route: 'memory/digestContext',
-    input: z.object({ ownerId: ownerIdSchema, items: z.array(sourceItemSchema), agents: z.array(z.object({ id: z.string(), name: z.string() })) }),
+    input: z.object({ ownerId: ownerIdSchema, agentId: z.string(), items: z.array(sourceItemSchema), agents: z.array(z.object({ id: z.string(), name: z.string() })) }),
     output: z.object({ context: wireContextSchema, prompt: z.string() }),
   },
   applyDigest: {

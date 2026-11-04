@@ -1,6 +1,6 @@
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, it, expect } from 'vitest';
-import { RestatePromise } from '@agent-desktop/durable';
+import { DurablePromise } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { Doc, Store, Tool, ToolRegistry, ToolResult, WakeEvent } from '../../../contracts/index.js';
 import type { Run } from '@agent-desktop/public-contracts';
@@ -9,15 +9,15 @@ import { executeSingleToolCall } from '../services/run-tools.js';
 import { ScriptedModel } from '../testing/stubs.js';
 import type { RunInput, RunServices } from '../services/run-types.js';
 
-/** A journaling ctx like Restate's: a completed `run` is replayed, its body is not re-executed. */
+/** A journaling ctx like the production one: a completed `run` is replayed, its body is not re-executed. */
 function runContext(ids: string[] = ['stp-1']): ToolRunContext {
   const journal = new Map<string, unknown>();
   let next = 0;
   return {
     rand: { uuidv4: () => ids[Math.min(next++, ids.length - 1)] ?? 'stp-x' },
-    run<T>(name: string, action: () => Promise<T>): RestatePromise<T> {
-      if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-      return RestatePromise.resolve(action().then((value) => {
+    run<T>(name: string, action: () => Promise<T>): DurablePromise<T> {
+      if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+      return DurablePromise.resolve(action().then((value) => {
         journal.set(name, structuredClone(value));
         return value;
       }));

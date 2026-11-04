@@ -21,9 +21,8 @@ const ESCAPE = 3;
 const HASH_FN = 'hs() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d" " -f1; }';
 const MTIME_FN = 'mt() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }';
 
-/** Where the image keeps the platform skills (BACKEND 5.1): read-only, each a SKILL.md with `name` and `description` frontmatter. */
-export const PLATFORM_SKILLS_ROOT = '/opt/juno/skills';
-const MAX_PLATFORM_SKILLS = 100;
+/** Where the platform skills live in the computer (BACKEND 5.11b): synced from the server's bundle, read-only for agents. Their text is served from the server, not read from here. */
+const PLATFORM_SKILLS_ROOT = '/opt/juno/skills';
 
 /** The platform skill tools that print a document's text (`<tool> text FILE`), run with the skills venv's Python. */
 const TEXT_TOOLS: Record<HomeTextFormat, string> = {
@@ -34,12 +33,6 @@ const SKILLS_PYTHON = '/opt/juno/venv/bin/python';
 const EXTRACT_TIMEOUT_S = 25;
 /** Bytes of extracted text returned; the caller decides what it can show. */
 export const MAX_EXTRACTED_BYTES = 256 * 1024;
-
-/** awk over one SKILL.md: prints `P<TAB>path<TAB>name<TAB>description` from its single-line frontmatter. */
-const PLATFORM_SKILL_AWK =
-  'NR==1&&$0!="---"{exit} NR>1&&$0=="---"{exit} ' +
-  '/^name:/{n=$0;sub(/^name:[ \\t]*/,"",n);gsub(/^"|"$/,"",n)} /^description:/{d=$0;sub(/^description:[ \\t]*/,"",d);gsub(/^"|"$/,"",d)} ' +
-  'END{if(n!=""){gsub(/\\t/," ",d);printf "P\\t%s\\t%s\\t%s\\n",FILENAME,n,d}}';
 
 /** Shell that prints `<path>\t<hash>\t<mtime>` for every file the sync looks at, after an `S 0|1` marker line. */
 export function snapshotScript(agentId: string, root: string = HOME_ROOT): string {
@@ -54,27 +47,20 @@ export function snapshotScript(agentId: string, root: string = HOME_ROOT): strin
     '  for f in IDENTITY SOUL AGENTS TOOLS; do [ -f "$J/agents/' + a + '/$f.md" ] && echo "$J/agents/' + a + '/$f.md"; done',
     '  find "$J/memory" "$J/dreams" "$J/people" "$J/groups" "$J/self_improvement" "$J/docs" "$J/agents/' + a + '/skills" -type f 2>/dev/null',
     '} | while IFS= read -r f; do printf "F\\t%s\\t%s\\t%s\\n" "${f#$J/}" "$(hs "$f")" "$(mt "$f")"; done',
-    'for f in ' + PLATFORM_SKILLS_ROOT + '/*/SKILL.md; do [ -f "$f" ] && awk ' + shq(PLATFORM_SKILL_AWK) + ' "$f"; done',
     'true',
   ].join('\n');
 }
 
 export function parseSnapshot(stdout: string): HomeSnapshot {
   const files: HomeSnapshot['files'] = [];
-  const platformSkills: NonNullable<HomeSnapshot['platformSkills']> = [];
   let synced = false;
   for (const line of stdout.split('\n')) {
     if (line === 'S 1') synced = true;
     const [tag, path, hash, mtime] = line.split('\t');
-    if (tag === 'P') {
-      // `P <path> <name> <description>`: the columns are reused, so `hash` is the name and `mtime` the description here.
-      if (path !== undefined && hash !== undefined && platformSkills.length < MAX_PLATFORM_SKILLS) platformSkills.push({ path, name: hash, description: mtime ?? '' });
-      continue;
-    }
     if (tag !== 'F' || path === undefined || hash === undefined || homePathError(path) !== null || !/^[0-9a-f]{64}$/.test(hash)) continue;
     files.push({ path, hash, mtime: Number(mtime) || 0 });
   }
-  return { synced, files, platformSkills };
+  return { synced, files };
 }
 
 /**

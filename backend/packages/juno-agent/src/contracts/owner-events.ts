@@ -98,6 +98,7 @@ function eventPointers(event: AgentEvent): EventPointer[] {
       push('computers', event.computerId);
       break;
     case 'item.added':
+    case 'item.deleted':
       push('conversations', event.conversationId);
       break;
     case 'conversation.created':
@@ -128,6 +129,12 @@ function eventPointers(event: AgentEvent): EventPointer[] {
       break;
     case 'idea.updated':
       pushDoc('ideas', event.idea);
+      break;
+    case 'idea.deleted':
+      push('ideas', event.ideaId);
+      break;
+    case 'feed.deleted':
+      push('feedPosts', event.postId);
       break;
     case 'task.updated':
       push('agents', event.task.agentId);

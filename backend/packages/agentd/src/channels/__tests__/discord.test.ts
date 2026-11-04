@@ -49,8 +49,9 @@ describe('parseDiscordMessage', () => {
     expect(event).toMatchObject({ chatType: 'group', text: 'hi  there' });
   });
 
-  it('ignores a guild message that does not address the bot', () => {
-    expect(parseDiscordMessage(msg({ guild_id: 'g1', content: 'chatter', mentions: [{ id: '9' }] }), BOT)).toBeNull();
+  it('marks a guild message that does not address the bot, so the agent only observes it', () => {
+    expect(parseDiscordMessage(msg({ guild_id: 'g1', content: 'chatter', mentions: [{ id: '9' }] }), BOT)).toMatchObject({ chatType: 'group', addressed: false });
+    expect(parseDiscordMessage(msg({ guild_id: 'g1', content: `<@${BOT}> hi`, mentions: [{ id: BOT }] }), BOT)).not.toHaveProperty('addressed');
   });
 
   it('keeps a reply to the bot', () => {

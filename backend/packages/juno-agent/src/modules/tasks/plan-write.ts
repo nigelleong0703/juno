@@ -14,7 +14,7 @@
 import type { Store } from '../../contracts/index.js';
 import type { Todo } from '@agent-desktop/public-contracts';
 import { canonicalPlanId, readTaskPlan, type TaskPlan, type TodoDraft } from './state.js';
-import { childPlanFor, readRunBinding } from './plan-binding.js';
+import { subagentPlanFor, readRunBinding } from './plan-binding.js';
 import { emitAgentStatus } from '../../execution/agent-status.js';
 import { asPlan } from './plan-target.js';
 
@@ -34,13 +34,13 @@ export async function writeBoundTaskPlan(
   const binding = await readRunBinding(store, agentId, conversationId, runId);
   if (binding.scope === 'child') {
     if (binding.parentRunId === undefined) throw new Error('child binding missing parent for run ' + runId);
-    return writeChildPlan(store, agentId, conversationId, runId, binding.parentRunId, binding.planId, drafts, merge);
+    return writeSubagentPlan(store, agentId, conversationId, runId, binding.parentRunId, binding.planId, drafts, merge);
   }
   return writeTaskPlan(store, agentId, conversationId, runId, drafts, merge);
 }
 
 /** Upsert the reserved child plan for one child run, creating it with its scope link on first write. */
-async function writeChildPlan(
+async function writeSubagentPlan(
   store: Store,
   agentId: string,
   conversationId: string,
@@ -50,7 +50,7 @@ async function writeChildPlan(
   drafts: TodoDraft[],
   merge: boolean,
 ): Promise<TaskPlan> {
-  const existing = await childPlanFor(store, planId, agentId, conversationId, childRunId, parentRunId);
+  const existing = await subagentPlanFor(store, planId, agentId, conversationId, childRunId, parentRunId);
   const before = new Map((existing?.todos ?? []).map((todo) => [todo.id, todo]));
   const listed = existing !== null && merge ? mergeDrafts(existing.todos, drafts) : drafts.map((draft) => ({ status: 'pending' as const, ...draft }));
   const carried = listed.map((todo) => carryConfigured(todo, before.get(todo.id)));

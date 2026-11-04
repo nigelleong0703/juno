@@ -9,7 +9,7 @@
  * event, and polls the row; the coordinator's POST handler marks it `done` with the answer. A worker that sees the declaration
  * gone while it waits treats the call as lost (the app disconnected), so nothing needs to find the waiting process.
  */
-import { PHONE_CALL_NEEDS, type PhoneAction, type PhoneCallAction, type PhoneCallResult, type PhoneDeclaration } from '@agent-desktop/public-contracts';
+import { PHONE_ACTIONS, PHONE_CALL_NEEDS, type PhoneAction, type PhoneCallAction, type PhoneCallResult, type PhoneDeclaration } from '@agent-desktop/public-contracts';
 import type { Store } from '../contracts/index.js';
 import { patchWhen } from '../contracts/index.js';
 import { pollFor } from './poll.js';
@@ -21,15 +21,38 @@ export const PHONE_CALL_TIMEOUT_MS = 20_000;
 /** How often a waiting worker looks at its call row. */
 const CALL_POLL_MS = 150;
 
-export const PHONE_CLOSED = "The iPhone app isn't open. Ask the owner to open Juno on their phone and try again; nothing was done.";
+/**
+ * The server's link to the iPhone app is the app's live connection, which drops for a few seconds when the app reconnects, so
+ * "no link" is not proof that the person is away from the app: a person who is writing to the agent from the Juno app has it open.
+ */
+export const PHONE_CLOSED = "The iPhone app isn't connected to the server at this moment, so nothing was done. This is often a few-second drop: if the person is writing to you from the Juno app they are in it, so do not tell them the app is closed or to open it; try the call once more. If it still fails, say you can't reach their phone right now and carry on without it.";
+
+/**
+ * What each declared action means in words: `cant` finishes "Juno on the iPhone can't ..." when it is missing, `row` is the row of
+ * Juno > Settings > iPhone access the owner switches on, `does` is what the agent may do with it (the context note). One entry per
+ * action; a new action in the contract does not compile until it has its words here.
+ */
+export const PHONE_ACTION_INFO: Record<PhoneAction, { cant: string; row: string; does: string }> = {
+  'calendar.read': { cant: 'read the calendar', row: 'Calendar', does: 'list calendars and events' },
+  'calendar.write': { cant: 'add to the calendar', row: 'Calendar', does: 'add events' },
+  'reminders.read': { cant: 'read reminders', row: 'Reminders', does: 'list reminders' },
+  'reminders.write': { cant: 'change reminders', row: 'Reminders', does: 'add, change, complete and delete reminders' },
+  'contacts.read': { cant: 'look up contacts', row: 'Contacts', does: 'search contacts by name, phone number or email' },
+  'contacts.write': { cant: 'add to contacts', row: 'Contacts', does: 'add a contact, or a phone number or email to one' },
+  'location.read': { cant: 'read where the phone is', row: 'Location', does: 'read the current location, approximate unless the owner allowed precise' },
+  'health.read': { cant: 'read health data', row: 'Health', does: 'read totals for steps, active energy, workouts, sleep and body weight over a date range' },
+  'photos.read': { cant: 'look in the photo library', row: 'Photos', does: 'search the photo library (only what the owner shared when access is limited) and send one chosen photo into the chat' },
+  'music.read': { cant: 'see what is playing', row: 'Music', does: 'read what Apple Music is playing' },
+  'music.control': { cant: 'control music', row: 'Music', does: 'play a song, album or playlist from Apple Music and pause, resume or skip' },
+  'home.read': { cant: 'look at the home', row: 'Home', does: 'list homes, rooms and accessories with their state' },
+  'home.write': { cant: 'control home accessories', row: 'Home', does: 'turn an accessory on or off or set a brightness, temperature or position (never locks, garage doors or alarms)' },
+};
 
 /** What the agent is told when a call needs an action the app did not declare (the owner can fix it in the app's settings). */
-const MISSING: Record<PhoneAction, string> = {
-  'calendar.read': "Juno on the iPhone can't read the calendar right now (access isn't allowed). Ask the owner to allow Calendars in Juno > Settings > iPhone calendar and reminders (or iPhone Settings > Juno); nothing was done.",
-  'calendar.write': "Juno on the iPhone can't add to the calendar right now (access isn't allowed). Ask the owner to allow Calendars in Juno > Settings > iPhone calendar and reminders (or iPhone Settings > Juno); nothing was done.",
-  'reminders.read': "Juno on the iPhone can't read reminders right now (access isn't allowed). Ask the owner to allow Reminders in Juno > Settings > iPhone calendar and reminders (or iPhone Settings > Juno); nothing was done.",
-  'reminders.write': "Juno on the iPhone can't change reminders right now (access isn't allowed). Ask the owner to allow Reminders in Juno > Settings > iPhone calendar and reminders (or iPhone Settings > Juno); nothing was done.",
-};
+function missingText(action: PhoneAction): string {
+  const { cant, row } = PHONE_ACTION_INFO[action];
+  return `Juno on the iPhone can't ${cant} right now (access isn't allowed). Ask the owner to switch on ${row} in Juno > Settings > iPhone access (or iPhone Settings > Juno); nothing was done.`;
+}
 
 export type PhoneOutcome =
   | { kind: 'done'; result: PhoneCallResult }
@@ -59,7 +82,7 @@ export async function phoneRefusal(store: Store, ownerId: string, call: PhoneCal
   const declaration = await phoneDeclaration(store, ownerId);
   if (declaration === undefined) return PHONE_CLOSED;
   const missing = PHONE_CALL_NEEDS[call].find((action) => !declaration.actions.includes(action));
-  return missing === undefined ? undefined : MISSING[missing];
+  return missing === undefined ? undefined : missingText(missing);
 }
 
 /**
@@ -116,26 +139,22 @@ export async function callPhone(input: PhoneCallInput): Promise<PhoneOutcome> {
   }
 }
 
-const ACTION_WORDS: Record<PhoneAction, string> = {
-  'calendar.read': 'calendar.read (list calendars and events)',
-  'calendar.write': 'calendar.write (add events)',
-  'reminders.read': 'reminders.read (list reminders)',
-  'reminders.write': 'reminders.write (add, change, complete and delete reminders)',
-};
+const actionWords = (action: PhoneAction): string => `${action} (${PHONE_ACTION_INFO[action].does})`;
 
 /**
- * The agent's context note about the iPhone: what the open app declared. Part of the appended context (a change adds one note),
+ * The agent's context note about the iPhone: what the open app declared (the actions the owner switched on in Juno > Settings >
+ * iPhone access; nothing is declared until a switch is on). Part of the appended context (a change adds one note),
  * never the frozen system prompt. Empty while the app is not open and nothing was said about it before.
  */
 export async function buildPhoneSection(store: Store, ownerId: string | undefined): Promise<string> {
   const declaration = await phoneDeclaration(store, ownerId);
   if (declaration === undefined) return '';
-  const missing = (Object.keys(ACTION_WORDS) as PhoneAction[]).filter((action) => !declaration.actions.includes(action));
-  const can = declaration.actions.map((action) => ACTION_WORDS[action]).join(', ');
+  const missing = PHONE_ACTIONS.filter((action) => !declaration.actions.includes(action));
+  const can = declaration.actions.map(actionWords).join(', ');
   return '## Your iPhone\n- The user\'s iPhone app is open (' + JSON.stringify(declaration.name) + ', ' + declaration.osVersion + ') and declares these actions: ' + (can === '' ? 'none' : can) + '.'
     + (missing.length === 0 ? '' : ' Not allowed on the phone: ' + missing.join(', ') + '; a call for those is refused, so tell the user what to allow in the app instead of retrying.')
-    + ' The phone_* tools (find them with tool_search) work only while the app is open: if it closes they are refused, and the user must open Juno on their phone. Changing an existing event needs read and write calendar access. A change that gets no answer in time may or may not have been applied: read before trying again.';
+    + ' The phone_* tools (find them with tool_search) go through the app\'s live connection; if it has dropped a call is refused and says so. The user is in the app whenever they write to you from it: never tell them the app looks closed or to open it. Changing an existing event needs read and write calendar access. A change that gets no answer in time may or may not have been applied: read before trying again.';
 }
 
 /** Said when a section that was delivered is now empty: the app closed or its declaration was withdrawn. */
-export const PHONE_SECTION_GONE = '## Your iPhone\n- The user\'s iPhone app is not open right now, so the phone_* tools are refused. If you need the phone calendar or reminders, ask the user to open Juno on their phone.';
+export const PHONE_SECTION_GONE = '## Your iPhone\n- The server has no live connection to the user\'s iPhone app at this moment (it drops for a few seconds when the app reconnects), so phone_* calls may be refused. That does not mean the user is away from the app: if they are writing to you from the Juno app they are in it, so never say the app looks closed or tell them to open it. If you need something on the phone, try the call; if it is refused, say you can\'t reach their phone right now.';

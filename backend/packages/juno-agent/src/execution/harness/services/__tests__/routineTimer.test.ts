@@ -39,6 +39,9 @@ function fakeCtx(state: Map<string, unknown>, sends: SentCall[], sessionStates: 
       receive: (event: unknown) => {
         sends.push({ service: 'Session', key, handler: 'receive', payload: event });
       },
+      refire: (params: unknown, options?: { delay?: number }) => {
+        sends.push({ service: 'RoutineTimer', key, handler: 'refire', payload: { params, delay: options?.delay } });
+      },
     }),
     objectClient: (_def: unknown, key: string) => ({
       getState: async () => sessionStates.get(key) ?? { activeRunId: undefined },
@@ -122,6 +125,45 @@ describe('routine timer adapter', () => {
     const notices = await store.list('items', { where: { conversationId: 'conv-1' } });
     expect(notices.items.some((item) => (item as { type: string }).type === 'system')).toBe(true);
   });
+  it('a run that failed on a provider outage is sent again later and is not counted; only its last attempt is', async () => {
+    const store = createMemoryStore();
+    const owned = { ...routine(), ownerId: 'owner-1' };
+    await store.put('routines', owned);
+    await seedChat(store);
+    const state = new Map<string, unknown>();
+    const sends: SentCall[] = [];
+    const service = createRoutineTimerHandlers({ store, enqueuer: new RecordingEnqueuer() });
+    const wake = { id: 'wake_routine_rtn-1:x_r1', sessionKey: 'agent-1:conv-1', payload: { routineId: 'rtn-1' } } as never;
+    // Five outages in a row do not pause the routine: each is a history line and a delayed re-fire, never a failure on the streak.
+    for (let i = 0; i < 5; i += 1) {
+      await service.recordCompletion(fakeCtx(state, sends, new Map()), { routineId: 'rtn-1', runId: 'run-out-' + String(i), succeeded: false, itemsGenerated: 0, summary: 'Model quota exhausted (429)', refire: { wake, delayMs: 600_000 } });
+    }
+    const refires = sends.filter((call) => call.handler === 'refire');
+    expect(refires).toHaveLength(5);
+    expect(refires[0]?.payload).toMatchObject({ delay: 600_000, params: { routineId: 'rtn-1' } });
+    expect((await store.get('routines', 'rtn-1'))?.enabled).toBe(true);
+    expect((await store.get('routines', 'rtn-1'))?.runs.map((entry) => entry.status)).toEqual(['failed', 'failed', 'failed', 'failed', 'failed']);
+    expect(state.get('state')).toBeUndefined();
+    // The last attempt (no refire) is the one that counts.
+    await service.recordCompletion(fakeCtx(state, sends, new Map()), { routineId: 'rtn-1', runId: 'run-last', succeeded: false, itemsGenerated: 0 });
+    expect(state.get('state')).toMatchObject({ failStreak: 1 });
+  });
+
+  it('the re-fire delivers the same occurrence to the delivery session, unless the routine was switched off meanwhile', async () => {
+    const store = createMemoryStore();
+    const owned = { ...routine(), ownerId: 'owner-1' };
+    await store.put('routines', owned);
+    await seedChat(store);
+    const sends: SentCall[] = [];
+    const service = createRoutineTimerHandlers({ store, enqueuer: new RecordingEnqueuer() });
+    const wake = { id: 'wake_routine_rtn-1:x_r1', sessionKey: 'agent-1:conv-1', kind: 'routine', payload: { routineId: 'rtn-1', occurrenceAt: AT, retry: { attempt: 1, firstAttemptAt: AT } } } as never;
+    await service.refire(fakeCtx(new Map(), sends, new Map()), { routineId: 'rtn-1', wake });
+    expect(receiveIds(sends)).toEqual(['wake_routine_rtn-1:x_r1']);
+    await store.patch('routines', 'rtn-1', { enabled: false });
+    await service.refire(fakeCtx(new Map(), sends, new Map()), { routineId: 'rtn-1', wake });
+    expect(receiveIds(sends)).toHaveLength(1);
+  });
+
   it('versions arms so stale fires are skipped', async () => {
     const store = createMemoryStore();
     const owned = { ...routine(), ownerId: 'owner-1' };

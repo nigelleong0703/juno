@@ -80,16 +80,22 @@ describe('worker leases on real Postgres', () => {
     const b = first.enqueue({ service: 'Lane', key: 'same', handler: 'slow', input: 'b' });
     const c = first.enqueue({ service: 'Lane', key: 'other', handler: 'slow', input: 'c' });
     await live;
-    // Two distinct keys are live at once, the second same-key invocation has not started. The order in which two
-    // independent keys are claimed is the database's choice.
-    expect([...events.filter((event) => event.startsWith('start'))].sort()).toEqual(['start a', 'start c']);
+    // Two distinct keys are live at once and exactly one of the same-key pair has started. a and b are enqueued without awaiting
+    // each other, so which row is written (and claimed) first is not ordered by the test (CI saw b first, 2026-11-02).
+    const starts = (): string[] => events.filter((event) => event.startsWith('start'));
+    const sameStarts = (): string[] => starts().filter((event) => event === 'start a' || event === 'start b');
+    expect(sameStarts()).toHaveLength(1);
+    expect(starts()).toContain('start c');
+    const first1 = sameStarts()[0]!.slice('start '.length);
+    const second1 = first1 === 'a' ? 'b' : 'a';
     await second.start();
     await settle(150);
-    expect([...events.filter((event) => event.startsWith('start'))].sort()).toEqual(['start a', 'start c']);
+    // The second worker never steals the healthy invocation: still only one of the pair has started.
+    expect(sameStarts()).toEqual(['start ' + first1]);
     open2();
     await Promise.all([a, b, c]);
     await eventually(() => expect(events.filter((event) => event.startsWith('end'))).toHaveLength(3));
-    expect(events.indexOf('start b')).toBeGreaterThan(events.indexOf('end a'));
+    expect(events.indexOf('start ' + second1)).toBeGreaterThan(events.indexOf('end ' + first1));
   });
 
   it('renews a live lease so a starting worker cannot take it, then hands over on a graceful stop', async () => {

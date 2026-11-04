@@ -2,7 +2,7 @@
 
 import type { BrowserInput, ComputerClient } from '../../../modules/tools/index.js';
 import { meetInput, parseMeet, browserInput, fileWrite, isRecord, parseBrowser, parseCopy, parseEnvironment, parseFileRead, parseFileWrite, parseNavigate, parseProcessOutput, parseProcessSnapshot, parseProcessStop, parseProcessWrite, parseRecording, parseScreenshot, parseShell, point, processRead, processStart, processWrite, recordAudioInput, scroll, shell, jevMcpStart, jevMcpRead, jevMcpWrite } from './codec.js';
-import { createRequester, type MacAccessResolver, type OwnerResolver } from './http.js';
+import { createRequester, type MacAccessResolver, type OwnerResolver, type Requester } from './http.js';
 import { ComputerError, type HomeComputer, type MacDesktopResult, homeContentSchema, homeExtractedTextSchema, homePutResultSchema, homeSnapshotSchema } from '../../../ports/computer/index.js';
 
 const MAC_SCREEN_ACTIONS: ReadonlySet<string> = new Set([
@@ -43,7 +43,7 @@ export function createComputerdClient(opts: ComputerdClientOptions): ComputerCli
     ...(on === 'mac' && (/^(shell|files|processes)\//.test(action) || MAC_SCREEN_ACTIONS.has(action)) ? { on: 'mac' as const } : {}),
   });
 
-  const home: HomeComputer = {
+  const homeOf = (request: Requester): HomeComputer => ({
     async snapshot(agentId, signal) {
       return parseHome(homeSnapshotSchema, await request.json({ method: 'POST', path: '/v1/home/snapshot', agentId, body: { agentId }, signal }));
     },
@@ -77,7 +77,13 @@ export function createComputerdClient(opts: ComputerdClientOptions): ComputerCli
     async ensure(agentId, path, signal) {
       await request.send({ method: 'POST', path: '/v1/home/ensure', agentId: homeAgent(agentId), body: { path }, signal });
     },
-  };
+  });
+  /** The same calls, each marked passive: computerd serves them only from a computer that is already running. */
+  const passive = (inner: Requester): Requester => ({
+    json: (spec) => inner.json({ ...spec, passive: true }),
+    send: (spec) => inner.send({ ...spec, passive: true }),
+  });
+  const home: HomeComputer = { ...homeOf(request), whileRunning: () => homeOf(passive(request)) };
 
   return {
     home,
@@ -150,6 +156,12 @@ export function createComputerdClient(opts: ComputerdClientOptions): ComputerCli
     },
     async ensureScreen(agentId, signal) {
       await request.send({ ...screen(agentId, 'ensure'), body: {}, signal });
+    },
+    async hold(agentId, holdId, ttlMs, signal) {
+      await request.send({ method: 'PUT', path: `/v1/computer/holds/${encodeURIComponent(holdId)}`, agentId, body: { ttlMs }, signal });
+    },
+    async release(agentId, holdId, signal) {
+      await request.send({ method: 'DELETE', path: `/v1/computer/holds/${encodeURIComponent(holdId)}`, agentId, signal });
     },
     async startProcess(agentId, input, signal, on) {
       return parseProcessSnapshot(await request.json({ ...screen(agentId, 'processes/start', on), body: processStart(input), signal }));

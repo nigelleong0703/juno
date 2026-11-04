@@ -1,16 +1,16 @@
 import { z } from 'zod';
-import type { RestatePromise } from '@agent-desktop/durable';
+import type { DurablePromise } from '@agent-desktop/durable';
 import type { Doc, Store, ToolReconciliation, ToolResult } from '../../../contracts/index.js';
 import { CANCELLED, NEVER_CANCELLED, type RunCancellation } from './cancel.js';
 import { redactText } from './redaction.js';
 
 /**
- * The slice of Restate's WorkflowContext the tool loop needs. Keeping it narrow makes the fence
- * logic unit-testable without the SDK; a real WorkflowContext is structurally assignable.
+ * The slice of the workflow context the tool loop needs. Keeping it narrow makes the fence
+ * logic unit-testable without the runner; a real WorkflowContext is structurally assignable.
  */
 export interface ToolRunContext {
   rand: { uuidv4(): string };
-  run<T>(name: string, action: () => Promise<T>): RestatePromise<T>;
+  run<T>(name: string, action: () => Promise<T>): DurablePromise<T>;
 }
 
 /**
@@ -23,6 +23,10 @@ const executionEnvelopeSchema = z.object({
     .object({
       fencedAt: z.string().optional(),
       legacyBinding: z.boolean().optional(),
+      /** The agent was told this action may or may not have happened (uncertain-action.ts): when, and in which run. */
+      notice: z.object({ at: z.string(), runId: z.string() }).optional(),
+      /** The agent read after the notice and went on, or the person said to do it again: the action no longer fences an identical call. */
+      releasedAt: z.string().optional(),
       intent: z.object({
         ownerId: z.string().min(1), agentId: z.string().min(1), tool: z.string().min(1), fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
         conversationId: z.string().optional(), connectionId: z.string().optional(), account: z.string().optional(), attempt: z.number().int().positive().optional(),
@@ -45,7 +49,7 @@ const executionEnvelopeSchema = z.object({
           isError: z.boolean().optional(),
           suspend: z
             .object({
-              reason: z.enum(['user', 'time', 'event', 'child']),
+              reason: z.enum(['user', 'time', 'event']),
               awakeableId: z.string().optional(),
               until: z.string().optional(),
             })
@@ -74,6 +78,21 @@ async function writeExecution(store: Store, step: Doc<'steps'>, execution: StepE
     execution: { ...readExecution(current), ...execution },
   };
   await store.put('steps', next, { runId: step.runId });
+}
+
+/** Record on the fenced step that the agent was told its outcome is uncertain. The first notice stands (its time starts the "read since" window). */
+export async function markNoticed(store: Store, step: Doc<'steps'>, runId: string): Promise<{ at: string; runId: string }> {
+  const current = readExecution(await store.get('steps', step.id));
+  if (current?.notice !== undefined) return current.notice;
+  const notice = { at: new Date().toISOString(), runId };
+  await writeExecution(store, step, { ...current, notice });
+  return notice;
+}
+
+/** The uncertain action no longer holds back an identical call. */
+export async function releaseFence(store: Store, step: Doc<'steps'>): Promise<void> {
+  const current = readExecution(await store.get('steps', step.id));
+  if (current?.releasedAt === undefined) await writeExecution(store, step, { ...current, releasedAt: new Date().toISOString() });
 }
 
 /** Bind an encountered historical fence conservatively; unknown historical arguments still require review. */
@@ -211,7 +230,8 @@ export async function runFencedTool(
     // a stop: the step is reported interrupted (the effect, if it happened, is not claimed undone).
     if (cancellation.state.cancelled) return { result: interruptedResult(name), interrupted: true, cancelled: true };
     const errorKind = result.details?.['errorKind'];
-    if (result.isError === true && (errorKind === 'timeout' || errorKind === 'external' || errorKind === 'harness')) {
+    // A refusal the tool knows came before anything ran (a server's HTTP 4xx answer, `details.notExecuted`) is a plain failure, never an unknown effect.
+    if (result.isError === true && result.details?.['notExecuted'] !== true && (errorKind === 'timeout' || errorKind === 'external' || errorKind === 'harness')) {
       const reason = redactText(result.content.filter((block) => block.type === 'text').map((block) => block.text).join('\n') || `The ${name} action returned an ambiguous ${String(errorKind)} error.`).slice(0, 500);
       const evidence: ToolReconciliation = { status: 'unknown', reason };
       await writeExecution(store, step, { ...current, reconciliation: { status: 'unknown', reason, checkedAt: new Date().toISOString() } });

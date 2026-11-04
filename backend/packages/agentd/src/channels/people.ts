@@ -37,7 +37,8 @@ export function senderAccountOf(kind: string, workspace: string, sender: { id: s
 
 /**
  * What a sighting is for: the owner (their account is linked to the owner's person), and whether a person should be made for a
- * stranger's account. A DM sender always gets one; a group sender only when the message addresses the agent (see addressesAgent).
+ * stranger's account. A DM sender always gets one; a group sender when the message is addressed to the agent (a mention or a reply: the platform only delivers those
+ * as addressed), which is what makes them a known person of the group (a teammate, BACKEND 6.8). A message the agent only observes makes none.
  */
 export interface SenderRole {
   owner: boolean;
@@ -62,17 +63,6 @@ export async function recordSender(identity: Identity, ownerId: string, sender: 
   const self = await identity.ensureOwner(ownerId, OWNER_PERSON_NAME);
   if (seen.account.personId !== self.id) await identity.linkAccount(ownerId, seen.account.id, self.id);
   return self;
-}
-
-/**
- * Whether a message addresses the agent: any private message does; in a group, a mention of this channel's own bot (the platform's
- * `addressesSelf`: its user id, on Telegram also its username). A reply to the agent's message is not in the platform event, so it
- * does not count here.
- */
-export function addressesAgent(channels: ChannelRegistry, chatType: 'private' | 'group', mentions: ReadonlyArray<{ id: string; handle?: string }> | undefined, channel: ChannelRow): boolean {
-  if (chatType === 'private') return true;
-  const identity = channels.get(channel.kind)?.adapter.identity;
-  return (mentions ?? []).some((person) => identity?.addressesSelf(channel, person) === true);
 }
 
 /**

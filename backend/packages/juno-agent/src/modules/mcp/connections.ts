@@ -8,6 +8,7 @@ import type { Store } from '../../contracts/index.js';
 import { decryptSecret, encryptSecret } from '../../contracts/secrets.js';
 import type { Connection } from '@agent-desktop/public-contracts';
 import { readString, readStringArray, safeGet } from '../../execution/brain/social-read.js';
+import { hostedEndpointUrl, isStoredHostedEndpoint } from '../tools/net/guardedFetch.js';
 import type { McpConnectionState, McpConnectionStatus } from './client.js';
 import type { McpServerConfig } from './config.js';
 
@@ -35,7 +36,7 @@ export function isConnectionEnabled(doc: object): boolean {
  * Rebuild the canonical server config from the stored endpoint plus the private transport fields.
  * Throws SecretsError when a stored env value cannot be decrypted (wrong key, tampered).
  */
-export function storedConfig(doc: object): McpServerConfig | null {
+export function storedConfig(doc: object, env: Record<string, string | undefined> = process.env): McpServerConfig | null {
   const endpoint = readString(doc, 'endpoint');
   if (endpoint === undefined) return null;
   if (readString(doc, 'transport') === 'stdio') {
@@ -46,10 +47,17 @@ export function storedConfig(doc: object): McpServerConfig | null {
     return { transport: 'stdio', command: endpoint, args, env };
   }
   // A connector whose headers carry the owner's own values (an API key) keeps them sealed, already resolved from `${user_config.KEY}`.
+  // A server our own gateway hosts is stored as its path alone and called at the current public origin (BACKEND 10.18.5).
+  const hosted = isStoredHostedEndpoint(endpoint);
+  const url = hosted ? hostedEndpointUrl(endpoint, env['BETTER_AUTH_URL']) : endpoint;
+  if (url === undefined) return null;
   const stored = envSchema.safeParse(Reflect.get(doc, 'headers'));
-  return stored.success && Object.keys(stored.data).length > 0
-    ? { transport: 'http', url: endpoint, headers: Object.fromEntries(Object.entries(stored.data).map(([name, value]) => [name, decryptSecret(value)])) }
-    : { transport: 'http', url: endpoint };
+  return {
+    transport: 'http',
+    url,
+    ...(stored.success && Object.keys(stored.data).length > 0 ? { headers: Object.fromEntries(Object.entries(stored.data).map(([name, value]) => [name, decryptSecret(value)])) } : {}),
+    ...(hosted ? { hosted: true as const } : {}),
+  };
 }
 
 export function connectionStatusFor(state: McpConnectionState): Connection['status'] {

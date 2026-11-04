@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Connection } from '@agent-desktop/public-contracts';
 import { createMemoryStore } from '../../../testing/store.js';
-import { accessSentence, agentAppSettings, appAccess, appIdOfConnection, appProblem, connectionStanding, problemsOf, settingFor, setAgentApp, usableApps } from '../agent-apps.js';
+import { accessSentence, agentAppSettings, appAccess, appIdOfConnection, appProblem, connectionInstallation, connectionStanding, problemsOf, settingFor, setAgentApp, usableApps } from '../agent-apps.js';
 
 const OWNER = 'owner-1';
 const NOW = '2026-10-26T00:00:00.000Z';
@@ -14,6 +14,13 @@ describe('how a connection stands', () => {
     expect(connectionStanding(connection('a', { status: 'error' }))).toBe('error');
     expect(connectionStanding(connection('a', { status: 'disconnected' }))).toBeUndefined();
     expect(connectionStanding(connection('a', { enabled: false }))).toBeUndefined();
+  });
+
+  it('the installation says it needs another permission when the row holds the provider\'s missing scope, whatever its status', () => {
+    const lacking = connection('c', { catalogId: 'gmail', connectedAt: NOW, ...{ needsScope: 'gmail.modify' } });
+    expect(connectionInstallation(lacking, 'gmail', 'Gmail')).toMatchObject({ status: 'connected', needsScope: true });
+    expect(connectionInstallation({ ...lacking, status: 'error' }, 'gmail', 'Gmail')).toMatchObject({ status: 'expired', needsScope: true });
+    expect(connectionInstallation(connection('c', { catalogId: 'gmail' }), 'gmail', 'Gmail')).not.toHaveProperty('needsScope');
   });
 
   it('an app is the catalog entry, or the custom server itself', () => {

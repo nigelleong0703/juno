@@ -58,7 +58,7 @@ describe('presence per run kind', () => {
   });
 
   it('a child task of the owner\'s chat is the owner (it runs in its parent\'s chat)', async () => {
-    const child = wakeOf({ origin: { type: 'agent', id: 'run-parent' }, trusted: false, kind: 'child_task', priority: 'background' });
+    const child = wakeOf({ origin: { type: 'agent', id: 'run-parent' }, trusted: false, kind: 'subagent_task', priority: 'background' });
     expect(await presence(await rooms(), 'c-app', [child])).toEqual({ kind: 'owner' });
   });
 

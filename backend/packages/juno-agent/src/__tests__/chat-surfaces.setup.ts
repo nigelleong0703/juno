@@ -5,7 +5,7 @@ import { declareCapabilities, NO_HISTORY, registerChatSurface } from '@agent-des
 
 registerChatSurface('discord', () => declareCapabilities({ ui: { fields: false } }));
 registerChatSurface('slack', () => declareCapabilities({ ui: { fields: false }, reactions: { mode: 'limited', allowed: ['👍', '👎', '❤️', '😂', '😄', '🎉'] } }));
-registerChatSurface('telegram', () => declareCapabilities({ history: NO_HISTORY, ui: { fields: false }, reactions: { mode: 'limited', allowed: ['👍', '👎', '❤', '🔥', '🥰', '👏'] } }));
+registerChatSurface('telegram', () => declareCapabilities({ history: NO_HISTORY, ui: { fields: false }, reactions: { mode: 'limited', allowed: ['👍', '👎', '❤', '🔥', '🥰', '👏'] }, threads: false }));
 registerChatSurface('feishu', (grants) => declareCapabilities({
   history: grants.includes('im:message.group_msg') ? { ...NO_HISTORY, onDemand: true } : NO_HISTORY,
   ui: { fields: false },

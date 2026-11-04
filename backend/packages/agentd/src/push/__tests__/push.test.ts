@@ -8,7 +8,7 @@ import { createMemoryStore } from '@agent-desktop/db';
 import type { Store } from '@agent-desktop/contracts';
 import { EventType, type AgentEvent, type Run } from '@agent-desktop/public-contracts';
 import { apnsConfigFromEnv, createApnsSender, signProviderToken, type ApnsPayload, type ApnsTransport } from '../apns.js';
-import { createPushNotifier, noticeFor } from '../notifier.js';
+import { createPushNotifier, noticeFor, sendPushRow, type PushAttempt, type PushSenders } from '../notifier.js';
 
 const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
 const PEM = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
@@ -114,6 +114,12 @@ describe('notice selection', () => {
     });
     expect(await noticeFor({ type: 'request.created', request: { ...base, kind: 'question' } } as unknown as AgentEvent)).not.toBeNull();
     expect(await noticeFor({ type: 'request.created', request: { ...base, kind: 'admin' } } as unknown as AgentEvent)).toBeNull();
+    // A take-over waits on the person's hands: it notifies, with the instruction as the body.
+    expect(await noticeFor({ type: 'request.created', request: { ...base, kind: 'computer', title: 'Your help is needed on the screen', summary: 'Solve the captcha, then tap Hand back' } } as unknown as AgentEvent, 'Mira')).toMatchObject({
+      title: 'Mira needs you',
+      body: 'Solve the captcha, then tap Hand back',
+    });
+    expect(await noticeFor({ type: 'request.created', request: { ...base, kind: 'secure_input', title: 'Enter details for shaw.sg' } } as unknown as AgentEvent)).not.toBeNull();
     const long = await noticeFor({ type: 'request.created', request: { ...base, title: 'x'.repeat(1000) } } as unknown as AgentEvent);
     expect(long?.body.length).toBeLessThanOrEqual(180);
   });
@@ -137,6 +143,13 @@ describe('notice selection', () => {
   });
 });
 
+/** Queue an event's rows and try each once, as the outbox sender does. */
+async function push(store: Store, senders: PushSenders, event: AgentEvent): Promise<{ queued: number; outcomes: PushAttempt[] }> {
+  const queued = await createPushNotifier({ store, senders }).handle(event);
+  const rows = (await store.list('outbox', { where: { status: 'pending' }, limit: 20 })).items;
+  return { queued, outcomes: await Promise.all(rows.map((row) => sendPushRow({ store, senders }, row))) };
+}
+
 describe('push notifier', () => {
   async function seeded(): Promise<Store> {
     const mem = createMemoryStore();
@@ -150,19 +163,19 @@ describe('push notifier', () => {
 
   const requestEvent = { type: 'request.created', request: { id: 'req-1', kind: 'approval', title: 'Send the email', agentId: 'agent-1', conversationId: 'conv-1', status: 'pending', summary: '', payload: {}, createdAt: '2026-10-11T00:00:00.000Z' } } as unknown as AgentEvent;
 
-  it('sends to the owning account devices only, with deep-link ids in the payload', async () => {
+  it('queues one row per device of the owning account only and sends them with deep-link ids in the payload', async () => {
     const store = await seeded();
     const sent: Array<{ token: string; environment: string; payload: ApnsPayload }> = [];
-    const notifier = createPushNotifier({
-      store,
+    const { queued, outcomes } = await push(store, {
       ios: {
         send: async (target, payload) => {
           sent.push({ token: target.token, environment: target.environment, payload });
           return 'sent';
         },
       },
-    });
-    await notifier.handle(requestEvent);
+    }, requestEvent);
+    expect(queued).toBe(1);
+    expect(outcomes).toEqual([{ status: 'sent' }]);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ token: TOKEN, environment: 'sandbox' });
     expect(sent[0]!.payload).toMatchObject({
@@ -173,34 +186,43 @@ describe('push notifier', () => {
     });
   });
 
+  it('queues the same notice once however often the event is offered, and the row exists before anything is sent', async () => {
+    const store = await seeded();
+    const notifier = createPushNotifier({ store, senders: { ios: { send: async () => { throw new Error('boom'); } } } });
+    expect(await notifier.handle(requestEvent)).toBe(1);
+    expect(await notifier.handle(requestEvent)).toBe(0);
+    const rows = (await store.list('outbox', { limit: 10 })).items;
+    expect(rows).toMatchObject([{ id: 'obx:push:req-1:dev-a', status: 'pending', kind: 'push', platform: 'ios', ownerId: 'owner-a' }]);
+  });
+
+  it('catches up the notice of a request that never got its rows (a crash between the event and the rows)', async () => {
+    const store = await seeded();
+    const notifier = createPushNotifier({ store, senders: { ios: { send: async () => 'sent' } } });
+    expect(await notifier.catchUp(Date.parse('2026-10-10T00:00:00.000Z'))).toBe(1);
+    expect(await notifier.catchUp(Date.parse('2026-10-10T00:00:00.000Z'))).toBe(0);
+  });
+
   it('falls back to a generic name when the agent cannot be read', async () => {
     const store = await seeded();
     await store.forOwner!('owner-a').delete('agents', 'agent-1');
     const titles: string[] = [];
-    const notifier = createPushNotifier({ store, ios: { send: async (_target, payload) => { titles.push(payload.aps.alert.title); return 'sent'; } } });
-    await notifier.handle(requestEvent);
+    await push(store, { ios: { send: async (_target, payload) => { titles.push(payload.aps.alert.title); return 'sent'; } } }, requestEvent);
     expect(titles).toEqual(['Your agent needs you']);
   });
 
-  it('forgets a device APNs reports as dead and keeps the others', async () => {
+  it('forgets a device APNs reports as dead and says the row is for nothing (token_invalid), keeping the others', async () => {
     const store = await seeded();
-    const notifier = createPushNotifier({ store, ios: { send: async () => 'invalid_token' } });
-    await notifier.handle(requestEvent);
+    const { outcomes } = await push(store, { ios: { send: async () => 'invalid_token' } }, requestEvent);
+    expect(outcomes).toMatchObject([{ status: 'failed', failure: { kind: 'token_invalid' } }]);
     expect(await store.forOwner!('owner-a').list('devices')).toMatchObject({ items: [] });
     expect(await store.forOwner!('owner-b').list('devices')).toMatchObject({ items: [expect.objectContaining({ id: 'dev-b' })] });
   });
 
-  it('never throws into the caller when the sender fails', async () => {
+  it('reports a refused or unreachable push as transient, so the outbox retries it', async () => {
     const store = await seeded();
-    const notifier = createPushNotifier({
-      store,
-      ios: {
-        send: async () => {
-          throw new Error('boom');
-        },
-      },
-    });
-    await expect(notifier.handle(requestEvent)).resolves.toBeUndefined();
+    const { outcomes } = await push(store, { ios: { send: async () => 'failed' } }, requestEvent);
+    expect(outcomes).toMatchObject([{ status: 'failed', failure: { kind: 'transient' } }]);
+    expect(await store.forOwner!('owner-a').list('devices')).toMatchObject({ items: [expect.anything()] });
   });
 });
 
@@ -223,31 +245,28 @@ describe('push notifier platform routing', () => {
     const store = await seeded();
     const apns: string[] = [];
     const fcm: Array<{ token: string; payload: unknown }> = [];
-    const notifier = createPushNotifier({
-      store,
+    await push(store, {
       ios: { send: async (target) => { apns.push(target.token); return 'sent'; } },
       android: { send: async (target, payload) => { fcm.push({ token: target.token, payload }); return 'sent'; } },
-    });
-    await notifier.handle(requestEvent);
+    }, requestEvent);
     expect(apns).toEqual([TOKEN]);
     expect(fcm).toEqual([
       { token: FCM_TOKEN, payload: { title: 'Mira needs you', body: 'Send the email', data: { conversationId: 'conv-1', requestId: 'req-1', runId: 'run-1' } } },
     ]);
   });
 
-  it('skips Android devices when FCM is not configured, keeping them and still pushing iOS', async () => {
+  it('queues nothing for Android devices when FCM is not configured, keeping them and still pushing iOS', async () => {
     const store = await seeded();
     const apns: string[] = [];
-    const notifier = createPushNotifier({ store, ios: { send: async (target) => { apns.push(target.token); return 'sent'; } } });
-    await notifier.handle(requestEvent);
+    const { queued } = await push(store, { ios: { send: async (target) => { apns.push(target.token); return 'sent'; } } }, requestEvent);
+    expect(queued).toBe(1);
     expect(apns).toEqual([TOKEN]);
     expect(await store.forOwner!('owner-a').list('devices')).toMatchObject({ items: [expect.anything(), expect.anything()] });
   });
 
   it('forgets an Android device FCM reports as dead and keeps the iOS one', async () => {
     const store = await seeded();
-    const notifier = createPushNotifier({ store, ios: { send: async () => 'sent' }, android: { send: async () => 'invalid_token' } });
-    await notifier.handle(requestEvent);
+    await push(store, { ios: { send: async () => 'sent' }, android: { send: async () => 'invalid_token' } }, requestEvent);
     expect(await store.forOwner!('owner-a').list('devices')).toMatchObject({ items: [expect.objectContaining({ id: 'dev-ios' })] });
   });
 });
@@ -267,7 +286,7 @@ describe('feed brief push', () => {
     await mem.put('devices', { id: 'd1', ownerId: 'owner-a', platform: 'ios', token: TOKEN, environment: 'sandbox', bundleId: 'b' } as never);
     await mem.put('devices', { id: 'd2', ownerId: 'owner-b', platform: 'ios', token: 'b'.repeat(64), environment: 'sandbox', bundleId: 'b' } as never);
     const sent: string[] = [];
-    await createPushNotifier({ store: mem, ios: { send: async (device) => { sent.push(device.token); return 'sent'; } } }).handle(brief(['a']));
+    await push(mem, { ios: { send: async (device) => { sent.push(device.token); return 'sent'; } } }, brief(['a']));
     expect(sent).toEqual([TOKEN]);
   });
 });

@@ -1,7 +1,7 @@
 /**
  * Goal wakes (BACKEND §5.10): the one place that decides who is woken, in which chat and with what brief. The per-user tick
  * (`collectDueWakes`, called from MemoryTimer), the "Check now" route and the plan-on-create path all build their wake here.
- * Nothing in this file knows about Restate; the callers hand the wakes to a Session (Restate) or the Enqueuer (agentd).
+ * Nothing in this file knows about the runner; the callers hand the wakes to a Session or the Enqueuer (agentd).
  */
 import { randomUUID } from 'node:crypto';
 import type { Agent, Conversation, Goal, GoalMilestone } from '@agent-desktop/public-contracts';
@@ -28,9 +28,9 @@ function milestoneLine(milestone: GoalMilestone): string {
 const instructionsFor = (reason: CheckinReason): string => {
   switch (reason) {
     case 'plan': return harnessText('checkin.plan');
-    // Only the scheduled check-in is a run with finish_quietly (isQuietStartWake); the manual one is answered, so its text never names the tool.
-    case 'scheduled': return harnessText('checkin.scheduled', { rules: harnessText('checkin.rules', { quiet: ' ' + harnessText('checkin.quiet_step') }) });
-    case 'manual': return harnessText('checkin.manual', { rules: harnessText('checkin.rules', { quiet: '' }) });
+    // The scheduled check-in is a run nobody waits on (isUnattendedStartWake); the manual one is answered. Where the final text goes is said by the wake note, not here.
+    case 'scheduled': return harnessText('checkin.scheduled', { rules: harnessText('checkin.rules') });
+    case 'manual': return harnessText('checkin.manual', { rules: harnessText('checkin.rules') });
     case 'deadline': return harnessText('checkin.deadline');
   }
 };

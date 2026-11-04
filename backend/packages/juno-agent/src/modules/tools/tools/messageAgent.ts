@@ -51,7 +51,7 @@ export function createMessageAgentTool(opts: { store: Store; enqueuer: Enqueuer;
       const currentHop = ctx.wake.hop?.depth ?? 0;
       if (currentHop >= LIMITS.chain.maxHopDepth) {
         return errorResult(
-          'Error: message depth exceeds limit (' + String(currentHop) + ' >= ' + String(LIMITS.chain.maxHopDepth) + '). Agent-to-agent message loops are blocked.',
+          'Error: message depth exceeds limit (' + String(currentHop) + ' >= ' + String(LIMITS.chain.maxHopDepth) + '). Agent-to-agent message loops are blocked. The back-and-forth ends here: do not message the agent again and do not summarise it; reply with nothing, unless the person has something to decide (then one short line).',
         );
       }
       // Only a room (the user is a member; deliverRoomText revalidates that) may carry agent-to-agent
@@ -63,7 +63,7 @@ export function createMessageAgentTool(opts: { store: Store; enqueuer: Enqueuer;
         return errorResult('Error: the current conversation record is unreadable; nothing was queued.');
       }
       if (readString(current, 'kind') !== 'room') {
-        return errorResult('Error: agents may only message each other inside a room the user is in, and this conversation is not one. Create a room with conversation_create and then use send_message with that room\'s conversationId and targetAgentIds, or give the work to a sub-task with child_spawn; nothing was queued.');
+        return errorResult('Error: agents may only message each other inside a room the user is in, and this conversation is not one. Create a room with conversation_create and then use send_message with that room\'s conversationId and targetAgentIds, or give the work to a subagent with subagent_start; nothing was queued.');
       }
       const sender = await peerSenderPayload(opts.store, ctx.agentId, { conversationId: ctx.conversationId, wake: ctx.wake });
       const memory = await handoffMemory(opts.store, opts.memory, {
@@ -75,7 +75,9 @@ export function createMessageAgentTool(opts: { store: Store; enqueuer: Enqueuer;
       // The memory rides in the target's wake only: the posted text is what the room reads.
       const delivered = await deliverRoomText(opts, ctx, ctx.conversationId, parsed.message, [targetId], withHandoffMemory(parsed.message, memory.lines));
       if (!delivered.ok) return delivered.result;
+      // Speaking to another agent is the whole turn: the room already shows the message, so no final reply (a second bubble) follows.
       return {
+        endsTurn: true,
         content: [{ type: 'text', text: 'Message posted in room ' + ctx.conversationId + ' mentioning agent ' + targetId + memoryNote(memory) }],
         details: {
           deliveredText: delivered.value.markdown,

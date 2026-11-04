@@ -4,7 +4,7 @@
 import type { Store, Tool } from '../../contracts/index.js';
 import type { Connection } from '@agent-desktop/public-contracts';
 import { missingDefaultConnections } from './platform-keys.js';
-import type { ConnectorCatalog } from './catalog.js';
+import { isHostedCatalogId, type ConnectorCatalog } from './catalog.js';
 import { SecretsError } from '../../contracts/secrets.js';
 import { McpClient, McpConnectionError } from './client.js';
 import type { McpConnectionStatus, McpToolOutcome } from './client.js';
@@ -58,9 +58,10 @@ export interface McpManager {
   disconnect(input: { ownerId?: string; store: Store; connectionId: string }): Promise<Connection>;
   /**
    * One read-only call with values the owner just typed (an API key), made before anything is stored: `ok`, or the reason in words the owner can
-   * act on. Nothing is kept: no session, no row, and the reason never repeats a header value.
+   * act on. Nothing is kept: no session, no row, and the reason never repeats a header value. `catalogId` is the entry the values are for; it decides
+   * whether the hosted-connector credential is sent.
    */
-  probe(input: { url: string; headers?: Readonly<Record<string, string>>; tool: string; args?: Record<string, unknown>; signal?: AbortSignal }): Promise<{ ok: true } | { ok: false; reason: string }>;
+  probe(input: { url: string; catalogId?: string; headers?: Readonly<Record<string, string>>; tool: string; args?: Record<string, unknown>; signal?: AbortSignal }): Promise<{ ok: true } | { ok: false; reason: string }>;
   status(input: { ownerId?: string; store: Store; connectionId: string }): Promise<McpConnectionStatus | undefined>;
   /** Close every open session (stdio children included) and abort pending connects; for runtime teardown. */
   close(): Promise<void>;
@@ -325,6 +326,7 @@ export function createMcpManager(deps: McpManagerDeps = {}): McpManager {
     async probe(input) {
       const client = new McpClient(() => new HttpMcpTransport({
         url: input.url,
+        hosted: isHostedCatalogId(input.catalogId),
         ...(input.headers === undefined ? {} : { headers: { ...input.headers } }),
         ...(deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }),
       }));

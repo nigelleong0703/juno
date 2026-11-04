@@ -1,9 +1,9 @@
-import type { BackgroundCallStart, Doc, Tool, ToolContext, ToolResult } from '../../../contracts/index.js';
+import type { BackgroundCallStart, Doc, Tool, ToolContext, ToolReconciliation, ToolResult } from '../../../contracts/index.js';
 import type { BackgroundCallDeps } from './background-call.js';
 import type { RunCancellation } from './cancel.js';
-import { bindLegacyFence, cacheFencedResult, interruptedReason, readExecution, runFencedTool, type FencedToolOutcome, type ToolRunContext } from './replay.js';
-import { createRecoveryRetryStep, findPriorUnresolvedFence, markRetryCompleted, priorUnresolvedRecovery, recoveryActionSummary, recoveryArguments, recoveryFingerprint } from './recovery-ledger.js';
-import { persistRecoveryRequest } from './recovery-review.js';
+import { bindLegacyFence, cacheFencedResult, readExecution, runFencedTool, type FencedToolOutcome, type ToolRunContext } from './replay.js';
+import { createRecoveryRetryStep, findPriorUnresolvedFence, markRetryCompleted, priorUnresolvedRecovery, recoveryArguments, recoveryFingerprint } from './recovery-ledger.js';
+import { actionPhrase, giveNotice, noticeResult, noticeText, reasonLine } from './uncertain-action.js';
 import { executeSafely, reconcileWithProjection } from './recovery-results.js';
 import { backgroundResultText, reportSummary } from './output-capture.js';
 import { projectResult, refusal } from './tool-projection.js';
@@ -22,11 +22,11 @@ export async function executeBackgroundAction(ctx: ToolRunContext, deps: Backgro
     ...binding, runId: source.runId, stepId: source.id, store: deps.store, blobs: deps.blobs, enqueuer: deps.enqueuer, wake: input.wake,
     step: async (_name, fn) => fn(), signal: AbortSignal.any([AbortSignal.timeout(CALL_TIMEOUT_MS), cancellation.signal]),
   });
-  const review = async (source: Doc<'steps'>, reason: string): Promise<FencedToolOutcome> => {
+  // An outcome nobody can tell: the agent is told through the task's result (it arrives as a task_done), and the action is not repeated.
+  const review = async (source: Doc<'steps'>, evidence: ToolReconciliation | undefined): Promise<FencedToolOutcome> => {
     if (await cancellation.peek()) { cancellation.abort(); return { interrupted: true, cancelled: true, result: refusal('The background task stopped.') }; }
-    const request = await persistRecoveryRequest(ctx, deps.store, runInput, input.runId, step, tool.name, fingerprint, reason,
-      recoveryActionSummary(tool.name, args, input.conversationId, source.startedAt), binding, source.id, true);
-    return { interrupted: true, result: refusal(`The background action is uncertain and was not repeated. Check the durable owner review ${request.id}.`) };
+    await giveNotice(ctx, deps, input.runId, step, source);
+    return { interrupted: true, result: noticeResult(noticeText(actionPhrase(tool, step.target), reasonLine(evidence))) };
   };
   const action = async (source: Doc<'steps'>): Promise<ToolResult> => {
     const context = contextFor(source);
@@ -47,14 +47,14 @@ export async function executeBackgroundAction(ctx: ToolRunContext, deps: Backgro
     return runFencedTool(ctx, deps.store, step, tool.name, () => action(step), cancellation);
   }
   const semantic = await ctx.run('bg-semantic-check', () => priorUnresolvedRecovery(deps.store, input.agentId, fingerprint, step.id, tool.origin?.connectionId, tool.origin?.account));
-  if (semantic.blocked !== undefined) return { interrupted: true, result: refusal('A previous action with these arguments is still uncertain. Its owner review remains open; no action was repeated.') };
+  if (semantic.blocked !== undefined) return { interrupted: true, result: refusal('This was not started: you asked the person whether to do this again, and they have not said yes (no answer yet, or they said not to).') };
   const prior = semantic.retryAuthorized ? undefined : await ctx.run('bg-prior-fence', () => findPriorUnresolvedFence(deps.store, input.agentId, step.id, fingerprint, input.ownerId, tool.name, input.conversationId, tool.origin?.connectionId, tool.origin?.account));
   const source = prior ?? step;
   const previous = readExecution(await deps.store.get('steps', source.id));
   const intent = { ...binding, tool: tool.name, fingerprint,
     ...(semantic.retryAuthorized ? { attempt: 1 } : previous?.intent?.attempt === undefined ? {} : { attempt: previous.intent.attempt }) };
   const legacy = await ctx.run('bg-bind-legacy:' + source.id, () => bindLegacyFence(deps.store, source, intent));
-  if (legacy) return review(source, 'This historical background fence has no trustworthy saved operation identity or result. Its current action scope is recorded for owner review; it was not repeated.');
+  if (legacy) return review(source, { status: 'unknown', reason: 'an earlier attempt left no record of what it did' });
   const execute = (sourceStep: Doc<'steps'>, actionIntent: typeof intent) => runFencedTool(ctx, deps.store, sourceStep, tool.name, () => action(sourceStep), cancellation,
     tool.reconcile === undefined ? undefined : () => reconcile(sourceStep), actionIntent);
   let outcome = await execute(source, intent);
@@ -65,10 +65,7 @@ export async function executeBackgroundAction(ctx: ToolRunContext, deps: Backgro
     if (!outcome.interrupted && !outcome.cancelled) await cacheFencedResult(deps.store, source, outcome.result);
   }
   if (outcome.cancelled) return outcome;
-  if (outcome.interrupted) {
-    const evidence = outcome.reconciliation;
-    return review(source, evidence?.status === 'unknown' || evidence?.status === 'failed' ? evidence.reason : interruptedReason(tool.name));
-  }
+  if (outcome.interrupted) return review(source, outcome.reconciliation);
   await ctx.run('bg-retry-completed', () => markRetryCompleted(deps.store, input.agentId, fingerprint, step.id));
   return outcome;
 }

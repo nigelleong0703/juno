@@ -4,7 +4,7 @@ import { commonChecks } from './common';
 
 const POSTCODE = '319458';
 /** Tool work that means the agent has started on the task (not just asking). */
-const WORK = /^(browser\.|computer\.|web_search|web_fetch|child_spawn)/;
+const WORK = /^(browser\.|computer\.|web_search|web_fetch|subagent_start)/;
 /** More coordinate clicks than this means the snapshot failed it and it fell back to clicking a screenshot. */
 const MAX_COORDINATE_CLICKS = 3;
 

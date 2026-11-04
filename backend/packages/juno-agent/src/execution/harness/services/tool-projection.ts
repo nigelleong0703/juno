@@ -188,6 +188,8 @@ export function stepUpdate(outcome: ToolOutcome, step: Doc<'steps'>, startedAt: 
   const marked = markedErrorKind(outcome.result);
   // A refusal before any effect is a policy or approval decision, except a call that did not fit the tool's schema: that one failed.
   const status: StepStatus = outcome.kind === 'refused' && marked !== 'validation' ? 'skipped' : stepStatusFor(outcome.result);
-  const errorKind = status === 'completed' ? undefined : marked ?? (outcome.kind === 'refused' ? 'permission' : 'other');
+  // A call a trial run recorded instead of making (preview.ts) was not refused for a reason: it is skipped, not an error.
+  const previewed = outcome.result.details?.['previewed'] === true;
+  const errorKind = status === 'completed' || previewed ? undefined : marked ?? (outcome.kind === 'refused' ? 'permission' : 'other');
   return { status, durationMs, ...(errorKind === undefined ? {} : { errorKind }), output: { summary: boundedSummary(resultText(outcome.result)) } };
 }

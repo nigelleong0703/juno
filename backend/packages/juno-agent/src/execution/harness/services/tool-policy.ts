@@ -5,12 +5,12 @@
  * exposed to. The strictest source wins. A call no source mentions runs (BACKEND 8.0). A run a stranger woke (not the owner) is
  * also held to a short allowlist of tools that run without asking (decision/stranger.ts, BACKEND 8.0b).
  */
-import type { Doc, ListQuery, Store, Tool, ToolOrigin, ToolResult, WakeEvent } from '../../../contracts/index.js';
+import { COMPLETION_WAKE_KINDS, type Doc, type ListQuery, type Store, type Tool, type ToolOrigin, type ToolResult, type WakeEvent } from '../../../contracts/index.js';
 import { type Connection, type PermissionTiers, type Plugin, type Rule, type ToolPermission } from '@agent-desktop/public-contracts';
-import type { ChildRun } from '../../../modules/tasks/childRead.js';
-import { childRunIdOfSession } from '../../execution-owner.js';
+import type { SubagentRun } from '../../../modules/tasks/subagentRead.js';
+import { subagentRunIdOfSession } from '../../execution-owner.js';
 import { targetsPrivateNetwork } from '../../../modules/tools/net/addressGuard.js';
-import type { RestatePromise } from '@agent-desktop/durable';
+import type { DurablePromise } from '@agent-desktop/durable';
 import type { ToolRunContext } from './replay.js';
 import { refusal } from './tool-projection.js';
 import type { RunContext, RunInput, RunServices } from './run-types.js';
@@ -20,21 +20,24 @@ import { deriveDecision, type Derived } from './decision/derive.js';
 import { toolPhrase } from './decision/humanize.js';
 import { MAC_APP_WRITE_TOOLS } from '../../../modules/tools/tools/macApps.js';
 import { PHONE_WRITE_TOOLS } from '../../../modules/tools/tools/phoneTools.js';
+import { reminderLabels } from '../../../modules/tools/tools/phone/reminders.js';
 import { MAC_COMMAND_TOOLS, MAC_DESKTOP_TOOLS, MAC_PATH_TOOLS, SANDBOX_SCREEN_TOOLS, copyPathsOutsideMac, insideMacFolder, macAppName, usesMac, wantsForeground } from './decision/mac.js';
 import { macAppAllowed, macAppKey } from '../../../modules/mac-apps.js';
 import { DELETE, INSTALL, PURCHASE } from './decision/patterns.js';
 import { activePageUrl } from '../../../modules/tools/computer/purchase.js';
 import { chatHash, findChatByHash } from '../../../modules/chat-folder.js';
-import { STRANGER_RULE_ID, folderHashOf, isStrangerWake, speakerNameOf, strangerBriefOf, strangerOf, strangerReason, strangerScope, type ChatPolicy } from './decision/stranger.js';
+import { STRANGER_RULE_ID, folderHashOf, groupGrantCovers, isStrangerWake, isTeammateWake, speakerNameOf, strangerBriefOf, strangerOf, strangerReason, strangerScope, type ChatPolicy } from './decision/stranger.js';
 import { readOwnerTimeZone } from '../../brain/context.js';
+import { groupChatOf } from '../../../modules/groups/note.js';
+import { channelRowId } from '../../../contracts/storage.js';
 import {
   DRAFT_NOTICE, SCHEDULE_CHANGE_TOOLS, hiddenInScope, offeredIn, pathRefusal, presentToolScope, recipientsOf, scheduleRefusal, sendsToOthers, type ToolScope,
 } from '../../../modules/tools/scope.js';
 
 /** The run context plus the awakeable an approval wait needs; the core passes a full RunContext. */
 export interface ToolCallContext extends ToolRunContext {
-  awakeable?<T>(): { id: string; promise: RestatePromise<T> };
-  drainInbox?(): RestatePromise<WakeEvent[]>;
+  awakeable?<T>(): { id: string; promise: DurablePromise<T> };
+  drainInbox?(): DurablePromise<WakeEvent[]>;
 }
 
 export type ToolPolicyVerdict =
@@ -188,7 +191,7 @@ function macAppsReason(toolName: string, args: unknown): string {
   return 'Mark a reminder done on your Mac';
 }
 
-/** What the owner reads on the card for a change to Calendar or Reminders on the iPhone. */
+/** What the owner reads on the card for a change on the iPhone (the calendar, deleting a reminder, contacts, the home, a photo leaving). */
 function phoneReason(toolName: string, args: unknown): string {
   const title = stringArg(args, 'title').slice(0, 120);
   const when = (value: string): string => (value === '' ? '' : ` at ${value.slice(0, 40)}`);
@@ -196,9 +199,22 @@ function phoneReason(toolName: string, args: unknown): string {
   if (toolName === 'phone_calendar_create_event') return `Add to your iPhone calendar: "${title}"${when(stringArg(args, 'start'))}`;
   if (toolName === 'phone_calendar_update_event') return `Change an event on your iPhone calendar${title === '' ? '' : `: "${title}"`}${series}`;
   if (toolName === 'phone_calendar_delete_event') return `Delete an event from your iPhone calendar${series}`;
-  if (toolName === 'phone_reminders_create') return `Add to your iPhone reminders: "${title}"${when(stringArg(args, 'due'))}`;
-  if (toolName === 'phone_reminders_update') return 'Change a reminder on your iPhone';
-  return 'Delete a reminder on your iPhone';
+  if (toolName === 'phone_reminders_delete') {
+    const count = reminderLabels(args).length;
+    return count === 1 ? 'Delete a reminder on your iPhone' : `Delete ${String(count)} reminders on your iPhone`;
+  }
+  if (toolName === 'phone_contacts_create') {
+    const name = [stringArg(args, 'givenName'), stringArg(args, 'familyName')].filter((part) => part !== '').join(' ') || stringArg(args, 'organization');
+    return `Add a contact on your iPhone: "${name.slice(0, 120)}"`;
+  }
+  if (toolName === 'phone_home_set') {
+    const value = args !== null && typeof args === 'object' ? Reflect.get(args, 'value') : undefined;
+    const shown = stringArg(args, 'property') === 'power' ? (value === true ? 'on' : 'off') : String(value).slice(0, 12);
+    return `Home: set ${stringArg(args, 'property').replace('_', ' ')} of "${stringArg(args, 'accessory').slice(0, 80)}" to ${shown}`;
+  }
+  if (toolName === 'phone_photos_send') return 'Send a photo from your iPhone library into this chat';
+  if (toolName === 'phone_contacts_add_detail') return `Add a ${stringArg(args, 'email') === '' ? 'phone number' : 'email address'} to a contact on your iPhone`;
+  return 'Change something on your iPhone';
 }
 
 function keyword(pattern: RegExp): BuiltinRule['matches'] {
@@ -294,10 +310,10 @@ const BUILTIN_RULES: readonly BuiltinRule[] = [
     matches: (toolName) => MAC_APP_WRITE_TOOLS.has(toolName),
   },
   {
-    // Calendar and Reminders on the iPhone: reads are free, every change asks each time.
+    // Things on the iPhone: reads are free, every change asks each time, and "always allow" cannot loosen it.
     id: 'builtin.phone-write',
     behavior: 'ask',
-    reason: 'The agent wants to change your calendar or reminders on your iPhone',
+    reason: 'The agent wants to change something on your iPhone',
     reasonFor: (args, toolName) => phoneReason(toolName, args),
     matches: (toolName) => PHONE_WRITE_TOOLS.has(toolName),
   },
@@ -417,24 +433,26 @@ export function evaluateToolPolicy(config: ToolPolicyConfig, toolName: string, w
   }
   const hidden = scopeRefusal(config, toolName, args);
   if (hidden !== undefined) return { kind: 'deny', reason: hidden };
+  // The tool as a person would say it ("send email in Gmail"): what the model is told when a call is refused. The raw name stays on the audit row.
+  const phrase = toolPhrase(toolName, config.origins?.get(toolName), usesMac(toolName, args));
   if (!config.exposed.has(toolName)) {
-    return { kind: 'deny', reason: 'Tool ' + toolName + ' is not exposed to this agent' };
+    return { kind: 'deny', reason: 'Cannot ' + phrase + ': it is not turned on for this agent, so it was not run' };
   }
   const plugin = pluginFor(config.plugins, toolName);
   if (plugin !== undefined && config.disconnectedPluginIds.has(plugin.id)) {
-    return { kind: 'deny', reason: 'The connection for ' + toolName + ' is not connected' };
+    return { kind: 'deny', reason: 'Cannot ' + phrase + ': the connection it needs is not connected, so it was not run' };
   }
   const permission = pluginPermission(config.plugins, toolName);
-  if (permission === 'never') return { kind: 'deny', reason: 'Plugin permission denies ' + toolName };
+  if (permission === 'never') return { kind: 'deny', reason: 'Cannot ' + phrase + ': the owner turned this off for this agent, so it was not run' };
   const rule = exactActionRule(config.rules, toolName);
   let derived: Derived | undefined;
   const derive = (): Derived => (derived ??= deriveFor(config, toolName, args, wake));
-  const phrase = toolPhrase(toolName, config.origins?.get(toolName), usesMac(toolName, args));
   // Strictest wins across ALL sources, built-ins first so a tie names the built-in rule. A permissive
   // rule (`auto`) must never license an effect the plugin permission or a built-in rule asks about,
   // and an `ask` rule must not be loosened by an `always` permission.
   const candidates: Array<{ weight: number; decide: () => ToolPolicyVerdict }> = [];
   let delegationId: string | undefined;
+  let groupGranted = false;
   // A stranger's ask comes first, so a tie with another ask names who asked and where (the card's reason), not only what.
   const stranger = strangerOf(config, wake);
   if (stranger !== undefined) {
@@ -443,8 +461,13 @@ export function evaluateToolPolicy(config: ToolPolicyConfig, toolName: string, w
     const shared = scope.kind === 'share' ? matchDelegation(derive(), config.agentId ?? '', { rules: config.rules, usage: config.usage ?? NO_USAGE, wake, now: new Date() }) : undefined;
     if (shared !== undefined) delegationId = shared.id;
     else if (scope.kind !== 'free') {
-      const reason = strangerReason(config, stranger.name, phrase, scope);
-      candidates.push({ weight: STRICTNESS.ask, decide: () => ({ kind: 'ask', reason, ruleId: STRANGER_RULE_ID }) });
+      // A teammate's ask in a kind of decision the owner delegated to this group runs without asking (BACKEND 6.8); private files and
+      // anything the brief names no kind for always ask.
+      groupGranted = (config.chat?.teammate === true || isTeammateWake(wake)) && groupGrantCovers(derive().brief.categories, config.chat?.delegated);
+      if (!groupGranted) {
+        const reason = strangerReason(config, stranger.name, phrase, scope);
+        candidates.push({ weight: STRICTNESS.ask, decide: () => ({ kind: 'ask', reason, ruleId: STRANGER_RULE_ID }) });
+      }
     }
   }
   for (const builtin of BUILTIN_RULES) {
@@ -456,9 +479,10 @@ export function evaluateToolPolicy(config: ToolPolicyConfig, toolName: string, w
     // A delegation lifts only this default ask (never a built-in rule, a tier or a rule that asks): the owner handed this kind of decision to the agent.
     // Not for a tool nobody has reviewed: what a delegation was given for is a kind of decision the owner knew.
     const unreviewed = config.origins?.get(toolName)?.needsReview === true;
-    const delegation = unreviewed ? undefined : matchDelegation(derive(), config.agentId ?? '', { rules: config.rules, usage: config.usage ?? NO_USAGE, wake, now: new Date() });
+    // The group's delegated kinds count as the owner's say-so for a teammate's ask in them (not for a tool nobody has reviewed).
+    const delegation = unreviewed || groupGranted ? undefined : matchDelegation(derive(), config.agentId ?? '', { rules: config.rules, usage: config.usage ?? NO_USAGE, wake, now: new Date() });
     if (delegation !== undefined) delegationId = delegation.id;
-    else {
+    else if (!(groupGranted && !unreviewed)) {
       const app = config.origins?.get(toolName)?.connectionName ?? 'a connected app';
       candidates.push({
         weight: STRICTNESS.ask,
@@ -561,10 +585,27 @@ export interface PolicyCall {
   wakes: readonly WakeEvent[];
   toolName: string;
   args: unknown;
+  /** The child run this call is made in, when it is a child's (its row names the root origin of the whole chain). */
+  childRunId?: string;
 }
 
-export function policyCallOf(input: Pick<RunInput, 'conversationId' | 'wakeEvents'>, toolName: string, args: unknown): PolicyCall {
-  return { conversationId: input.conversationId, wakes: input.wakeEvents, toolName, args };
+export function policyCallOf(input: Pick<RunInput, 'conversationId' | 'wakeEvents' | 'sessionKey' | 'agentId'>, toolName: string, args: unknown): PolicyCall {
+  const childRunId = subagentRunIdOfSession(input.sessionKey, input.agentId, input.conversationId);
+  return { conversationId: input.conversationId, wakes: input.wakeEvents, toolName, args, ...(childRunId === undefined ? {} : { childRunId }) };
+}
+
+/** The non-owner who started the chain this run belongs to (BACKEND 6.8): a child task, and a run that continues work (a task's result, a report), is held to the rules of the root. */
+async function askerOfChain(store: Store, call: PolicyCall): Promise<{ speaker: 'member' | 'stranger'; name?: string; conversationId: string } | undefined> {
+  const runIds = [
+    call.childRunId,
+    ...call.wakes.flatMap((wake) => [wake.kind === 'subagent_task' ? wake.payload['parentRunId'] : undefined, COMPLETION_WAKE_KINDS.includes(wake.kind) ? wake.payload['originRunId'] : undefined]),
+  ].filter((id): id is string => typeof id === 'string' && id !== '');
+  for (const runId of runIds) {
+    const run = await store.get('runs', runId).catch(() => null);
+    const root = run === null ? undefined : run.rootOrigin ?? run.origin;
+    if (root?.type === 'channel' && root.speaker !== 'owner') return { speaker: root.speaker, ...(root.speakerName === undefined ? {} : { name: root.speakerName }), conversationId: root.conversationId };
+  }
+  return undefined;
 }
 
 /**
@@ -572,16 +613,26 @@ export function policyCallOf(input: Pick<RunInput, 'conversationId' | 'wakeEvent
  * reason and, when the call names a file in another chat's folder, that chat (found by the hash in the folder name).
  */
 async function readChatPolicy(store: Store, ownerId: string, call: PolicyCall): Promise<ChatPolicy | undefined> {
-  const wake = call.wakes.find((candidate) => isStrangerWake(candidate));
-  if (wake === undefined) return undefined;
-  const conversation = await store.get('conversations', call.conversationId).catch(() => null);
+  const strangerWakes = call.wakes.filter((candidate) => isStrangerWake(candidate));
+  const wake = strangerWakes[0];
+  // No non-owner wake of its own: a child task (or the run that wraps up its work) is held to the rules of the chain's root.
+  const inherited = wake === undefined ? await askerOfChain(store, call) : undefined;
+  if (wake === undefined && inherited === undefined) return undefined;
+  const chatId = inherited?.conversationId ?? call.conversationId;
+  const conversation = await store.get('conversations', chatId).catch(() => null);
+  // A teammate's run: every non-owner wake in it is a teammate's. What the owner delegated to the group sits on the agent's channel row.
+  const teammate = inherited === undefined ? strangerWakes.every((candidate) => isTeammateWake(candidate)) : inherited.speaker === 'member';
+  const group = conversation === null || !teammate ? undefined : groupChatOf(conversation);
+  const delegated = group === undefined ? undefined : (await store.get('channels', channelRowId(group.kind, group.channelId)).catch(() => null))?.groups?.[group.chatId]?.delegated;
   const hash = folderHashOf(call.toolName, call.args);
-  const other = hash === undefined || hash === chatHash(call.conversationId) ? null : await findChatByHash(store, hash, ownerId === '' ? undefined : ownerId).catch(() => null);
-  const name = speakerNameOf(wake);
+  const other = hash === undefined || hash === chatHash(chatId) ? null : await findChatByHash(store, hash, ownerId === '' ? undefined : ownerId).catch(() => null);
+  const name = inherited === undefined ? speakerNameOf(wake) : inherited.name;
   return {
-    conversationId: call.conversationId,
+    conversationId: chatId,
     ...(conversation?.title === undefined ? {} : { title: conversation.title }),
     stranger: name === undefined ? {} : { name },
+    ...(teammate ? { teammate: true } : {}),
+    ...(delegated === undefined ? {} : { delegated }),
     ...(other === null ? {} : { other }),
   };
 }
@@ -655,10 +706,10 @@ export async function readToolPolicyConfig(
  * The tool names a child run may call (child_spawn `tools`, fixed on its row at reservation), or undefined
  * for an unrestricted run. The row is the only source, so a replay reads the same narrowing.
  */
-async function childToolAllowlist(store: Store, input: RunInput): Promise<readonly string[] | undefined> {
-  const childRunId = childRunIdOfSession(input.sessionKey, input.agentId, input.conversationId);
+async function subagentToolAllowlist(store: Store, input: RunInput): Promise<readonly string[] | undefined> {
+  const childRunId = subagentRunIdOfSession(input.sessionKey, input.agentId, input.conversationId);
   if (childRunId === undefined) return undefined;
-  const row: ChildRun | null = await store.get('runs', childRunId);
+  const row: SubagentRun | null = await store.get('runs', childRunId);
   return row?.allowedTools;
 }
 
@@ -666,9 +717,9 @@ async function childToolAllowlist(store: Store, input: RunInput): Promise<readon
  * A child run's view of the tool registry: only the names its child_spawn `tools` allowed are offered to
  * the model (and so to the policy's exposed set). Root runs and unrestricted children get the registry as-is.
  */
-export async function scopeChildTools(ctx: Pick<RunContext, 'run'>, services: RunServices, input: RunInput): Promise<RunServices> {
-  if (childRunIdOfSession(input.sessionKey, input.agentId, input.conversationId) === undefined) return services;
-  const allowed = await ctx.run('child-tools', async () => (await childToolAllowlist(services.store, input)) ?? null);
+export async function scopeSubagentTools(ctx: Pick<RunContext, 'run'>, services: RunServices, input: RunInput): Promise<RunServices> {
+  if (subagentRunIdOfSession(input.sessionKey, input.agentId, input.conversationId) === undefined) return services;
+  const allowed = await ctx.run('child-tools', async () => (await subagentToolAllowlist(services.store, input)) ?? null);
   if (allowed === null) return services;
   const registry = services.toolRegistry;
   return {
@@ -714,8 +765,8 @@ export async function freshRefusal(
 ): Promise<ToolResult | null> {
   const wake = input.wakeEvents[0];
   // Narrowing only: a child may call a tool only when its parent listed it AND the agent exposes it.
-  const allowed = await childToolAllowlist(services.store, input);
-  if (allowed !== undefined && !allowed.includes(toolName)) return refusal('Tool ' + toolName + ' is not in the tools this child task was given');
+  const allowed = await subagentToolAllowlist(services.store, input);
+  if (allowed !== undefined && !allowed.includes(toolName)) return refusal('Tool ' + toolName + ' is not in the tools this subagent was given');
   const config = await readToolPolicyConfig(services.store, services.toolRegistry, input.agentId, wake?.ownerId ?? '', signal, policyCallOf(input, toolName, args));
   const verdict = evaluateToolPolicy(config, toolName, wake, args);
   if (verdict.kind === 'allow') return null;

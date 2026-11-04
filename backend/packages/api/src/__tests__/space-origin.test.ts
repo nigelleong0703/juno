@@ -72,11 +72,12 @@ describe('edge hosts and config', () => {
     for (const host of ['spaces.localhost:8787', '127.0.0.1:8787', 'usercontent.localhost', undefined]) expect(hostKind(host, hosts)).toBe('api');
   });
 
-  const base = { INTERNAL_AGENTD_TOKEN: 't', ARTIFACT_URL_SECRET: 'a', SPACE_URL_SECRET: 's', ARTIFACT_HOST: 'usercontent.localhost:8787' };
+  const base = { INTERNAL_AGENTD_TOKEN: 't', HOSTED_MCP_TOKEN: 'h', ARTIFACT_URL_SECRET: 'a', SPACE_URL_SECRET: 's', ARTIFACT_HOST: 'usercontent.localhost:8787' };
   it('needs the secrets and an artifact host, and has no extra listener config', () => {
     expect(parseApiConfig(base)).toMatchObject({ SPACE_DOMAIN: 'spaces.localhost:8787' });
     expect(parseApiConfig(base)).not.toHaveProperty('SPACE_PORT');
     expect(() => parseApiConfig({ ...base, SPACE_URL_SECRET: '' })).toThrow(/SPACE_URL_SECRET/);
+    expect(() => parseApiConfig({ ...base, HOSTED_MCP_TOKEN: '' })).toThrow(/HOSTED_MCP_TOKEN/);
     expect(() => parseApiConfig({ ...base, ARTIFACT_HOST: undefined })).toThrow(/ARTIFACT_HOST/);
     expect(() => parseApiConfig({ ...base, SPACE_DOMAIN: 'not a host' })).toThrow();
   });

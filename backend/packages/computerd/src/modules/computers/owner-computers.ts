@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import type { E2bBinding, Store } from '@agent-desktop/contracts';
+import { e2bBindingSchema, type E2bBinding, type Store } from '@agent-desktop/contracts';
 import {
   createScreenPool, loadPool, savePool, relaunchSpaces, MAX_LIVE_SCREENS, notAllowed,
   type ComputerHostSpec, type ComputerProvider, type EraseReport, type StartedContext,
@@ -28,6 +28,8 @@ export interface OwnerComputers {
    * erase is simply run again.
    */
   erase(owner: string, signal: AbortSignal): Promise<OwnerErasure>;
+  /** The link id of every stored binding (the legacy owner's and each owner's), read from the binding files: the computers that are current. */
+  boundLinkIds(): Set<string>;
 }
 
 export interface OwnerComputersOptions {
@@ -93,6 +95,21 @@ export function createOwnerComputers(options: OwnerComputersOptions): OwnerCompu
   }
 
   return {
+    boundLinkIds() {
+      const ownersDir = join(dirname(options.bindingFile), 'owners');
+      const files = [options.bindingFile, ...(existsSync(ownersDir) ? readdirSync(ownersDir).map((hash) => join(ownersDir, hash, basename(options.bindingFile))) : [])];
+      const ids = new Set<string>();
+      for (const file of files) {
+        try {
+          const binding = e2bBindingSchema.safeParse(JSON.parse(readFileSync(file, 'utf8')));
+          if (binding.success && binding.data.linkId !== undefined) ids.add(binding.data.linkId);
+        } catch {
+          // No file (or an unreadable one) holds no binding.
+        }
+      }
+      return ids;
+    },
+
     forOwner(owner) {
       if (erased.has(owner)) throw notAllowed('this account was deleted');
       return open(owner);

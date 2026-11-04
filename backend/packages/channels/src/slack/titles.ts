@@ -1,7 +1,9 @@
+import { slackApiBase } from './base.js';
+
 /** "#general" for a Slack channel id, or undefined when the lookup fails. */
 export async function slackChannelName(fetchFn: typeof fetch, token: string, chatId: string): Promise<string | undefined> {
   try {
-    const response = await fetchFn('https://slack.com/api/conversations.info', {
+    const response = await fetchFn(slackApiBase() + 'conversations.info', {
       method: 'POST',
       headers: { authorization: 'Bearer ' + token, 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ channel: chatId }).toString(),

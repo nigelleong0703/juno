@@ -15,7 +15,8 @@ export interface RoutineTimerHandlers {
   arm: (ctx: ObjectContext, routine: Routine) => Promise<void>;
   fire: (ctx: ObjectContext, params: { at: string; routineId: string; generation: number }) => Promise<void>;
   checkNow: (ctx: ObjectContext) => Promise<{ outcome: string }>;
-  recordCompletion: (ctx: ObjectContext, params: { routineId: string; runId?: string; occurrenceAt?: string; succeeded: boolean; itemsGenerated: number; outputIds?: string[]; summary?: string }) => Promise<void>;
+  recordCompletion: (ctx: ObjectContext, params: { routineId: string; runId?: string; occurrenceAt?: string; succeeded: boolean; itemsGenerated: number; outputIds?: string[]; summary?: string; refire?: { wake: WakeEvent; delayMs: number } }) => Promise<void>;
+  refire: (ctx: ObjectContext, params: { routineId: string; wake: WakeEvent }) => Promise<void>;
   recordRead: (ctx: ObjectContext, params: { routineId: string; conversationId: string; readCutoff: string; resultIds: string[] }) => Promise<void>;
 }
 
@@ -64,6 +65,8 @@ export interface IdeasTimerHandlers {
 
 export interface ChatDigestHandlers {
   touch: (ctx: ObjectContext, target: DigestTarget) => Promise<void>;
+  /** A group message was only observed: count it; the digest runs at the volume or hourly mark, never per message. */
+  observe: (ctx: ObjectContext, target: DigestTarget) => Promise<void>;
   fire: (ctx: ObjectContext, params: { generation: number }) => Promise<void>;
   runNow: (ctx: ObjectContext, params?: DigestTarget) => Promise<{ outcome: string }>;
 }

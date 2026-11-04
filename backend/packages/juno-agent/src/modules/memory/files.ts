@@ -12,10 +12,14 @@ const ATTEMPTS = 3;
  * which is the mirror's version by the sync rules. Returns whether the file was written.
  */
 export async function editHomeFile(
-  deps: HomeDeps,
+  allDeps: HomeDeps,
   input: { ownerId: string; agentId?: string; path: string },
   transform: (content: string) => string | null,
 ): Promise<boolean> {
+  // A platform write never wakes a paused computer (BACKEND 7.3a): while it is not running the edit is kept in the mirror as a
+  // pending write, and the next sync of a running computer applies it.
+  const awake = allDeps.home?.whileRunning?.() ?? allDeps.home;
+  const deps: HomeDeps = awake === undefined ? { ...allDeps } : { ...allDeps, home: awake };
   for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
     const row = await getRow(deps.store, input.ownerId, input.path);
     const next = transform(row?.content ?? '');

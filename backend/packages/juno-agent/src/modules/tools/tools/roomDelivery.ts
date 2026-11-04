@@ -9,7 +9,7 @@
  * markdown body (plain text, no parser reliance).
  */
 import type { Enqueuer, Store, ToolContext, ToolResult, WakeEvent } from '../../../contracts/index.js';
-import { CHILD_BOUNDARY_REFUSAL, isChildRun } from '../../tasks/childDelivery.js';
+import { SUBAGENT_BOUNDARY_REFUSAL, hasSubagentParent } from '../../tasks/subagentDelivery.js';
 import { wakeEventSchema } from '../../../contracts/index.js';
 import { newId, nowIso } from '../util.js';
 import { peerSenderPayload, readString, requireRequesterContext, validateRoomAction } from './relationPolicy.js';
@@ -36,15 +36,23 @@ export function roomLabel(agent: unknown, fallbackId: string): string {
   return fallbackId;
 }
 
-/** Render visible mentions as plain @lines; deduped so repeated ids show once. */
+/**
+ * Render visible mentions at the START of the message, like a person typing "@Name " first; deduped so repeated ids show once.
+ * A leading "@Name" the model typed itself is dropped so the name is never doubled. `mentions` on the item carries the structured
+ * ids; the client draws a chip over the leading `@label` tokens.
+ */
 export function renderRoomMentions(body: string, labels: string[]): string {
   const tokens: string[] = [];
+  let rest = body.trimStart();
   for (const label of labels) {
     const token = '@' + escapeRoomLabel(label);
     if (!tokens.includes(token)) tokens.push(token);
+    for (const typed of ['@' + label, token]) {
+      if (rest.startsWith(typed)) rest = rest.slice(typed.length).replace(/^[\s,，:：]+/, '');
+    }
   }
   if (tokens.length === 0) return body;
-  return body + '\n\n' + tokens.join(' ');
+  return tokens.join(' ') + ' ' + rest;
 }
 
 /** Escape newlines and markdown controls in a stored label so a crafted name cannot inject formatting or links. */
@@ -67,7 +75,7 @@ export async function deliverRoomText(
 ): Promise<{ ok: true; value: RoomDelivery } | { ok: false; result: ToolResult }> {
   if (message.length === 0) return { ok: false, result: errorResult('Error: message text required') };
   // CT: a child run is silent; room or peer delivery is refused before any validation or write.
-  if (isChildRun(await opts.store.get('runs', ctx.runId))) return { ok: false, result: errorResult(CHILD_BOUNDARY_REFUSAL) };
+  if (hasSubagentParent(await opts.store.get('runs', ctx.runId))) return { ok: false, result: errorResult(SUBAGENT_BOUNDARY_REFUSAL) };
   const deduped = [...new Set(targetIds.filter((id) => id.length > 0))];
   const others = deduped.filter((id) => id !== ctx.agentId);
   // A plain room message is allowed (no targets). A non-empty list that reduces to
@@ -96,6 +104,7 @@ export async function deliverRoomText(
     runId: ctx.runId,
     markdown,
     citations: [],
+    ...(others.length === 0 ? {} : { mentions: others.map((id, index) => ({ kind: 'agent' as const, id, label: '@' + (labels[index] ?? id) })) }),
     at: nowIso(),
   };
   try {

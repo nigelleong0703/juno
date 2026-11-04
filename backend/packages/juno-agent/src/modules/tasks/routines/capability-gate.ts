@@ -133,7 +133,7 @@ async function wakeForCard(deps: GateDeps, request: Request, ownerId: string, wh
   await deps.enqueuer.enqueue(wake).catch(() => undefined);
 }
 
-/** The system wake that tells the agent its routine became runnable or lost what it needs; a final reply is posted to the chat. */
+/** The system wake that tells the agent its routine became runnable or lost what it needs; it is not a run nobody waits on, so what the agent says goes to the chat (run-origin.ts). */
 async function wakeAgent(deps: GateDeps, routine: Routine, ownerId: string, kind: 'capability_ready' | 'capability_lost', connector: string): Promise<void> {
   const conversationId = await resolveDeliveryConversation(routine, deps.store);
   if (conversationId === undefined) return;

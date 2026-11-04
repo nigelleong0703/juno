@@ -40,7 +40,7 @@ describe('a private question in a group', () => {
       const question = 'Nova, what time is my flight tomorrow?';
       const [note, answer, groupReply] = ['Looking up your flight', 'Your flight leaves at 07:45.', 'I will answer you privately.'];
       scriptModel(`${agentId}:${group}`, [
-        { matchLastText: 'my flight', step: 0, toolCalls: [toolCall('call-handoff', 'send_message', { kind: 'text', text: note, toOwner: true })] },
+        { matchLastText: 'my flight', step: 0, toolCalls: [toolCall('call-handoff', 'send_message', { kind: 'text', purpose: 'answer', text: note, toOwner: true })] },
         { matchLastText: 'my flight', step: 1, text: groupReply },
       ]);
       scriptModel(`${agentId}:${direct}`, [{ matchLastText: 'my flight', step: 0, text: answer }]);

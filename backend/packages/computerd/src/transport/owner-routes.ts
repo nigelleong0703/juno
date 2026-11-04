@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import { z } from 'zod';
 import type { ComputerRuntime } from '@agent-desktop/public-contracts';
 import { controlActorSchema } from '@agent-desktop/contracts';
+import type { SkillsRollout } from '@agent-desktop/sandbox-adapters';
 import type { OwnerComputers } from '../modules/computers/owner-computers.js';
 import type { MacRegistry } from '../modules/mac/registry.js';
 import type { MacComputers } from '../modules/mac/mac-computer.js';
@@ -22,10 +23,16 @@ export interface MacPairing {
 
 const pairSchema = z.object({ name: z.string().max(120).optional() });
 
-export function createOwnerComputerApp(options: { computers: OwnerComputers; token: string; mac?: MacPairing; runtime?: () => ComputerRuntime | Promise<ComputerRuntime> }): Hono {
+export function createOwnerComputerApp(options: { computers: OwnerComputers; token: string; mac?: MacPairing; runtime?: () => ComputerRuntime | Promise<ComputerRuntime>; skills?: SkillsRollout }): Hono {
   const app = new Hono();
   const apps = new Map<string, Hono>();
-  app.get('/healthz', (c) => c.json({ status: 'ok' }));
+  // `skills`: the platform skills version this deployment holds (the same one every computer is brought to, BACKEND §5.11b).
+  app.get('/healthz', async (c) => c.json({ status: 'ok', ...(options.skills === undefined ? {} : { skills: (await options.skills.report().catch(() => undefined))?.bundle }) }));
+  // Which version each computer was last seen on since this process started (check after a deploy that all equal `bundle`).
+  app.get('/v1/skills', async (c) => {
+    if (!options.token || c.req.header('authorization') !== `Bearer ${options.token}` || options.skills === undefined) return c.json({ code: 'not_allowed', message: 'missing or invalid bearer token' }, 403);
+    return c.json(await options.skills.report());
+  });
   /** The bearer check and the owner of the request, or the refusal. */
   const owner = (c: Context): string | Response => {
     if (!options.token || c.req.header('authorization') !== `Bearer ${options.token}`) {

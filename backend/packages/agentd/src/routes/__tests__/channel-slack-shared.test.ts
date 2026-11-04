@@ -38,6 +38,8 @@ describe('shared Slack app', () => {
   let groupError: string | undefined;
   let takenHandles: Set<string>;
   let groups: number;
+  /** What `conversations.history` answers, newest first like Slack. */
+  let history: Array<Record<string, unknown>>;
 
   const enqueuer: Enqueuer = {
     enqueue: async (wake) => { wakes.push(wake); return { accepted: true }; },
@@ -65,6 +67,10 @@ describe('shared Slack app', () => {
       return Response.json({ ok: true, usergroup: { id: 'S' + String(groups), handle } });
     }
     if (method === 'chat.postMessage') return Response.json({ ok: true, ts: '9.9' });
+    if (method === 'assistant.threads.setSuggestedPrompts' || method === 'assistant.threads.setStatus' || method === 'views.publish') return Response.json({ ok: true });
+    if (method.startsWith('conversations.history')) return Response.json({ ok: true, messages: history });
+    if (method.startsWith('conversations.info')) return Response.json({ ok: true, channel: { name: 'team-ops' } });
+    if (method.startsWith('users.info')) return Response.json({ ok: true, user: { real_name: 'Alice' } });
     return Response.json({ ok: false, error: 'unknown_method' });
   };
 
@@ -100,6 +106,7 @@ describe('shared Slack app', () => {
     groupError = undefined;
     takenHandles = new Set();
     groups = 0;
+    history = [];
     const mem = createMemoryStore();
     store = withDefaultOwner(mem, OWNER);
     app = createTestApp({ store, bus: mem.eventBus, enqueuer, channelFetch: fakeSlack, blobs: createMemoryBlobStore() });
@@ -190,10 +197,11 @@ describe('shared Slack app', () => {
     expect(wakes[1]).toMatchObject({ agentId: 'juno', kind: 'user_message' });
     expect((await event({ type: 'app_mention', channel: 'C1', user: 'UOWNER', text: '<@UBOT> hello app', ts: '102.1' })).status).toBe(202);
     expect(wakes[2]).toMatchObject({ agentId: 'juno', payload: { text: 'hello app' } });
-    // Channel chatter without a mention, the bot's own messages and unknown workspaces are not heard.
-    expect((await event({ type: 'message', channel_type: 'channel', channel: 'C1', user: 'UOWNER', text: 'just talking', ts: '103.1' })).status).toBe(200);
+    // Channel chatter without a mention is observed by every agent of the workspace (an `observed` wake each, never a run); the bot's own messages are not heard.
+    expect((await event({ type: 'message', channel_type: 'channel', channel: 'C1', user: 'UOWNER', text: 'just talking', ts: '103.1' })).status).toBe(202);
     expect((await event({ type: 'message', channel_type: 'im', channel: 'D1', user: 'UBOT', text: 'echo', ts: '104.1' })).status).toBe(200);
-    expect(wakes).toHaveLength(3);
+    expect(wakes.filter((wake) => wake.kind !== 'observed')).toHaveLength(3);
+    expect(wakes.filter((wake) => wake.kind === 'observed').map((wake) => wake.agentId).sort()).toEqual(['juno', 'nova']);
   });
 
   it('acknowledges a message with files at once (inside Slack\'s 3 seconds) and wakes the agent after the file is stored', async () => {
@@ -222,6 +230,66 @@ describe('shared Slack app', () => {
     const post = calls.find((call) => call.method === 'chat.postMessage');
     expect(post?.auth).toBe('Bearer xoxb-shared');
     expect(post?.json).toMatchObject({ channel: 'C1', username: 'Nova', icon_url: expect.stringMatching(/^https:\/\/cdn\.example\.com\/avatars\/[a-z]+\.png$/), thread_ts: '100.1' });
+  });
+
+  it('the AI-app surface and the Home tab: suggested prompts for a new assistant thread, and the owner\'s open work (read only) on the Home tab', async () => {
+    await install();
+    expect((await event({ type: 'assistant_thread_started', assistant_thread: { user_id: 'UOWNER', channel_id: 'D1', thread_ts: '50.1' } })).status).toBe(200);
+    const prompts = calls.find((call) => call.method === 'assistant.threads.setSuggestedPrompts');
+    expect(prompts?.json).toMatchObject({ channel_id: 'D1', thread_ts: '50.1', prompts: expect.arrayContaining([{ title: expect.any(String), message: expect.any(String) }]) });
+    expect((prompts?.json['prompts'] as unknown[]).length).toBeLessThanOrEqual(4);
+    await event({ type: 'app_home_opened', user: 'UOWNER', tab: 'home' });
+    await event({ type: 'app_home_opened', user: 'USTRANGER', tab: 'home' });
+    const published = calls.filter((call) => call.method === 'views.publish');
+    expect(published.map((call) => call.json['user_id'])).toEqual(['UOWNER', 'USTRANGER']);
+    expect(JSON.stringify(published[0]?.json['view'])).toContain('Open tasks');
+    expect(JSON.stringify(published[1]?.json['view'])).not.toContain('Open tasks');
+    expect(wakes).toEqual([]);
+  });
+
+  it('joining a channel reads its earlier messages: stored as observed items, one digest run asked for, a record on the channel, and the conversation hidden', async () => {
+    await install();
+    const day = Math.floor(Date.now() / 1000) - 86_400;
+    history = [
+      { ts: `${day + 300}.000100`, user: 'U2', text: 'Carol: assets table first' },
+      { ts: `${day + 200}.000100`, user: 'U3', text: 'we ship the onboarding release on the 12th' },
+      { ts: `${day + 100}.000100`, bot_id: 'B1', text: 'a bot post is not read' },
+    ];
+    expect((await event({ type: 'member_joined_channel', user: 'UBOT', channel: 'C1' })).status).toBe(200);
+    await vi.waitFor(async () => expect((await store.get('channels', 'slack:T1.nova'))?.groups?.['C1']?.backfill?.status).toBe('done'));
+    expect((await store.get('channels', 'slack:T1.nova'))?.groups?.['C1']?.backfill).toMatchObject({ status: 'done', count: 2 });
+    const hidden = (await store.list('conversations', { limit: 20 })).items.find((conv) => (conv as { observedOnly?: boolean }).observedOnly === true);
+    expect(hidden).toBeDefined();
+    const items = (await store.list('items', { where: { conversationId: hidden?.id ?? '' }, limit: 20 })).items;
+    expect(items.map((item) => item.type === 'user_message' && [item.observed, item.text])).toEqual(expect.arrayContaining([[true, 'Carol: assets table first'], [true, 'we ship the onboarding release on the 12th']]));
+    expect(wakes.filter((wake) => wake.kind === 'observed' && wake.payload['backfill'] === true)).toHaveLength(1);
+    // The bot joining again (or a message in the same channel) does not read it twice.
+    await event({ type: 'member_joined_channel', user: 'UBOT', channel: 'C1' });
+    await event({ type: 'message', channel_type: 'channel', channel: 'C1', user: 'U2', text: 'one more', ts: '1700000400.000100' });
+    expect(calls.filter((call) => call.method.startsWith('conversations.history'))).toHaveLength(1);
+  });
+
+  it('/juno asks the named (or main) agent under a line saying who asked; the "Ask Juno about this" shortcut asks about a message in its thread', async () => {
+    await install();
+    await enable('juno');
+    const command = (text: string, extra: Record<string, string> = {}) => app.request('/v1/channels/slack/commands', {
+      method: 'POST', headers: { ...ownerHeaders(OWNER, true), 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ team_id: 'T1', channel_id: 'C1', user_id: 'UOWNER', command: '/juno', text, trigger_id: 'trig', ...extra }).toString(),
+    });
+    const empty = await command('');
+    expect(await empty.json()).toMatchObject({ response_type: 'ephemeral', text: expect.stringContaining('Tell me what you need') });
+    const ok = await command('@nova what is on my plate');
+    expect(ok.status).toBe(200);
+    await vi.waitFor(() => expect(wakes).toHaveLength(1));
+    expect(calls.find((call) => call.method === 'chat.postMessage')?.json).toMatchObject({ channel: 'C1', text: '<@UOWNER> asked: what is on my plate' });
+    expect(wakes[0]).toMatchObject({ agentId: 'nova', kind: 'room_mention', payload: { text: 'what is on my plate', chatId: 'C1', threadId: 'C1:9.9' } });
+    const shortcut = await app.request('/v1/channels/slack/interactions', {
+      method: 'POST', headers: { ...ownerHeaders(OWNER, true), 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ payload: JSON.stringify({ type: 'message_action', callback_id: 'juno_ask_about_this', trigger_id: 't2', team: { id: 'T1' }, user: { id: 'UOWNER' }, channel: { id: 'C1' }, message: { ts: '77.1', text: 'Is the invoice paid?' } }) }).toString(),
+    });
+    expect(shortcut.status).toBe(200);
+    await vi.waitFor(() => expect(wakes).toHaveLength(2));
+    expect(wakes[1]).toMatchObject({ agentId: 'juno', payload: { text: 'About this message: "Is the invoice paid?"', threadId: 'C1:77.1' } });
   });
 
   it('keeps a free workspace working without handles and turns them on after the upgrade', async () => {

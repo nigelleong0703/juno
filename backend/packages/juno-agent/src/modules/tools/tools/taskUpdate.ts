@@ -10,7 +10,7 @@ import { invalidArguments } from '../toolArguments.js';
 import type { DeclaredTask, Store, Tool, ToolContext, ToolResult } from '../../../contracts/index.js';
 import { emitAgentStatus } from '../../../execution/agent-status.js';
 import { emitDeclaredTask, oneLine } from '../../tasks/agent-tasks.js';
-import { isChildRun } from '../../tasks/childDelivery.js';
+import { hasSubagentParent } from '../../tasks/subagentDelivery.js';
 import { nowIso } from '../util.js';
 import { nameRunByAgent } from '../../../execution/harness/services/run-aux.js';
 
@@ -97,8 +97,8 @@ export function createTaskUpdateTool(opts: { store: Store }): Tool {
     async execute(args: unknown, ctx: ToolContext): Promise<ToolResult> {
       const parsed = taskUpdateSchema.safeParse(args);
       if (!parsed.success) return invalidArguments('task_update', args, parsed.error);
-      if (isChildRun(await opts.store.get('runs', ctx.runId))) {
-        return result('a child task is already on the task list as one task; report your progress in your final result instead.', true);
+      if (hasSubagentParent(await opts.store.get('runs', ctx.runId))) {
+        return result('a subagent is already on the task list as one task; report your progress in your final result instead.', true);
       }
       const input = parsed.data;
       // One durable step: a replay returns the recorded outcome instead of creating a second task.

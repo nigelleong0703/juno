@@ -1,7 +1,7 @@
 import type { Context } from '@agent-desktop/durable';
 import { rpc } from '@agent-desktop/durable';
 import { sessionKey, type Store, type TaskDonePayload, type WakeEvent } from '../../../contracts/index.js';
-import { isTerminal, type ChildRun } from '../../../modules/tasks/childRead.js';
+import { isTerminal, type SubagentRun } from '../../../modules/tasks/subagentRead.js';
 import { sessionDef, type SessionDef } from './definitions.js';
 
 /** Where a completion wake goes: the session that started the background work. */
@@ -54,11 +54,11 @@ export function taskDoneWake(target: CompletionTarget, payload: TaskDonePayload,
  * that has ended, or a main-run origin, keeps the main session, the only place left that can act. Checked at
  * delivery, so a delayed completion (a wait_for expiry) routes by the child's state when it lands. Null = keep.
  */
-export async function childCompletionRoute(store: Store, event: WakeEvent): Promise<{ sessionKey: string; wake: WakeEvent } | null> {
+export async function subagentCompletionRoute(store: Store, event: WakeEvent): Promise<{ sessionKey: string; wake: WakeEvent } | null> {
   if (event.kind !== 'task_done') return null;
   const origin = event.payload['originRunId'];
   if (typeof origin !== 'string' || origin.length === 0) return null;
-  const child: ChildRun | null = await store.get('runs', origin);
+  const child: SubagentRun | null = await store.get('runs', origin);
   if (child === null || child.parentRunId === undefined || child.childSessionKey === undefined || isTerminal(child.status)) return null;
   return {
     sessionKey: child.childSessionKey,
@@ -67,7 +67,7 @@ export async function childCompletionRoute(store: Store, event: WakeEvent): Prom
       agentId: child.agentId,
       conversationId: child.conversationId ?? event.conversationId,
       sessionKey: child.childSessionKey,
-      kind: 'child_task',
+      kind: 'subagent_task',
       mode: 'steer',
       payload: { ...event.payload, childRunId: child.id, parentRunId: child.parentRunId },
     },
@@ -75,7 +75,7 @@ export async function childCompletionRoute(store: Store, event: WakeEvent): Prom
 }
 
 /**
- * Deliver a completion wake from inside a Restate handler. The send is journaled by Restate, so a
+ * Deliver a completion wake from inside a runner handler. The send is journaled by the runner, so a
  * replay never sends twice; `delayMs` schedules it (used by wake_at).
  */
 export function sendCompletionWake(ctx: Pick<Context, 'objectSendClient'>, wake: WakeEvent, delayMs?: number): void {

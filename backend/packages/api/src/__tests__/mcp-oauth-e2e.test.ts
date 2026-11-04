@@ -356,6 +356,25 @@ describe('MCP connect e2e (loopback fixture, OAuth + PKCE + DCR, agent tool call
     }
   });
 
+  it('refuses a custom server whose URL is one of our own hosted connector endpoints, at probe and at install (400 MCP_URL_BLOCKED)', async () => {
+    const previousOrigin = process.env.BETTER_AUTH_URL;
+    process.env.BETTER_AUTH_URL = 'https://gw.example';
+    try {
+      const before = { ...fixture.stats };
+      for (const url of ['https://gw.example/mcp/google/gmail', 'https://gw.example/mcp/google/youtube']) {
+        const probed = await call('/v1/apps/custom/probe', SESSION_A, 'POST', { url });
+        expect(probed.status, url).toBe(400);
+        expect(((await probed.json()) as { error: { code: string } }).error.code).toBe('MCP_URL_BLOCKED');
+        const installed = await call('/v1/apps/custom/install', SESSION_A, 'POST', { name: 'Mine', url, confirm: { auth: 'none', tools: {} } });
+        expect(installed.status, url).toBe(400);
+        expect(((await installed.json()) as { error: { code: string } }).error.code).toBe('MCP_URL_BLOCKED');
+      }
+      expect(fixture.stats).toEqual(before);
+    } finally {
+      if (previousOrigin === undefined) delete process.env.BETTER_AUTH_URL; else process.env.BETTER_AUTH_URL = previousOrigin;
+    }
+  });
+
   it('never sends the configured provider secret to an authorization server that claims that issuer', async () => {
     env.GOOGLE_OAUTH_CLIENT_ID = 'configured-client-id';
     env.GOOGLE_OAUTH_CLIENT_SECRET = 'configured-client-secret';

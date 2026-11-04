@@ -284,16 +284,17 @@ describe('channel ingress records who speaks (identity, Postgres)', () => {
     expect((await counts()).accounts).toBe(accountsBefore);
   });
 
-  it('records a group sender as an account only, until the message addresses the agent', async () => {
-    const group = { chatType: 'group', threadId: 'g-q', chatId: 'chat-q', text: 'hello all', externalMessageId: 'grp-1', from: { id: 'user-11', name: 'Quiet' } };
+  it('records a group sender as an account only, until a message addresses the agent', async () => {
+    const group = { chatType: 'group', threadId: 'g-q', chatId: 'chat-q', text: 'hello all', externalMessageId: 'grp-1', from: { id: 'user-11', name: 'Quiet' }, addressed: false };
     const before = await counts();
     expect((await post(app, '/v1/channels/telegram/bot-3/events', group)).status).toBe(202);
     expect(await accountOf('telegram', 'user-11')).toMatchObject({ name: 'Quiet', person_id: null });
     expect(lastPayload()['personId']).toBeUndefined();
     expect(await counts()).toEqual({ people: before.people, accounts: before.accounts + 1 });
 
-    // Addressed: a mention of this Telegram bot (its username is the channel id). The same account now gets a person.
-    const addressed = { ...group, externalMessageId: 'grp-2', text: '@bot-3 you there?', mentions: [{ id: 'tg-bot-3', name: 'Nova', handle: 'bot-3' }] };
+    // Addressed (the platform delivered it as a mention or a reply). The same account now gets a person.
+    const { addressed: _observed, ...rest } = group;
+    const addressed = { ...rest, externalMessageId: 'grp-2', text: '@bot-3 you there?' };
     expect((await post(app, '/v1/channels/telegram/bot-3/events', addressed)).status).toBe(202);
     const account = await accountOf('telegram', 'user-11');
     expect(account?.person_id).not.toBeNull();

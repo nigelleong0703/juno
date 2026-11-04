@@ -1,6 +1,6 @@
 /**
- * `StoredRun.effectReview` (BACKEND 6.5): a run that has an uncertain outside action (a recovery review card the owner
- * has not settled) reads as waiting for that review while it lives and as `unknown_effect` after it ends. The flag is
+ * `StoredRun.effectReview` (BACKEND 6.5): a run whose agent asked the person about an uncertain outside action
+ * (`ask_about_uncertain_action`) and has no answer yet reads as waiting for it while it lives and as `unknown_effect` after it ends. The flag is
  * written in the same transaction as the request that opens or settles the review, and the run's task is announced.
  */
 import type { Store, StoredRequest } from '../../contracts/index.js';
@@ -24,10 +24,10 @@ export async function openEffectReview(store: Store, runId: string): Promise<voi
 export async function settleEffectReview(store: Store, request: StoredRequest): Promise<void> {
   const own = request.reconciliation;
   if (own === undefined || request.runId === undefined) return;
-  let open = own.state === 'pending' || own.state === 'still_unknown';
+  let open = own.state === 'pending';
   if (!open) {
     const siblings = await store.list('requests', { where: { runId: request.runId }, limit: 200 });
-    open = siblings.items.some((other) => other.id !== request.id && (other.reconciliation?.state === 'pending' || other.reconciliation?.state === 'still_unknown'));
+    open = siblings.items.some((other) => other.id !== request.id && other.reconciliation?.state === 'pending');
   }
   await setEffectReview(store, request.runId, open ? 'open' : 'resolved');
 }

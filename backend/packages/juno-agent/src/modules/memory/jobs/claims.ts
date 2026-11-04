@@ -15,7 +15,7 @@ import { LOG_SOURCE_PREFIX, repeatsRetracted, repeatsText, verifyEvidence } from
 import { ensureOwnerPerson } from '../owner.js';
 import { personFor, placeOf, type KnownPerson } from '../notes.js';
 import { relationNamed, statementSchema, type Statement } from '../relations.js';
-import { rankItems } from '../search.js';
+import { rankItems, vectorSearchFor } from '../search.js';
 import { listAll } from '../util.js';
 import { renderViews } from '../views.js';
 import { topicSchema } from '../wording.js';
@@ -153,32 +153,34 @@ export interface ClaimsContext {
 /**
  * The existing items a digest's model is shown so it does not write what is already there: the ones closest to the conversation (the same
  * hybrid search as memory_search: words, and vectors when an embedder is set), from any source, or all of them when there are few. Only
- * items of the audience the chat's own items get (and not an agent's private ones): the digest never replaces an item of another audience.
+ * items of the audience the chat's own items get, and only the shared ones and this agent's own (BACKEND 5.4a: what another agent
+ * learned is not shown, so a fact it knows is still written for this agent): the digest never replaces an item of another audience.
  */
-async function closestItems(deps: ClaimDeps, ownerId: string, items: readonly SourceItem[]): Promise<MemoryItem[]> {
+async function closestItems(deps: ClaimDeps, ownerId: string, agentId: string, items: readonly SourceItem[]): Promise<MemoryItem[]> {
   const first = items[0];
   if (first === undefined) return [];
   const place = await placeOf(deps.store, ownerId, first.conversationId);
-  const embedder = deps.memory.embedder;
-  const comparable = (await deps.memory.items.memoryFor(ownerId, { kind: 'owner' }, undefined, { vectors: embedder !== undefined }))
-    .filter((item) => item.audience === place.audience && item.agentId === null);
+  const comparable = (await deps.memory.items.memoryFor(ownerId, { kind: 'owner' }, agentId))
+    .filter((item) => item.audience === place.audience);
   if (comparable.length <= SHOWN_ITEMS) return comparable;
   const said = items.filter((item) => item.role !== 'agent').map((item) => item.text).join('\n').slice(-QUERY_CHARS);
-  return (await rankItems(embedder, comparable, said, SHOWN_ITEMS)).map((hit) => hit.item);
+  return (await rankItems(vectorSearchFor(deps.memory, { ownerId, presence: { kind: 'owner' }, agentId }), comparable, said, SHOWN_ITEMS)).map((hit) => hit.item);
 }
 
 /** The new messages, the closest existing items, the assistants and the people, as the digest's prompt shows them, and the context to check against. */
-export async function readClaimsContext(deps: ClaimDeps, input: { ownerId: string; items: readonly SourceItem[]; agents: ReadonlyArray<{ id: string; name: string }> }): Promise<{ context: ClaimsContext; prompt: string }> {
+export async function readClaimsContext(deps: ClaimDeps, input: { ownerId: string; agentId: string; items: readonly SourceItem[]; agents: ReadonlyArray<{ id: string; name: string }> }): Promise<{ context: ClaimsContext; prompt: string }> {
   const { store, memory } = deps;
-  const { ownerId, items, agents } = input;
+  const { ownerId, agentId, items, agents } = input;
   const claims = (await listAll(store, 'memoryClaims')).filter((claim) => claim.ownerId === ownerId);
-  const active = claims.filter((claim) => claim.status === 'active');
+  // "Already known" means known to this agent: the active claims are the ones behind items it may read (shared or its own). A retracted one stays retracted for all.
+  const readable = new Set((await memory.items.memoryFor(ownerId, { kind: 'owner' }, agentId)).flatMap((item) => (item.claimId === null ? [] : [item.claimId])));
+  const active = claims.filter((claim) => claim.status === 'active' && readable.has(claim.id));
   const retracted = claims.filter((claim) => claim.status === 'retracted');
   const ownerPersonId: string | null = (await ensureOwnerPerson(memory, store, ownerId)).id;
   const people = await memory.identity.listPeople(ownerId);
   const knownPeople: KnownPerson[] = people.map((person) => ({ id: person.id, name: person.name }));
   const senders = await senderLookup(deps, ownerId, items);
-  const shown = await closestItems(deps, ownerId, items);
+  const shown = await closestItems(deps, ownerId, agentId, items);
   const aboutOf = (item: MemoryItem): string => (item.aboutPersonId === null || item.aboutPersonId === ownerPersonId ? 'the person being helped' : knownPeople.find((person) => person.id === item.aboutPersonId)?.name ?? 'someone');
   const prompt = [
     renderSources(items, senders.labels),
@@ -196,8 +198,8 @@ interface Accepted {
   place: TargetPlace;
   /** The person the item is about: the target's person, or the owner for the owner's own facts. */
   aboutPersonId: string | null;
-  /** The agent whose own section of a person's page the claim belongs to. */
-  agentId?: string;
+  /** The agent that keeps the item (BACKEND 5.4a): the one the claim names for a person's page, else the agent whose chat was digested. */
+  agentId: string;
   topic?: ItemTopic;
   /** The existing item this claim replaces (the model said `supersedes`); it is retracted when the claim is written. */
   replacesItemId?: string;
@@ -303,7 +305,7 @@ export async function applyClaims(deps: ClaimDeps, input: { ownerId: string; age
       if (id === undefined || target === undefined) return undefined;
       const found = await deps.memory.items.getItem(ownerId, id);
       const about = target.personId ?? (target.file === 'person' ? null : ownerPersonId);
-      if (found?.status === 'active' && found.audience === await audienceOf(fresh[0]?.itemId) && found.aboutPersonId === about && found.agentId === (agent?.id ?? null)) return found;
+      if (found?.status === 'active' && found.audience === await audienceOf(fresh[0]?.itemId) && found.aboutPersonId === about && (found.agentId === null || found.agentId === (agent?.id ?? agentId))) return found;
       deps.log?.({ ownerId, id }, 'chat digest: the item the model named is not this fact\'s to match, written as new');
       return undefined;
     };
@@ -355,7 +357,7 @@ export async function applyClaims(deps: ClaimDeps, input: { ownerId: string; age
       },
       place: target,
       aboutPersonId: target.personId ?? (target.file === 'person' ? null : ownerPersonId),
-      ...(agent === undefined ? {} : { agentId: agent.id }),
+      agentId: agent?.id ?? agentId,
       ...(claim.data.topic === undefined ? {} : { topic: claim.data.topic }),
       ...(replacedItem === undefined ? {} : { replacesItemId: replacedItem.id }),
       ...(relation === undefined || cited === undefined ? {} : { cited: { ...relation, itemId: cited.itemId, quote: cited.quote } }),
@@ -419,7 +421,7 @@ async function writeClaims(
       file: entry.place.file,
       ...(entry.topic === undefined ? {} : { topic: entry.topic }),
       aboutPersonId: entry.aboutPersonId,
-      agentId: entry.agentId ?? null,
+      agentId: entry.agentId,
       saidByPersonId: fromOwner ? input.ownerPersonId : first === undefined ? null : input.personOf.get(first.itemId) ?? null,
       saidByAccountId: fromOwner || first === undefined ? null : input.accountOf.get(first.itemId)?.accountId ?? null,
       saidIn: place.saidIn,

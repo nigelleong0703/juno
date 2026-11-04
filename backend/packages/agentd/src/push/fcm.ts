@@ -14,6 +14,8 @@ export interface FcmConfig {
   clientEmail: string;
   privateKeyPem: string;
   tokenUri: string;
+  /** Where messages are posted; `https://fcm.googleapis.com` unless `FCM_API_BASE_URL` names a stand-in (the e2e stack). */
+  apiBaseUrl?: string;
 }
 
 export interface FcmPayload {
@@ -53,6 +55,7 @@ export function fcmConfigFromEnv(env: NodeJS.ProcessEnv): FcmConfig | null {
     clientEmail: account.client_email,
     privateKeyPem: account.private_key,
     tokenUri: account.token_uri,
+    ...(env['FCM_API_BASE_URL']?.trim() ? { apiBaseUrl: env['FCM_API_BASE_URL'].trim() } : {}),
   };
 }
 
@@ -126,7 +129,7 @@ export function createFcmSender(args: {
   const key = createPrivateKey(args.config.privateKeyPem);
   const doFetch = args.fetch ?? fetch;
   const now = args.now ?? Date.now;
-  const sendUrl = `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(args.config.projectId)}/messages:send`;
+  const sendUrl = `${args.config.apiBaseUrl ?? 'https://fcm.googleapis.com'}/v1/projects/${encodeURIComponent(args.config.projectId)}/messages:send`;
   let cached: { token: string; expiresAt: number } | null = null;
   let exchanging: Promise<string> | null = null;
 

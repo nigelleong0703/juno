@@ -10,7 +10,7 @@
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { describe, expect, it } from 'vitest';
-import { RestatePromise, TerminalError } from '@agent-desktop/durable';
+import { DurablePromise, TerminalError } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import type { AssistantTurn, Brain, BrainContext, ToolRegistry, WakeEvent } from '../../../contracts/index.js';
 import type { Message } from '@earendil-works/pi-ai';
@@ -21,6 +21,7 @@ import { createOpenAIProvider } from '../../brain/provider.js';
 import { createRunCancellation, NEVER_CANCELLED, type CancelSource } from '../services/cancel.js';
 import { runLoop } from '../services/run-loop.js';
 import type { RunContext, RunInput, RunServices } from '../services/run-types.js';
+import { CONVERSATION_TOO_LONG, MODEL_BUSY, MODEL_NEEDS_SETTINGS, MODEL_UNREACHABLE, SOMETHING_WENT_WRONG } from '../logic/plain-errors.js';
 
 const AT = '2026-10-08T00:00:00.000Z';
 const AGENT = 'agent-ph5';
@@ -143,23 +144,23 @@ function journalContext(shared?: Map<string, unknown>, sleeps: number[] = []): {
     names,
     ctx: {
       rand: { uuidv4: () => 'id-' + String(seq++) },
-      run<T>(name: string, action: () => Promise<T>): RestatePromise<T> {
+      run<T>(name: string, action: () => Promise<T>): DurablePromise<T> {
         if (used.has(name)) throw new Error('duplicate durable step: ' + name);
         used.add(name);
         names.push(name);
-        if (journal.has(name)) return RestatePromise.resolve(structuredClone(journal.get(name)) as T);
-        return RestatePromise.resolve(action().then((value) => {
+        if (journal.has(name)) return DurablePromise.resolve(structuredClone(journal.get(name)) as T);
+        return DurablePromise.resolve(action().then((value) => {
           journal.set(name, structuredClone(value));
           return value;
         }));
       },
-      awakeable<T>(): { id: string; promise: RestatePromise<T> } {
-        return { id: 'awake-' + String(seq++), promise: RestatePromise.resolve(new Promise<T>(() => {})) };
+      awakeable<T>(): { id: string; promise: DurablePromise<T> } {
+        return { id: 'awake-' + String(seq++), promise: DurablePromise.resolve(new Promise<T>(() => {})) };
       },
-      drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
+      drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
       sleep: (ms: number) => {
         sleeps.push(ms);
-        return RestatePromise.resolve<void>(undefined);
+        return DurablePromise.resolve<void>(undefined);
       },
     },
   };
@@ -233,10 +234,29 @@ describe('bounded provider recovery through the run', () => {
     const outcome = await drive(provider.brain, names);
     expect(outcome).toBeInstanceOf(TerminalError);
     if (outcome instanceof TerminalError) {
-      expect(outcome.message).toContain('kept failing after 3 attempts');
+      expect(outcome.message).toBe(MODEL_UNREACHABLE);
       expect(outcome.metadata).toMatchObject({ code: 'transient' });
     }
     expect(provider.attempts()).toBe(3);
+  });
+
+  // What the person reads (Run.error, the task row, a push) is one plain sentence per kind; the provider's own words and the status go to the log.
+  it.each([
+    ['quota', () => [new ProviderFailureError({ kind: 'quota', code: 'quota', message: 'Model quota exhausted (429): {"error":"rate"}', retryAfterMs: 600_000 })], MODEL_BUSY],
+    ['transient', () => [transient(), transient(), transient(), transient()], MODEL_UNREACHABLE],
+    ['auth', () => [auth()], MODEL_NEEDS_SETTINGS],
+    ['context_overflow', () => [overflow(), overflow()], CONVERSATION_TOO_LONG],
+    ['invalid_request', () => [new ProviderFailureError({ kind: 'invalid_request', code: 'invalid_request', message: 'Model request rejected (400): bad field' })], SOMETHING_WENT_WRONG],
+  ])('a %s failure the run could not absorb ends with one plain sentence and logs the provider text', async (kind, failures, sentence) => {
+    const provider = failingBrain(failures(), final('never reached'));
+    const lines: Array<Record<string, unknown>> = [];
+    const store = createMemoryStore();
+    await store.put('runs', runDoc() as never, { conversationId: CONV });
+    const outcome = await runLoop(journalContext().ctx, { store, blobs: createMemoryBlobStore(), enqueuer: new NoopEnqueuer(), brain: provider.brain, toolRegistry: emptyRegistry, log: (fields) => { lines.push(fields); } }, input, 'run-1', { sessionKey: input.sessionKey, agentId: AGENT }, NEVER_CANCELLED)
+      .then((value) => value, (error: unknown) => error);
+    expect(outcome).toBeInstanceOf(TerminalError);
+    if (outcome instanceof TerminalError) expect(outcome.message).toBe(sentence);
+    expect(lines.find((line) => line['kind'] === kind)?.['error']).toEqual(expect.stringContaining('Model'));
   });
 
   it('backs off durably before each transient retry, honouring a short retry-after', async () => {
@@ -353,7 +373,7 @@ describe('bounded provider recovery through the run', () => {
     const provider = failingBrain([], final('never reached'));
     const store = createMemoryStore();
     await store.put('runs', runDoc() as never, { conversationId: CONV });
-    const cancelled: CancelSource = { peek: async () => true, get: () => RestatePromise.resolve(true) };
+    const cancelled: CancelSource = { peek: async () => true, get: () => DurablePromise.resolve(true) };
     const outcome = await runLoop(
       journalContext().ctx,
       { store, blobs: createMemoryBlobStore(), enqueuer: new NoopEnqueuer(), brain: provider.brain, toolRegistry: emptyRegistry },

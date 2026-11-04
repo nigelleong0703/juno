@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createMemoryStore } from '@agent-desktop/db';
 import type { Store } from '@agent-desktop/contracts';
 import { EventType, type AgentEvent, type ChannelOrigin } from '@agent-desktop/public-contracts';
-import { startChannelDelivery } from '../delivery.js';
+import type { Enqueuer } from '@agent-desktop/contracts';
+import { createMemoryBlobStore } from 'juno-agent/testing/blobs';
+import { startOutbox } from '../../outbox/index.js';
 import { fetchGroupHistory } from '../history.js';
 import { createChannelPort } from '../port.js';
 import { finishWorking, startWorking } from '../working.js';
@@ -138,7 +140,10 @@ describe('working indicator', () => {
     const store = await setup('slack');
     const { fetchFn, calls } = fakeFetch();
     let emit: (stored: { event: AgentEvent }) => void = () => undefined;
-    await startChannelDelivery({ store, senders: () => undefined, bus: { subscribe: async (onEvent) => { emit = onEvent; return () => undefined; } } });
+    const outbox = await startOutbox({
+      store, senders: () => undefined, channels: testChannels, blobs: createMemoryBlobStore(), enqueuer: {} as Enqueuer, env: {},
+      bus: { subscribe: async (onEvent) => { emit = onEvent; return () => undefined; } },
+    });
     await startWorking({ store, channels: testChannels, channelFetch: fetchFn }, OWNER, 'cvn-1', origin('slack'), '1700000000.000100');
     const metadata = (conversationId: string) => ({ juno: { agentId: 'agent-1', conversationId } });
     const run = (conversationId: string, status: 'failed' | 'completed'): { event: AgentEvent } => ({
@@ -152,6 +157,7 @@ describe('working indicator', () => {
     emit(run('cvn-1', 'failed'));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(calls.map((call) => call.url)).toEqual(['https://slack.com/api/reactions.add', 'https://slack.com/api/reactions.remove']);
+    outbox.stop();
   });
 
   it('is left out where there is nothing to show it with: Telegram, and Feishu without the reactions permission', async () => {

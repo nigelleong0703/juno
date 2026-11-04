@@ -2,12 +2,15 @@ import type { Store, WakeEvent } from '../../../contracts/index.js';
 import type { QueuedEvent } from '../logic/busy.js';
 import { isPrivateConversation, PRIVATE_IDLE_WINDOW_MS, privateReplyDelayMs } from '../logic/idle.js';
 import type { SessionIo, SessionState } from './session-state.js';
+import { isVoiceWake } from '../../voice-channel.js';
 
 /** True when this wake is a user message in a private (1:1/peer) chat that can coalesce. */
 export async function isPrivateReplyBurst(store: Store, event: WakeEvent): Promise<boolean> {
   // No idle window configured: start the run at once, no durable timer is scheduled.
   if (PRIVATE_IDLE_WINDOW_MS <= 0) return false;
   if (event.kind !== 'user_message' || event.origin.type !== 'user') return false;
+  // A spoken turn already ended at the call's endpointing (the user stopped talking); waiting for a typed burst only delays the answer.
+  if (isVoiceWake(event)) return false;
   const conv = await store.get('conversations', event.conversationId);
   return isPrivateConversation(conv?.kind);
 }

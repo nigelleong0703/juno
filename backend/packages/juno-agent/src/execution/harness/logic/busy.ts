@@ -1,6 +1,6 @@
 /**
  * Busy-mode decisions and inbox draining (BACKEND §3.2). Pure functions — the Session object is a thin
- * Restate adapter over these.
+ * durable adapter over these.
  */
 import { LIMITS, type BusyMode, type WakeEvent, type WakeKind } from '../../../contracts/index.js';
 import type { RunKind } from '@agent-desktop/public-contracts';
@@ -147,7 +147,8 @@ export function runTitleFor(events: readonly WakeEvent[], taskTitle?: string): s
       if (p['source'] === 'screen_control') title = 'Screen handed back';
       else if (p['source'] === 'discord_voice') title = 'Voice call ended';
       else if (p['source'] === 'meeting') title = 'Meeting ended';
-      else title = taskTitle === undefined ? 'Update from a child task' : `Update on: ${taskTitle}`;
+      else if (p['source'] === 'delivery_failed') title = 'A message was not delivered';
+      else title = taskTitle === undefined ? 'Update from a subagent' : `Update on: ${taskTitle}`;
       break;
     case 'onboarding':
       title = 'Getting started';

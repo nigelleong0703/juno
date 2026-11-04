@@ -1,6 +1,6 @@
 import { createMemoryBlobStore } from '../../../testing/blobs.js';
 import { describe, expect, it } from 'vitest';
-import { JournalMismatchError, RestatePromise, TerminalError } from '@agent-desktop/durable';
+import { JournalMismatchError, DurablePromise, TerminalError } from '@agent-desktop/durable';
 import { createMemoryStore, NoopEnqueuer } from '../../../testing/store.js';
 import {
   sessionKey,
@@ -147,10 +147,10 @@ function bodyHarness(runId: string): { ctx: RunBodyContext; finished: Array<{ se
     ctx: {
       key: runId,
       rand: { uuidv4: () => runId + '-' + (counter += 1) },
-      run: <T>(_name: string, action: () => Promise<T>): RestatePromise<T> => RestatePromise.resolve(action()),
-      awakeable: <T>() => ({ id: runId + '-awake', promise: RestatePromise.resolve(new Promise<T>(() => {})) }),
-      drainInbox: () => RestatePromise.resolve<WakeEvent[]>([]),
-      cancel: { peek: async () => false, get: () => RestatePromise.resolve(false) },
+      run: <T>(_name: string, action: () => Promise<T>): DurablePromise<T> => DurablePromise.resolve(action()),
+      awakeable: <T>() => ({ id: runId + '-awake', promise: DurablePromise.resolve(new Promise<T>(() => {})) }),
+      drainInbox: () => DurablePromise.resolve<WakeEvent[]>([]),
+      cancel: { peek: async () => false, get: () => DurablePromise.resolve(false) },
       runFinished: async (key: string, failedRunId: string) => {
         finished.push({ sessionKey: key, runId: failedRunId });
       },
@@ -192,7 +192,7 @@ function blockedAdapter(): EngineAdapter {
 }
 
 /** Reserve a live child of run-1 in owner scope, so terminal cleanup walks a real descendant. */
-async function seedLiveChild(raw: MemoryStore): Promise<void> {
+async function seedLiveSubagent(raw: MemoryStore): Promise<void> {
   await scoped(raw, owner).put('runs', {
     id: 'run-child-1',
     agentId: 'agent-1',
@@ -218,7 +218,7 @@ describe('run terminal failure persistence', () => {
   it('fails the run with the terminal message, emits run.finished and releases the session', async () => {
     const raw = createMemoryStore();
     const input = await seed(raw);
-    await seedLiveChild(raw);
+    await seedLiveSubagent(raw);
     const enqueuer = new RecordingEnqueuer();
     const harness = bodyHarness('run-1');
     const failure = new TerminalError('model stream stalled: stream_idle_timeout after 30s');
@@ -237,10 +237,30 @@ describe('run terminal failure persistence', () => {
     expect(enqueuer.calls.filter((call) => call.method === 'stopRun')).toEqual([{ method: 'stopRun', args: ['run-child-1'] }]);
   });
 
+  it('holds the computer from the start of a run and lets go however it ends: completed, failed, or retried', async () => {
+    const outcomes: Array<[string, Error | EngineAdapter]> = [
+      ['completed', blockedAdapter()],
+      ['failed', new TerminalError('model stream stalled')],
+      ['retried', new Error('Model API error: 502 Timeout')],
+    ];
+    for (const [, engine] of outcomes) {
+      const raw = createMemoryStore();
+      const input = await seed(raw);
+      const events: string[] = [];
+      const services = { ...servicesFor(requestScopedStore(raw), engine), computerHolds: {
+        begin: (agentId: string, runId: string) => { events.push(`begin ${agentId} ${runId}`); },
+        parked: () => () => undefined,
+        end: (runId: string) => { events.push(`end ${runId}`); },
+      } };
+      await runWorkflowBody(bodyHarness('run-1').ctx, services, input).catch(() => undefined);
+      expect(events).toEqual(['begin agent-1 run-1', 'end run-1']);
+    }
+  });
+
   it('rethrows a transient failure without finalizing the run or releasing the session', async () => {
     const raw = createMemoryStore();
     const input = await seed(raw);
-    await seedLiveChild(raw);
+    await seedLiveSubagent(raw);
     const enqueuer = new RecordingEnqueuer();
     const harness = bodyHarness('run-1');
     await expect(runWorkflowBody(harness.ctx, servicesFor(requestScopedStore(raw), new Error('Model API error: 502 Timeout'), enqueuer), input)).rejects.toThrow(/502 Timeout/);
@@ -259,11 +279,11 @@ describe('run terminal failure persistence', () => {
     const enqueuer = new RecordingEnqueuer();
     const harness = bodyHarness('run-1');
     // The cancel signal is read live: the replay saw the Stop at a checkpoint the original execution passed before it.
-    harness.ctx.cancel = { peek: async () => true, get: () => RestatePromise.resolve(new Promise<boolean>(() => {})) };
+    harness.ctx.cancel = { peek: async () => true, get: () => DurablePromise.resolve(new Promise<boolean>(() => {})) };
     // Journaled steps no longer line up after the divergence: the stop must not touch the journal again.
     const journaled: string[] = [];
     const run = harness.ctx.run;
-    harness.ctx.run = <T>(name: string, action: () => Promise<T>): RestatePromise<T> => { journaled.push(name); return run(name, action); };
+    harness.ctx.run = <T>(name: string, action: () => Promise<T>): DurablePromise<T> => { journaled.push(name); return run(name, action); };
     const mismatch = new JournalMismatchError(34, '@call Session.drainInbox', 'stop');
 
     await runWorkflowBody(harness.ctx, servicesFor(requestScopedStore(raw), mismatch, enqueuer), input);
@@ -290,7 +310,7 @@ describe('run terminal failure persistence', () => {
   it('stops the live children for real before a blocked terminal row lands', async () => {
     const raw = createMemoryStore();
     const input = await seed(raw);
-    await seedLiveChild(raw);
+    await seedLiveSubagent(raw);
     const enqueuer = new RecordingEnqueuer();
     const harness = bodyHarness('run-1');
     await runWorkflowBody(harness.ctx, servicesFor(requestScopedStore(raw), blockedAdapter(), enqueuer), input);

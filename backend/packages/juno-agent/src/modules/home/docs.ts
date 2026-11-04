@@ -57,13 +57,13 @@ At \`nextCheckAt\` you are woken with a goal check-in (the goal, its milestones 
 
 ## When to message the user, and when to stay silent
 
-Message the user (your final reply) only when:
+Message the user only when:
 
 - something really changed (a result, a blocker, a milestone finished that they care about);
 - you need a decision or approval to go on;
 - a milestone is due within 24 hours (the platform sends you a reminder run for this; you must message).
 
-Otherwise stay silent: record progress in the goal timeline and end the check-in the quiet way its wake text describes. "Nothing new" and "still working on it" are never worth a message, and never a reply either. When the user presses "Check now" they asked, so answer in a line or two.
+Otherwise stay silent: record progress in the goal timeline and finish the check-in. "Nothing new" and "still working on it" are never worth a message. When the user presses "Check now" they asked, so answer in a line or two.
 
 Once a day a background job also writes a one-line briefing per active goal into the timeline; that is not a message and you do not need to do anything for it.
 `;

@@ -207,7 +207,7 @@ describe.each(PORTS)('MemoryPort contract (%s)', (_name, portOf) => {
   it('digest: the context carries its sender lookup as maps, and an empty answer applies cleanly', async () => {
     const port = portOf();
     const owner = freshOwner();
-    const { context, prompt } = await port.digestContext({ ownerId: owner, items: [], agents: [{ id: AGENT, name: 'Juno' }] });
+    const { context, prompt } = await port.digestContext({ ownerId: owner, agentId: AGENT, items: [], agents: [{ id: AGENT, name: 'Juno' }] });
     expect(typeof prompt).toBe('string');
     expect(context.agents).toEqual([{ id: AGENT, name: 'Juno' }]);
     expect(context.senders.labels).toBeInstanceOf(Map);
@@ -293,6 +293,11 @@ describe.each(PORTS)('MemoryPort contract (%s)', (_name, portOf) => {
     expect(texts(await port.memoryFor(owner, { kind: 'other' }, undefined))).toEqual(['Owner secret fact', 'Public fact']);
     const reworded = await port.owner.updateItem(owner, item.id, { audience: 'owner', text: 'Owner secret, reworded' });
     expect([reworded.audience, reworded.text]).toEqual(['owner', 'Owner secret, reworded']);
+    // Sharing (BACKEND 5.4a): the patch's agent id crosses the wire, null included.
+    await port.owner.updateItem(owner, item.id, { agentId: 'agt-a' });
+    expect(texts(await port.memoryFor(owner, { kind: 'owner' }, 'agt-b'))).not.toContain('Owner secret, reworded');
+    await port.owner.updateItem(owner, item.id, { agentId: null });
+    expect(texts(await port.memoryFor(owner, { kind: 'owner' }, 'agt-b'))).toContain('Owner secret, reworded');
     await expect(port.owner.updateItem(owner, item.id, { aboutPersonId: 'per_missing' })).rejects.toBeInstanceOf(IdentityError);
     await expect(port.owner.updateItem(owner, 'mem_missing', { text: 'x' })).rejects.toBeInstanceOf(MemoryItemError);
     await port.owner.deleteItem(owner, pending.id);

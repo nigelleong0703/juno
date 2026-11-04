@@ -1,20 +1,30 @@
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import { parseUiDoc, uiDocSchema, uiDocToText, type UiDoc } from '@agent-desktop/public-contracts';
-import { sessionKey, type Enqueuer, type Store, type Tool, type ToolContext, type ToolResult, type WakeEvent } from '../../../contracts/index.js';
+import { sessionKey, type Enqueuer, type Store, type Tool, type ToolContext, type ToolReconciliation, type ToolResult, type WakeEvent } from '../../../contracts/index.js';
 import { readString } from '../../../execution/brain/social-read.js';
 import { profileAudience } from '../../profile/index.js';
-import { CHILD_BOUNDARY_REFUSAL, CHILD_QUESTION_REFUSAL, isChildRun, storeChildResult } from '../../tasks/childDelivery.js';
+import { SUBAGENT_BOUNDARY_REFUSAL, SUBAGENT_QUESTION_REFUSAL, hasSubagentParent, storeSubagentResult } from '../../tasks/subagentDelivery.js';
 import { emitItemAdded } from '../../../execution/conversation-activity.js';
 import { newId, nowIso } from '../util.js';
 import { replyOriginOf } from '../../channel-origin.js';
 import { goalConversationId } from '../../goals/checkin.js';
+import { countedKind, hasRoomToPost, logPosted } from '../../proactive/service.js';
+import { readingPauseMs } from '../../../execution/harness/services/reply-layout.js';
 import { deliverRoomText } from './roomDelivery.js';
 import { storeUserRequest, userRequest } from './userRequest.js';
 
+/** Why the message is sent (required on every call). In a run nobody waits on, `answer` and `progress` have no reader and are refused. */
+export const SEND_PURPOSES = ['answer', 'result', 'reminder', 'decision', 'progress'] as const;
+const NOBODY_ASKED = 'nobody asked and nobody is watching: keep it in your final text, which goes to the task record.';
+/** Most separate messages one send_message call posts (`messages`). */
+export const MAX_MESSAGES = 4;
+
 const sendMessageSchema = z.object({
   kind: z.enum(['text', 'attachment', 'question', 'secret_request']),
+  purpose: z.enum(SEND_PURPOSES),
   text: z.string().optional(),
+  messages: z.array(z.string()).min(1).max(MAX_MESSAGES).optional(),
   // Validated by parseUiDoc so the model gets one readable line per problem, not a zod dump.
   ui: z.unknown().optional(),
   targetAgentIds: z.array(z.string()).optional(),
@@ -35,13 +45,15 @@ export function createSendMessageTool(opts: { store: Store; enqueuer: Enqueuer }
       type: 'object',
       properties: {
         kind: { enum: ['text', 'attachment', 'question', 'secret_request'], description: '' },
+        purpose: { enum: [...SEND_PURPOSES], description: '' },
         text: { type: 'string', description: '' },
+        messages: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: MAX_MESSAGES, description: '' },
         ui: { ...UI_JSON_SCHEMA, description: '' },
         targetAgentIds: { type: 'array', items: { type: 'string' }, description: '' },
         conversationId: { type: 'string', description: '' },
         toOwner: { type: 'boolean', description: '' },
       },
-      required: ['kind'],
+      required: ['kind', 'purpose'],
     },
     replay: 'never',
     sideEffect: true,
@@ -53,7 +65,8 @@ export function createSendMessageTool(opts: { store: Store; enqueuer: Enqueuer }
       if (!ctx.stepId || ctx.signal.aborted) return { status: 'failed', reason: 'the run was cancelled or its action identity is unavailable' };
       const markdown = parsed.data.text?.trim() ?? '';
       const run = await opts.store.get('runs', ctx.runId);
-      if (isChildRun(run)) return { status: 'unknown', reason: 'silent child delivery is recorded on the child run, without a step-bound message receipt' };
+      if (hasSubagentParent(run)) return { status: 'unknown', reason: 'silent child delivery is recorded on the child run, without a step-bound message receipt' };
+      if (parsed.data.messages !== undefined) return reconcileMessages(opts.store, parsed.data.messages.map((message) => message.trim()), ctx, ctx.stepId);
       const receiptId = messageReceiptId(ctx.stepId);
       try {
         const receipt = await opts.store.get('items', receiptId);
@@ -71,36 +84,52 @@ export function createSendMessageTool(opts: { store: Store; enqueuer: Enqueuer }
       const text = parsed.text?.trim() ?? '';
       const fail = (message: string): ToolResult => ({ content: [{ type: 'text', text: `Error: ${message}` }], isError: true });
       // CT: the canonical stored run row decides delivery; a silent child never reaches a human.
-      const child = isChildRun(await opts.store.get('runs', ctx.runId));
+      const child = hasSubagentParent(await opts.store.get('runs', ctx.runId));
       if (parsed.toOwner === true && parsed.kind !== 'text') return fail('toOwner only applies to a text message (kind text).');
+      // The purpose gate of a run nobody is waiting on: a tool argument check, not a filter on the model's text. The state is the run's own
+      // (`ToolContext.sendOnly`, set at its start and cleared when a person writes into it), the same one the final-reply path reads.
+      if (!child && (parsed.purpose === 'answer' || parsed.purpose === 'progress') && ctx.sendOnly === true) return fail(NOBODY_ASKED);
 
       if (parsed.kind === 'question') {
-        if (child) return { content: [{ type: 'text', text: CHILD_QUESTION_REFUSAL }], isError: true };
+        if (child) return { content: [{ type: 'text', text: SUBAGENT_QUESTION_REFUSAL }], isError: true };
         const checked = parsed.ui === undefined
           ? { ok: false as const, error: 'a question needs ui with exactly one interactive block: a choices block (pick one or several) or a fields block (non-secret input)' }
           : parseUiDoc(parsed.ui, 'question');
         if (!checked.ok) {
           return fail(`invalid question ui: ${checked.error}. Ask again with ui: { version: 1, title?, blocks: [...facts/items/notice for what is being decided..., one choices or fields block] }.`);
         }
-        return askQuestion(opts.store, checked.doc, ctx);
+        return askQuestion(opts.store, checked.doc, text, ctx);
       }
 
       if (parsed.kind === 'text') {
+        if (parsed.messages !== undefined) {
+          if (text.length > 0 || parsed.ui !== undefined || parsed.toOwner === true || parsed.conversationId !== undefined || (parsed.targetAgentIds?.length ?? 0) > 0) {
+            return fail('messages is several plain-text messages for this conversation: leave out text, ui, toOwner, conversationId and targetAgentIds.');
+          }
+          if (child) return fail('a subagent reports with its final text, not with messages.');
+          const messages = parsed.messages.map((message) => message.trim());
+          if (messages.some((message) => message.length === 0)) return fail('every message needs text.');
+          return postMessages(opts.store, messages, ctx);
+        }
         let ui: UiDoc | undefined;
         if (parsed.ui !== undefined) {
           const checked = parseUiDoc(parsed.ui, 'message');
           if (!checked.ok) return fail(`invalid ui: ${checked.error}`);
           ui = checked.doc;
         }
-        // Quick-reply buttons alone are not a bubble: they sit under the chat, and their text form
-        // ("Replies: Yes / No") would read as a message of its own in the chat list and notifications.
+        // Quick-reply buttons alone are not a message: a person must never get chips without words (an empty bubble with two
+        // buttons was all the owner saw, and it also counted as "delivered", which silenced the real final reply). Their text form
+        // ("Replies: Yes / No") would also read as a message of its own in the chat list and notifications.
         const repliesOnly = ui !== undefined && ui.blocks.every((block) => block.type === 'replies');
+        if (repliesOnly && text.length === 0) {
+          return fail('quick replies need words above them: put what you want to say in text (the findings, or the question the buttons answer) and pass the replies block as ui next to it, or end your turn with that text as your reply.');
+        }
         // The bubble's markdown is the lead-in, or the card's text form when the agent gave none, so
         // notifications and the model's own transcript have readable text.
-        const markdown = text.length > 0 ? text : ui === undefined || repliesOnly ? '' : uiDocToText(ui);
+        const markdown = text.length > 0 ? text : ui === undefined ? '' : uiDocToText(ui);
         // Reject blank text before any write: an empty bubble would still mark a delivery and silence
         // the useful final report without showing the user anything.
-        if (markdown.length === 0 && !repliesOnly) return fail('message text required');
+        if (markdown.length === 0) return fail('message text required');
         const seen = ui === undefined ? markdown : text.length === 0 ? uiDocToText(ui) : `${markdown}\n\n${uiDocToText(ui)}`;
         const targets = parsed.targetAgentIds ?? [];
         const explicitRoom = parsed.conversationId;
@@ -108,9 +137,9 @@ export function createSendMessageTool(opts: { store: Store; enqueuer: Enqueuer }
         // before delivery, so send_message cannot bypass the boundary with rooms or wakes.
         if (child) {
           if (targets.length > 0 || explicitRoom !== undefined || parsed.toOwner === true) {
-            return { content: [{ type: 'text', text: CHILD_BOUNDARY_REFUSAL }], isError: true };
+            return { content: [{ type: 'text', text: SUBAGENT_BOUNDARY_REFUSAL }], isError: true };
           }
-          const stored = await storeChildResult(opts, { runId: ctx.runId, agentId: ctx.agentId, conversationId: ctx.conversationId, text: seen }, { state: { cancelled: false }, signal: ctx.signal });
+          const stored = await storeSubagentResult(opts, { runId: ctx.runId, agentId: ctx.agentId, conversationId: ctx.conversationId, text: seen }, { state: { cancelled: false }, signal: ctx.signal });
           if (!stored) {
             return { content: [{ type: 'text', text: 'Error: the child result could not be stored on the run; nothing was delivered.' }], isError: true };
           }
@@ -139,7 +168,13 @@ export function createSendMessageTool(opts: { store: Store; enqueuer: Enqueuer }
             },
           };
         }
+        // An unsolicited message (the daily check, a scheduled goal check-in) counts against the owner's daily cap, counted from what was posted.
+        const counted = countedKind([ctx.wake]);
+        if (counted !== undefined && !(await ctx.step('proactive-room', () => hasRoomToPost(opts.store, ctx.ownerId)))) {
+          return fail("the owner already got today's limit of unsolicited messages: keep it in your final text, which goes to the task record.");
+        }
         await postMessage(opts.store, markdown, ui, ctx);
+        if (counted !== undefined) await ctx.step('proactive-log', async () => { await logPosted(opts.store, { kind: counted, wake: ctx.wake, runId: ctx.runId }); return true; });
         // Mark the delivered bubble so the run loop never repeats this text in the final reply.
         return { content: [{ type: 'text', text: seen }], details: { deliveredText: markdown || seen, deliveredConversationId: ctx.conversationId } };
       }
@@ -165,7 +200,9 @@ function questionSummary(doc: UiDoc): string {
   return first.substring(0, 100);
 }
 
-async function askQuestion(store: Store, doc: UiDoc, ctx: ToolContext): Promise<ToolResult> {
+async function askQuestion(store: Store, doc: UiDoc, leadIn: string, ctx: ToolContext): Promise<ToolResult> {
+  // `text` is the lead-in the model wrote for the card (the onboarding greeting was lost here: the card appeared with no words above it).
+  if (leadIn.length > 0) await postMessage(store, leadIn, undefined, ctx);
   const request = userRequest(ctx, {
     kind: 'question',
     title: 'Agent Question',
@@ -173,7 +210,12 @@ async function askQuestion(store: Store, doc: UiDoc, ctx: ToolContext): Promise<
     payload: { kind: 'question', ui: doc },
   });
   await storeUserRequest(store, ctx, request);
-  return { content: [{ type: 'text', text: 'The question is shown to the user. Their answer will arrive as their next message: end your turn now and do not wait for it.' }] };
+  // The card ends the turn: the harness (`endsTurn`) finishes the run right after the tool step, so there is no final reply to retry or to
+  // write a placeholder in. The model's lead-in text of this turn was posted above the card (ackStep).
+  return {
+    content: [{ type: 'text', text: 'The question card is now on their screen. Their answer will arrive as their next message.' }],
+    endsTurn: true,
+  };
 }
 
 /**
@@ -270,6 +312,84 @@ async function postMessage(store: Store, markdown: string, ui: UiDoc | undefined
     await store.put('items', item, { conversationId: ctx.conversationId, runId: ctx.runId });
     await emitItemAdded(store, ctx.conversationId, item);
   });
+}
+
+/** Waits `ms`; false when the signal aborts first (the run was stopped). */
+function pause(ms: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) { resolve(false); return; }
+    const done = (ok: boolean): void => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      resolve(ok);
+    };
+    const onAbort = (): void => done(false);
+    const timer = setTimeout(() => done(true), ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+const messageItemId = (ctx: ToolContext, index: number): string => ctx.stepId === undefined ? newId('itm') : messageReceiptId(`${ctx.stepId}:${String(index)}`);
+
+/**
+ * Several messages from one call, in order, each its own bubble: the first at once, each later one after the reading pause (the same
+ * pacing as any multi-message reply). The ids come from the call's step, so a recovered call finds what was already written
+ * (`reconcileMessages`). A stop during a pause posts nothing more.
+ */
+async function postMessages(store: Store, messages: string[], ctx: ToolContext): Promise<ToolResult> {
+  const fail = (message: string): ToolResult => ({ content: [{ type: 'text', text: `Error: ${message}` }], isError: true });
+  const counted = countedKind([ctx.wake]);
+  if (counted !== undefined && !(await ctx.step('proactive-room', () => hasRoomToPost(store, ctx.ownerId)))) {
+    return fail("the owner already got today's limit of unsolicited messages: keep it in your final text, which goes to the task record.");
+  }
+  const replyTo = replyOriginOf([ctx.wake]);
+  const sent: string[] = [];
+  for (const [index, markdown] of messages.entries()) {
+    if (index > 0 && !(await pause(readingPauseMs(markdown), ctx.signal))) break;
+    const item = {
+      id: messageItemId(ctx, index),
+      conversationId: ctx.conversationId,
+      type: 'agent_message' as const,
+      agentId: ctx.agentId,
+      runId: ctx.runId,
+      markdown,
+      citations: [],
+      ...(replyTo === undefined ? {} : { replyTo }),
+      at: nowIso(),
+    };
+    await ctx.step(`send_message_text:${String(index)}`, async () => {
+      await store.put('items', item, { conversationId: ctx.conversationId, runId: ctx.runId });
+      await emitItemAdded(store, ctx.conversationId, item);
+    });
+    sent.push(markdown);
+  }
+  if (counted !== undefined && sent.length > 0) await ctx.step('proactive-log', async () => { await logPosted(store, { kind: counted, wake: ctx.wake, runId: ctx.runId }); return true; });
+  const delivered = sent.join('\n\n');
+  const summary = sent.length === messages.length
+    ? `Sent ${String(sent.length)} messages, in order. That was your reply: end your turn now with no text.`
+    : `Stopped after ${String(sent.length)} of ${String(messages.length)} messages. End your turn with no text.`;
+  return { content: [{ type: 'text', text: summary }], details: { deliveredText: delivered, deliveredConversationId: ctx.conversationId } };
+}
+
+/** What a recovered `messages` call finds: every message written (succeeded), none (not executed), or only some (unknown). */
+async function reconcileMessages(store: Store, messages: string[], ctx: ToolContext, stepId: string): Promise<ToolReconciliation> {
+  try {
+    let found = 0;
+    for (const [index, markdown] of messages.entries()) {
+      const receipt = await store.get('items', messageReceiptId(`${stepId}:${String(index)}`));
+      if (receipt === null) continue;
+      if (receipt.type !== 'agent_message' || receipt.agentId !== ctx.agentId || receipt.runId !== ctx.runId || receipt.conversationId !== ctx.conversationId || receipt.markdown !== markdown) {
+        return { status: 'unknown', reason: 'a receipt exists but does not match the owner, agent, run, conversation and exact message' };
+      }
+      found += 1;
+    }
+    if (found === 0) return { status: 'not_executed', evidence: 'The owner-scoped conversation store has no item with this action’s deterministic receipt ids.' };
+    if (found < messages.length) return { status: 'unknown', reason: `${String(found)} of ${String(messages.length)} messages were written before the interruption` };
+    const delivered = messages.join('\n\n');
+    return { status: 'succeeded', evidence: 'The owner-scoped conversation store contains every persisted message receipt.', result: { content: [{ type: 'text', text: delivered }], details: { deliveredText: delivered, deliveredConversationId: ctx.conversationId } } };
+  } catch {
+    return { status: 'failed', reason: 'the owner-scoped message receipt query failed' };
+  }
 }
 
 /** Stable local receipt identity: a recovered send can be looked up without issuing it again. */

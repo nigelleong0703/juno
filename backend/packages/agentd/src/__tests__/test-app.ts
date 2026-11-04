@@ -5,6 +5,7 @@
  */
 import type { Hono } from 'hono';
 import { createMemoryStore } from '@agent-desktop/db';
+import { createLiveRuns, type LiveRuns } from 'juno-agent/execution/live-runs';
 import { createStoredCatalog } from 'juno-agent/modules/apps/catalog';
 import { seedRows } from '../apps/seed.js';
 import { createInternalAgentApp, type InternalAgentDeps } from '../transport/http/internal-app.js';
@@ -52,9 +53,9 @@ const defaultCatalog = await createStoredCatalog({ store: createMemoryStore(), s
  * The app production serves, with the platforms of `testPlatforms` unless `channels` names others (from `loadTestPlatforms`, with
  * their own `pluginRoutes`). Passing `channels` alone adds no platform routes: its routes come from the same host or not at all.
  */
-export function createTestApp(deps: Omit<InternalAgentDeps, 'internalToken' | 'channels' | 'pluginRoutes'> & { channels?: ChannelRegistry; pluginRoutes?: readonly PluginRoute[] }): Hono {
+export function createTestApp(deps: Omit<InternalAgentDeps, 'internalToken' | 'channels' | 'pluginRoutes' | 'live'> & { channels?: ChannelRegistry; pluginRoutes?: readonly PluginRoute[]; live?: LiveRuns }): Hono {
   const pluginRoutes = deps.pluginRoutes ?? (deps.channels === undefined ? testPlatforms.pluginRoutes : []);
-  return createInternalAgentApp({ ...deps, appCatalog: deps.appCatalog ?? defaultCatalog, channels: deps.channels ?? testChannels, pluginRoutes, internalToken: TEST_INTERNAL_TOKEN });
+  return createInternalAgentApp({ ...deps, live: deps.live ?? createLiveRuns(), appCatalog: deps.appCatalog ?? defaultCatalog, channels: deps.channels ?? testChannels, pluginRoutes, internalToken: TEST_INTERNAL_TOKEN });
 }
 
 /** The headers packages/api sends for an authenticated owner (JSON content type when there is a body). */

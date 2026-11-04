@@ -28,13 +28,16 @@ import { docOwnerId, isAgentVisible } from './relationships.js';
 import { isStartCommand } from '../channels/bind.js';
 import { channelAuthorId } from '../channels/author.js';
 import { holdForOwnerConfirmation } from '../channels/owner-claim.js';
-import { addressesAgent, recordIngressSender } from '../channels/people.js';
+import { recordIngressSender } from '../channels/people.js';
 import { unavailableMessage } from '../channels/registry.js';
 import { chatTitleFor, ownerChatTitle } from '../channels/titles.js';
 import { fetchGroupHistory } from '../channels/history.js';
 import { startWorking } from '../channels/working.js';
 import { classifyMentions } from '../channels/mentions.js';
 import { storeInboundFiles } from '../channels/files.js';
+import { takeObserved } from '../channels/observed.js';
+import { postedReceiptId } from '../channels/posted.js';
+import { backfillGroup, claimBackfill } from '../channels/backfill.js';
 
 export type IncomingChannelEvent = z.infer<typeof channelEventSchema>;
 
@@ -57,6 +60,12 @@ const channelEventSchema = z.object({
   files: z.array(z.object({ fileId: z.string().min(1), name: z.string().min(1), mimeType: z.string().optional(), sizeBytes: z.number().int().min(0).optional() })).optional(),
   /** A group with people from another workspace or tenant: the agent speaks there only when addressed. */
   external: z.boolean().optional(),
+  /**
+   * `false`: a group message nobody mentioned or replied to, which the platform delivered anyway (a platform whose capability row says
+   * `hears: 'all'`). The agent only observes it (BACKEND 6.8): it is stored in the conversation and counted by the chat digest, and
+   * never starts a run.
+   */
+  addressed: z.boolean().optional(),
 });
 
 /** Channel origin pinned on every channel conversation, so delivery can route the reply back. */
@@ -71,7 +80,7 @@ export type SpeakerRole = 'owner' | 'stranger';
 
 export type ChannelConversation = Conversation & { ownerId: string; channel: ChannelMeta };
 
-type StoredChannelConversation = Conversation & { ownerId?: string; channel?: unknown; externalGroup?: boolean };
+type StoredChannelConversation = Conversation & { ownerId?: string; channel?: unknown; externalGroup?: boolean; observedOnly?: boolean };
 
 function digestHex(parts: string[]): string {
   return createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 24);
@@ -114,7 +123,7 @@ export function channelMetaOf(conv: Conversation): ChannelMeta | undefined {
 }
 
 
-async function getOrCreateConversation(
+export async function getOrCreateConversation(
   deps: AdmitDeps,
   ownerId: string,
   agentId: string,
@@ -124,11 +133,14 @@ async function getOrCreateConversation(
   channel: ChannelRow,
   now: string,
   ownerAgentName?: string,
+  observedOnly = false,
 ): Promise<Conversation> {
   const existing = await deps.store.get('conversations', conversationId);
   if (existing) return existing;
   const title = ownerAgentName === undefined ? await chatTitleFor(deps, channel, event) : ownerChatTitle(deps.channels, channel, ownerAgentName);
-  const created: ChannelConversation = {
+  // A conversation made only by observing (nobody addressed the agent in it yet) is hidden from the chat list until the agent is addressed.
+  const created: ChannelConversation & { observedOnly?: boolean } = {
+    ...(observedOnly ? { observedOnly: true } : {}),
     id: conversationId,
     kind: event.chatType === 'group' ? 'room' : 'direct',
     agentIds: [agentId],
@@ -142,7 +154,7 @@ async function getOrCreateConversation(
   };
   if (event.chatType === 'group') created.roomMode = 'mention';
   await deps.store.put('conversations', created);
-  await deps.store.emit({ type: 'conversation.created', conversation: created });
+  if (!observedOnly) await deps.store.emit({ type: 'conversation.created', conversation: created });
   return created;
 }
 
@@ -189,18 +201,32 @@ export async function admitChannelEvent(
   const threadId = event.threadId ?? event.chatId ?? 'main';
   const chatId = event.chatId ?? event.threadId ?? 'main';
   const meta: ChannelMeta = { kind, channelId, threadId, chatId };
+  // A group message nobody addressed to the agent is observed: stored in its conversation, counted by the chat digest, never a run.
+  // A reply in a thread under a message the agent posted itself answers the agent, mention or not (Slack: the thread's ts is that post's ts).
+  const parentTs = kind === 'slack' && threadId.includes(':') ? threadId.slice(threadId.lastIndexOf(':') + 1) : undefined;
+  const answersAgent = peer === undefined && event.chatType === 'group' && event.addressed === false && parentTs !== undefined
+    && (await deps.store.get('eventReceipts', postedReceiptId(ownerId, channel.agentId, channel.id, chatId, parentTs))) !== null;
+  const unaddressed = peer === undefined && event.chatType === 'group' && event.addressed === false && !answersAgent;
   const speakerRole = peer === undefined ? speakerFor(channel.ownerExternalId, event.from?.id) : 'stranger';
   // Identity: a human sender is recorded as an account (a peer agent is not a person). The owner's account is linked to the owner's
   // person; a stranger gets a person in a DM, or in a group only when the message addresses the agent.
   const speaker = peer === undefined && event.from?.id !== undefined
-    ? await recordIngressSender(deps, ownerId, channel, { id: event.from.id, name: event.from.name }, { owner: speakerRole === 'owner', createPerson: addressesAgent(deps.channels, event.chatType, event.mentions, channel) }, event.chatTitle)
+    ? await recordIngressSender(deps, ownerId, channel, { id: event.from.id, name: event.from.name }, { owner: speakerRole === 'owner', createPerson: !unaddressed }, event.chatTitle)
     : undefined;
   const now = new Date().toISOString();
   // Every platform chat is its own conversation (the owner's private chat "Telegram · Nova", a group, a stranger's chat); the app's main chat is app-only.
   const ownerDm = event.chatType === 'private' && speakerRole === 'owner';
-  const conv = await getOrCreateConversation(deps, ownerId, channel.agentId, channelConversationId(ownerId, kind, channelId, threadId), event, meta, channel, now, ownerDm ? agent.name : undefined);
+  const conv = await getOrCreateConversation(deps, ownerId, channel.agentId, channelConversationId(ownerId, kind, channelId, threadId), event, meta, channel, now, ownerDm ? agent.name : undefined, unaddressed);
   const conversationId = conv.id;
   if (docOwnerId(conv) !== ownerId) return refuse(403, 'CHANNEL_FORBIDDEN', 'Channel conversation is not yours');
+  // The owner's private chat with this agent is where approvals someone else's ask raised are sent (BACKEND 6.8).
+  if (ownerDm && channel.ownerChatId !== chatId) await deps.store.patch('channels', channel.id, { ownerChatId: chatId, updatedAt: now });
+  // The agent takes part in this conversation now (it was addressed in it): it stops being a hidden observation and shows in the chat list.
+  if (!unaddressed && (conv as StoredChannelConversation).observedOnly === true) {
+    const shown: Partial<Conversation> & { observedOnly: boolean } = { observedOnly: false };
+    const revealed = await deps.store.patch('conversations', conversationId, shown);
+    await deps.store.emit({ type: 'conversation.created', conversation: revealed });
+  }
   const dedupeKey = event.externalMessageId;
   const source: ChannelOrigin = { kind, channelId, chatId, threadId, chatType: event.chatType };
   const itemId = dedupeKey === undefined ? 'itm-' + randomUUID() : channelItemId(conversationId, dedupeKey);
@@ -209,7 +235,7 @@ export async function admitChannelEvent(
     return refuse(409, 'ITEM_CONFLICT', 'Message id was already used with different content');
   }
   // The files go to the library before the item names them. A redelivery (the message is stored already) fetches nothing again.
-  const files = event.files === undefined || stored !== null ? { attachments: [], ids: [] } : await storeInboundFiles(deps, ownerId, channel, event.files, event.externalMessageId ?? '');
+  const files = event.files === undefined || stored !== null || unaddressed ? { attachments: [], ids: [] } : await storeInboundFiles(deps, ownerId, channel, event.files, event.externalMessageId ?? '');
   // The group's outside-members flag (Slack Connect, a Feishu external group) is kept on the conversation: delivery reads it.
   if (event.chatType === 'group' && event.external !== undefined && Boolean((conv as StoredChannelConversation).externalGroup) !== event.external) {
     const flag: Partial<Conversation> & { externalGroup: boolean } = { externalGroup: event.external };
@@ -227,6 +253,7 @@ export async function admitChannelEvent(
     mentions: [],
     ...(event.from?.id === undefined ? {} : { channelSender: { kind, externalId: event.from.id, name: event.from.name ?? '', role: speakerRole } }),
     source,
+    ...(unaddressed ? { observed: true } : {}),
   };
   if (!stored) {
     await deps.store.tx(async (store) => {
@@ -234,8 +261,13 @@ export async function admitChannelEvent(
       await emitItemAdded(store, conversationId, item);
     });
   }
-  // A group mention brings the chat just before it (Discord, Slack) as read-only context; it is not stored as items.
-  const history = event.chatType === 'group' ? await fetchGroupHistory(deps, channel, { chatId, threadId, ...(event.externalMessageId === undefined ? {} : { externalMessageId: event.externalMessageId }) }) : undefined;
+  // What the agent observed in this chat since it last spoke there, verbatim and in order (BACKEND 6.8): it rides in the wake, after the
+  // cached prefix. Where nothing was observed (before the agent joined), a mention brings the chat just before it from the platform
+  // (Discord, Slack) as read-only context; neither is stored as new items.
+  const observed = event.chatType === 'group' && !unaddressed && peer === undefined ? await takeObserved(deps.store, ownerId, { kind, channelId, chatId, threadId, conversationId }) : [];
+  const history = event.chatType === 'group' && !unaddressed && observed.length === 0 ? await fetchGroupHistory(deps, channel, { chatId, threadId, ...(event.externalMessageId === undefined ? {} : { externalMessageId: event.externalMessageId }) }) : undefined;
+  // A known person in a group the owner put the agent in, speaking for themselves (not a peer agent, not an outside-members group): a teammate.
+  const teammate = peer === undefined && speakerRole === 'stranger' && event.chatType === 'group' && speaker !== undefined && !(event.external ?? Boolean((conv as StoredChannelConversation).externalGroup));
   const mentioned = await classifyMentions(deps.store, channel, event.mentions);
   // Another of the owner's agents speaking: its name and role (the stored message keeps `agent:<id>` as its sender id, which marks it as an agent's).
   const sender = peer === undefined ? {} : await peerSenderPayload(deps.store, peer.agentId);
@@ -245,7 +277,7 @@ export async function admitChannelEvent(
     agentId: channel.agentId,
     sessionKey: sessionKey(channel.agentId, conversationId),
     conversationId,
-    kind: event.chatType === 'group' ? 'room_mention' : 'user_message',
+    kind: unaddressed ? 'observed' : event.chatType === 'group' ? 'room_mention' : 'user_message',
     origin: peer === undefined ? { type: 'user' } : { type: 'agent', id: peer.agentId },
     trusted: speakerRole === 'owner',
     priority: peer === undefined ? 'user' : 'peer',
@@ -265,8 +297,12 @@ export async function admitChannelEvent(
       chatId,
       threadId,
       ...(history === undefined ? {} : { channelContext: history }),
+      ...(observed.length === 0 ? {} : { observed }),
       ...(event.externalMessageId === undefined ? {} : { externalMessageId: event.externalMessageId }),
       ...(event.replyToItemId === undefined ? {} : { replyToItemId: event.replyToItemId }),
+      ...(teammate ? { teammate: true } : {}),
+      // Where the owner let the agent speak up, the digest of observed messages also runs once the thread has been quiet (not per message).
+      ...(unaddressed && channel.groups?.[chatId]?.speak === true ? { quiet: true } : {}),
       ...(files.ids.length === 0 ? {} : { attachmentIds: files.ids }),
     },
     at: now,
@@ -279,12 +315,15 @@ export async function admitChannelEvent(
   } catch {
     return failed;
   }
-  // Show people the message was picked up: a 👀 on it until the run ends (best-effort, delivery takes it off).
-  if (peer === undefined && event.externalMessageId !== undefined) {
+  // Show people the message was picked up: a 👀 on it until the run ends (best-effort, delivery takes it off). Not on a message that was
+  // not for the agent: a mark on everything said would announce a reply that mostly will not come.
+  if (peer === undefined && event.externalMessageId !== undefined && !unaddressed) {
     void startWorking(deps, ownerId, conversationId, source, event.externalMessageId.slice(event.externalMessageId.lastIndexOf(':') + 1));
   }
   // A group the platform may not be able to read yet: its plugin may probe that (fire and forget), e.g. Feishu's group-read scope.
   if (event.chatType === 'group') void deps.channels.get(kind)?.groupAdmitted?.(deps, channel, { chatId, threadId })?.catch(() => undefined);
+  // The first time the agent sees a group it reads the earlier messages and builds its picture of the group, in the background (BACKEND 6.8).
+  if (event.chatType === 'group' && peer === undefined && (await claimBackfill(deps, channel, chatId))) void backfillGroup(deps, ownerId, channel, { chatId, chatType: 'group' });
   return { status: 202, body: { received: true, conversationId } };
 }
 

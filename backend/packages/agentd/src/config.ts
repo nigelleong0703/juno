@@ -7,6 +7,8 @@ import { z } from 'zod';
  */
 const internalEnvSchema = z.object({
   INTERNAL_AGENTD_TOKEN: z.string().default(''),
+  /** The credential of the connectors the api hosts (BACKEND 10.18): the MCP client reads it from the environment and sends it to those endpoints only (juno-agent mcp/platform-keys.ts). Required in every role: workers call tools too. */
+  HOSTED_MCP_TOKEN: z.string().default(''),
   /** memoryd (BACKEND §2.4): when set, the agent runtime reads and writes memory through it; empty keeps memory in this process. */
   MEMORYD_URL: z.string().default(''),
   /** The bearer memoryd and agentd share (required when MEMORYD_URL is set). */

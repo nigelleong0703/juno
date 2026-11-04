@@ -141,3 +141,23 @@ describe('Discord voice tools on a worker, served by the coordinator', () => {
     expect(await serveVoiceCallsOnce(coordinator, voice(log))).toBe(0);
   });
 });
+
+describe('live run text from a worker, delivered to the coordinator', () => {
+  it('reaches a subscriber in another process in order as a batch, stores no row, splits a large batch and refuses an event a NOTIFY cannot carry', async () => {
+    const received: Array<{ type: string; text?: string }> = [];
+    const off = await coordinator.eventBus.subscribeLive?.((event) => { received.push(event); });
+    const owner = uid('owner');
+    const scope = { ownerId: owner, conversationId: 'c1', agentId: 'a1', runId: 'r1', attempt: 'model:0' };
+    const head = await coordinator.eventBus.head?.();
+    await worker.eventBus.publishLive?.([{ ...scope, type: 'run.text.reset' }, { ...scope, type: 'run.text.delta', text: 'Hello' }, { ...scope, type: 'run.text.end', toolCalls: 0 }]);
+    // Larger than one NOTIFY: split into several payloads, order kept.
+    const big = Array.from({ length: 4 }, (_, index) => ({ ...scope, type: 'run.text.delta' as const, text: String(index).repeat(3000) }));
+    await worker.eventBus.publishLive?.(big);
+    await tick(300);
+    await off?.();
+    expect(received.map((event) => event.type)).toEqual(['run.text.reset', 'run.text.delta', 'run.text.end', 'run.text.delta', 'run.text.delta', 'run.text.delta', 'run.text.delta']);
+    expect(received.slice(3).map((event) => event.text?.[0])).toEqual(['0', '1', '2', '3']);
+    expect(await coordinator.eventBus.head?.()).toBe(head);
+    await expect(worker.eventBus.publishLive?.([{ ...scope, type: 'run.text.delta', text: 'x'.repeat(9000) }])).rejects.toThrow('notify payload limit');
+  });
+});

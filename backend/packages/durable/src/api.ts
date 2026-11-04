@@ -1,11 +1,11 @@
 /**
- * The service-definition and context API the harness is written against (the shape of the Restate SDK it replaces):
- * objects and workflows, ctx.run / sleep / awakeable / promise, typed clients, RestatePromise helpers.
+ * The service-definition and context API the harness is written against:
+ * objects and workflows, ctx.run / sleep / awakeable / promise, typed clients, DurablePromise helpers.
  */
 
 /** Durable operations are plain promises here: there is no replay engine that needs a branded type. */
-export type RestatePromise<T> = Promise<T>;
-export const RestatePromise = {
+export type DurablePromise<T> = Promise<T>;
+export const DurablePromise = {
   resolve<T>(value: T | PromiseLike<T>): Promise<T> {
     return Promise.resolve(value);
   },
@@ -50,7 +50,7 @@ export type ObjectSendClient<H> = {
   [K in keyof H]: H[K] extends (ctx: never, ...args: infer A) => unknown ? (...args: [...A, SendOpts?]) => void : never;
 };
 
-export interface DurablePromise<T> {
+export interface WorkflowPromise<T> {
   peek(): Promise<T | undefined>;
   get(): Promise<T>;
   resolve(value: T): Promise<void>;
@@ -87,7 +87,7 @@ export interface ObjectContext extends Context, ObjectSharedContext {
   clear(name: string): void;
 }
 export interface WorkflowSharedContext extends ObjectSharedContext {
-  promise<T = void>(name: string): DurablePromise<T>;
+  promise<T = void>(name: string): WorkflowPromise<T>;
 }
 export interface WorkflowContext extends ObjectContext, WorkflowSharedContext {}
 

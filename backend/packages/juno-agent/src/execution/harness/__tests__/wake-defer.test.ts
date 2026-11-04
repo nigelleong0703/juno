@@ -4,7 +4,7 @@
  * cannot send wakes falls back to the sleep.
  */
 import { describe, expect, it } from 'vitest';
-import type { RestatePromise } from '@agent-desktop/durable';
+import type { DurablePromise } from '@agent-desktop/durable';
 import type { WakeEvent } from '../../../contracts/index.js';
 import { deferLongWait } from '../engines/pi-core/time-wait.js';
 import type { RunContext, RunInput } from '../services/run-types.js';
@@ -19,11 +19,11 @@ const input: RunInput = {
 };
 
 function ctxWith(send?: (wake: WakeEvent, delayMs?: number) => void): RunContext {
-  const lift = <T>(value: T): RestatePromise<T> => Promise.resolve(value) as unknown as RestatePromise<T>;
+  const lift = <T>(value: T): DurablePromise<T> => Promise.resolve(value) as unknown as DurablePromise<T>;
   return {
     rand: { uuidv4: () => 'u' },
     date: { now: () => lift(NOW) },
-    run: <T>(_name: string, action: () => Promise<T>) => action() as unknown as RestatePromise<T>,
+    run: <T>(_name: string, action: () => Promise<T>) => action() as unknown as DurablePromise<T>,
     awakeable: <T>() => ({ id: 'a', promise: lift(undefined as unknown as T) }),
     drainInbox: () => lift([]),
     ...(send === undefined ? {} : { sendWake: send }),

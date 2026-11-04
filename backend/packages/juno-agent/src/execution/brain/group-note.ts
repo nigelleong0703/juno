@@ -12,7 +12,7 @@ import { readVisibleConversation, type SocialContextInput } from './social-conte
 
 /** The section's text, or '' when this is not a platform group, a helper run, or the group has no note yet. */
 export async function buildGroupNoteSection(store: Store, input: SocialContextInput): Promise<string> {
-  if (input.wake.some((event) => event.kind === 'child_task')) return '';
+  if (input.wake.some((event) => event.kind === 'subagent_task')) return '';
   const conversation = await readVisibleConversation(store, input);
   const base = conversation === undefined ? undefined : groupChatOf(conversation);
   const ownerId = docOwner(conversation);

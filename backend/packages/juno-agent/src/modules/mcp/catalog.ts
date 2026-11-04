@@ -14,14 +14,12 @@
  */
 
 import type { ConnectorCategory } from '@agent-desktop/public-contracts';
-import { HOSTED_MCP_PATH, SG_MCP_PATH } from '../tools/net/guardedFetch.js';
+import { HOSTED_MCP_PATH } from '../tools/net/guardedFetch.js';
 import { configuredClientFor, MICROSOFT_ISSUER, type ClientSecretNames } from './oauth.js';
+import { withoutCoveredComposio } from './composio.js';
 import { PLATFORM_KEY_SERVERS } from './platform-keys.js';
 
 const GOOGLE_MCP_PATH = HOSTED_MCP_PATH;
-/** The Hevy server this gateway hosts, and the header the owner's own key travels in. */
-export const HEVY_MCP_PATH = '/mcp/hevy';
-export const HEVY_KEY_HEADER = 'api-key';
 
 export interface CatalogEntry {
   id: string;
@@ -100,6 +98,15 @@ export function entryClientNames(entry: Pick<CatalogEntry, 'clientIdName' | 'cli
 /** False when the entry needs a provided OAuth client this deployment does not have configured. */
 export function entryClientAvailable(entry: CatalogEntry, env: Record<string, string | undefined>): boolean {
   return entry.configuredClientIssuer === undefined || configuredClientFor(entry.configuredClientIssuer, env, entryClientNames(entry)) !== undefined;
+}
+
+/**
+ * The catalog as this deployment offers it, the one rule for the Apps page, `connector_search` and need recommendations: an entry that needs a
+ * configured OAuth client this deployment lacks, or a Composio source it cannot connect, is not listed. An app the owner already has stays
+ * listed (`held`), so it can still be seen and removed.
+ */
+export function offeredEntries(entries: readonly CatalogEntry[], env: Record<string, string | undefined>, held: (id: string) => boolean = () => false): CatalogEntry[] {
+  return withoutCoveredComposio(entries, env).filter((entry) => held(entry.id) || entryClientAvailable(entry, env));
 }
 
 /** The ids of the catalog entries marked `sharedRooms`. */
@@ -205,14 +212,19 @@ const BUILTIN_ENTRIES: readonly CatalogEntry[] = [
     description: 'Look up people in your contacts.',
     url: 'https://people.googleapis.com/mcp/v1',
     ...google(['contacts.readonly', 'userinfo.profile']),
+    // The guide lists three tools (get_user_profile, search_contacts, search_directory_people) and read-only scopes: nothing here writes.
+    readOnly: true,
   },
   // Maps Grounding Lite MCP with this deployment's key (GOOGLE_MAPS_API_KEY; no user sign-in, no user data):
-  // https://developers.google.com/maps/ai/grounding-lite
+  // https://developers.google.com/maps/ai/grounding-lite (read 2026-11-01). Its five tools (search_places, lookup_weather, compute_routes,
+  // resolve_names, resolve_maps_urls) are lookups that return places, weather and routes; the page marks none read-only (the tools carry no
+  // readOnlyHint), but with a deployment key and no user account there is nothing of anyone's to change.
   {
     id: 'google-maps', name: 'Google Maps', icon: 'map', category: 'travel',
     description: 'Find places, check the weather and get travel times.',
     url: keyedUrl('google-maps'),
     platformKey: true,
+    readOnly: true,
   },
   // Hosted here on the Google Tasks API (no Google-run MCP server): https://developers.google.com/workspace/tasks
   {
@@ -226,14 +238,6 @@ const BUILTIN_ENTRIES: readonly CatalogEntry[] = [
     id: 'youtube', name: 'YouTube', icon: 'video', category: 'media',
     description: 'Search videos and music, and see what is popular.',
     url: GOOGLE_MCP_PATH + 'youtube',
-    platformKey: true,
-  },
-  // Singapore public data, hosted here (modules/sg-mcp.ts): LTA DataMall on LTA_ACCOUNT_KEY (hidden without it).
-  // No sign-in, no user data: connected for everyone by default once the key is set.
-  {
-    id: 'sg-transport', name: 'Singapore transport', icon: 'map', category: 'travel',
-    description: 'Bus arrival times, MRT disruptions, car park lots and traffic incidents in Singapore.',
-    url: SG_MCP_PATH + 'sg-transport',
     platformKey: true,
   },
   // The owner's own YouTube (playlists, likes, subscriptions), OAuth. YouTube Music has no API of its own and shares these.
@@ -292,6 +296,10 @@ const BUILTIN_ENTRIES: readonly CatalogEntry[] = [
     id: 'asana', name: 'Asana', icon: 'tasks', category: 'projects',
     description: 'Look up and manage tasks and projects.',
     url: 'https://mcp.asana.com/v2/mcp',
+    // No dynamic registration (app.asana.com has no registration_endpoint): our own "MCP app" (Manage distribution: Any workspace) with the callback as redirect URL,
+    // ASANA_CLIENT_ID / ASANA_CLIENT_SECRET. Listed only when set. "MCP apps don't require specific scopes"; `default` is the value Asana says may be sent.
+    configuredClientIssuer: 'https://app.asana.com',
+    scopes: ['default'],
   },
   // Atlassian Rovo MCP (OAuth 2.1): https://support.atlassian.com/atlassian-rovo-mcp-server/docs/getting-started-with-the-atlassian-remote-mcp-server/
   {
@@ -322,77 +330,11 @@ const BUILTIN_ENTRIES: readonly CatalogEntry[] = [
     url: 'https://ai.todoist.net/mcp',
     toolAccess: readTools(['find-tasks','find-tasks-by-date', 'find-completed-tasks', 'find-projects', 'find-sections', 'find-labels', 'find-filters', 'find-comments', 'find-reminders', 'find-activity', 'find-project-collaborators', 'get-overview', 'get-productivity-stats', 'get-project-health', 'get-project-activity-stats', 'get-workspace-insights', 'list-workspaces', 'analyze-project-health', 'fetch', 'fetch-object', 'search', 'user-info']),
   },
-  // Dropbox's remote MCP (beta, https://help.dropbox.com/integrations/connect-dropbox-mcp-server): dynamic registration works only for a trusted list of clients
-  // (Claude, ChatGPT, Cursor); we are not on it, so the owner registers a Dropbox app and sets DROPBOX_CLIENT_ID / DROPBOX_CLIENT_SECRET. Hidden-as-unavailable until then.
-  // Protected resource https://mcp.dropbox.com/mcp -> AS https://www.dropbox.com (S256). The read tool names are the help page's (wire casing not verified; an unnamed tool asks).
-  {
-    id: 'dropbox', name: 'Dropbox', icon: 'folder', category: 'files',
-    description: 'Find and read your Dropbox files, and create, copy and move them.',
-    url: 'https://mcp.dropbox.com/mcp',
-    configuredClientIssuer: 'https://www.dropbox.com',
-    scopes: ['account_info.read', 'files.metadata.read', 'files.content.read', 'files.metadata.write', 'files.content.write'],
-    toolAccess: readTools(['ListFolder','GetFileMetadata', 'GetFileContent', 'Search', 'GetUsageAndQuota', 'WhoAmI', 'CheckJobStatus', 'DownloadLink', 'ListSharedLinks', 'GetSharedLinkMetadata', 'GetFileRequest', 'ListFileRequests', 'ListFileRevisions', 'ListRestoreEvents', 'GetTranscript', 'GetMarkdown']),
-  },
-  // Strava's own MCP (June 2026; OAuth, read-only, Strava subscribers only): https://support.strava.com/hc/en-us/articles/46190267796237-Strava-MCP-Connector
-  // Strava's API terms forbid third-party MCP servers over its REST API, so this is the only way in. It has dynamic
-  // registration, but only for a few known clients' redirect URIs (ours is refused), so the client is registered by
-  // hand and configured (STRAVA_CLIENT_ID / STRAVA_CLIENT_SECRET); the issuer is the one the protected-resource
-  // metadata names, https://www.strava.com/mcp-issuer.
-  {
-    id: 'strava', name: 'Strava', icon: 'fitness', category: 'health',
-    description: 'See your runs, rides and training. Read-only; needs a Strava subscription.',
-    url: 'https://mcp.strava.com/mcp',
-    configuredClientIssuer: 'https://www.strava.com/mcp-issuer',
-    scopes: ['activity:read_all', 'profile:read_all'],
-    revocationEndpoint: 'https://www.strava.com/oauth/mcp/revoke',
-    readOnly: true,
-  },
-  // Hevy has no MCP server of its own: hosted here on its public API (https://api.hevyapp.com/docs, Hevy Pro), called with
-  // the owner's own API key (modules/hevy-mcp.ts).
-  {
-    id: 'hevy', name: 'Hevy', icon: 'fitness', category: 'health',
-    description: 'See your logged workouts and routines, and log new workouts. Needs Hevy Pro and your API key.',
-    url: HEVY_MCP_PATH,
-    auth: 'api_key',
-    userConfig: { api_key: { type: 'string', title: 'Hevy API key', description: 'Your Hevy Pro API key. Find it at https://hevy.com/settings?developer', required: true, sensitive: true } },
-    headers: { [HEVY_KEY_HEADER]: '${user_config.api_key}' },
-    probe: { tool: 'workout_count' },
-  },
   // Zapier MCP (Streamable HTTP, OAuth sign-in): https://docs.zapier.com/mcp/overview/how-connections-work
   {
     id: 'zapier', name: 'Zapier', icon: 'automation', category: 'automation',
     description: 'Run the actions of the apps linked to your Zapier account.',
     url: 'https://mcp.zapier.com/api/v1/connect',
-  },
-  // Salesforce hosted MCP (generally available 2026): per-user OAuth 2.0 + PKCE against an External Client App the org's Salesforce admin creates first
-  // (the overview says hosted servers are "intended only for customers with Flex Credits", usage may be billed:
-  // https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide/hosted-mcp-servers-overview.html), scope `mcp_api` (+ `refresh_token`). We list only the
-  // read-only server, `platform/sobject-reads`. Checked 2026-10-29 against the server itself: https://api.salesforce.com/.well-known/oauth-protected-resource/platform/mcp/v1/platform/sobject-reads
-  // names resource = the URL below, authorization server https://login.salesforce.com, scopes_supported [mcp_api, refresh_token]; its OIDC metadata has S256 and a registration_endpoint,
-  // but the hosted servers take the admin's own External Client App, so the client is ours (SALESFORCE_CLIENT_ID / SALESFORCE_CLIENT_SECRET), not dynamic registration.
-  // Sandbox orgs use /v1/sandbox/ and their own login host: not listed.
-  {
-    id: 'salesforce', name: 'Salesforce', icon: 'contacts', category: 'productivity',
-    description: 'Look up accounts, contacts, leads and deals in your Salesforce org. Read-only. Your org needs Salesforce Flex Credits (usage may be billed), and your Salesforce admin must create an External Client App for Juno first.',
-    url: 'https://api.salesforce.com/platform/mcp/v1/platform/sobject-reads',
-    configuredClientIssuer: 'https://login.salesforce.com',
-    scopes: ['mcp_api', 'refresh_token'],
-    clientIdName: 'SALESFORCE_CLIENT_ID',
-    clientSecretName: 'SALESFORCE_CLIENT_SECRET',
-    oauthClient: 'provided',
-    readOnly: true,
-  },
-  // Long tail through Composio (BACKEND 10.18.3): Composio holds the login. Neither toolkit has a Composio-managed OAuth app (docs.composio.dev/toolkits/spotify and
-  // /toolkits/shopify say so), so each needs our own OAuth app registered as a Composio auth config: its id in COMPOSIO_AUTH_CONFIG_SPOTIFY / COMPOSIO_AUTH_CONFIG_SHOPIFY, else the row is not offered.
-  {
-    id: 'spotify', name: 'Spotify', icon: 'video', category: 'media',
-    description: 'See your playlists and listening, control playback and edit playlists. Your Spotify login is held by Composio.',
-    url: '', source: 'composio', toolkit: 'spotify',
-  },
-  {
-    id: 'shopify-admin', name: 'Shopify (store admin)', icon: 'payments', category: 'finance',
-    description: 'Manage your own Shopify store: products, orders, inventory and customers. Your Shopify login is held by Composio.',
-    url: '', source: 'composio', toolkit: 'shopify',
   },
 ];
 
@@ -410,7 +352,6 @@ const BUILTIN_PROVIDES: Readonly<Record<string, readonly string[]>> = {
   'google-maps': ['maps.read'],
   'google-tasks': ['tasks.read', 'tasks.write'],
   youtube: ['video.search'],
-  'sg-transport': ['transport.read'],
   'youtube-account': ['video.library'],
   'outlook-mail': ['mail.read', 'mail.draft', 'mail.send'],
   'outlook-calendar': ['calendar.read', 'calendar.write'],
@@ -425,17 +366,25 @@ const BUILTIN_PROVIDES: Readonly<Record<string, readonly string[]>> = {
   stripe: ['payments.read', 'payments.write'],
   calendly: ['calendar.read', 'calendar.write'],
   todoist: ['tasks.read', 'tasks.write', 'projects.read', 'projects.write'],
-  dropbox: ['files.read', 'files.write'],
-  strava: ['fitness.read'],
-  hevy: ['fitness.read', 'fitness.write'],
   zapier: ['automation.run'],
-  salesforce: ['crm.read'],
-  spotify: ['music.read', 'music.write'],
-  'shopify-admin': ['shop.read', 'shop.write'],
 };
 
 export const BUILTIN_CATALOG_ENTRIES: readonly CatalogEntry[] = BUILTIN_ENTRIES.map((entry) => {
   const provides = BUILTIN_PROVIDES[entry.id];
   return provides === undefined ? entry : { ...entry, provides };
 });
+
+/** Catalog entries whose server this gateway hosts (their url is one of our hosted paths). */
+const HOSTED_CATALOG_IDS: ReadonlySet<string> = new Set(
+  BUILTIN_CATALOG_ENTRIES.filter((entry) => entry.url.startsWith(GOOGLE_MCP_PATH)).map((entry) => entry.id),
+);
+
+/**
+ * True for a connection made from one of those entries: installing it stores the hosted path instead of a URL, and the one-time migration
+ * (agentd hosted-endpoints-migrate.ts) rewrites older rows the same way. The credential itself follows the stored form
+ * (`isStoredHostedEndpoint`), so a custom server (no catalog id, an absolute URL) never gets it.
+ */
+export function isHostedCatalogId(catalogId: string | undefined): boolean {
+  return catalogId !== undefined && HOSTED_CATALOG_IDS.has(catalogId);
+}
 

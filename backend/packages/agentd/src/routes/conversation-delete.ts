@@ -1,7 +1,7 @@
 import type { Collection, ListQuery, Store } from '@agent-desktop/contracts';
 import { sessionKey } from '@agent-desktop/contracts';
 import type { Run } from '@agent-desktop/public-contracts';
-import { CHILD_SESSION_MARKER } from 'juno-agent/execution/execution-owner';
+import { SUBAGENT_SESSION_MARKER } from 'juno-agent/execution/execution-owner';
 import { docOwnerId } from './relationships.js';
 import { stopRunTruthfully, TERMINAL_RUN_STATUSES } from './runs.js';
 import type { AgentdDeps } from './index.js';
@@ -17,7 +17,7 @@ const STOP_WAIT_MS = 15_000;
 const STOP_POLL_MS = 100;
 
 /** Collections whose rows carry the conversation id as an indexed column. */
-const BY_CONVERSATION: Collection[] = ['items', 'requests', 'subscriptions', 'eventReceipts', 'backgroundTasks', 'agentTasks', 'browserGoalGates'];
+const BY_CONVERSATION: Collection[] = ['items', 'requests', 'subscriptions', 'eventReceipts', 'backgroundTasks', 'agentTasks', 'browserGoalGates', 'outbox'];
 
 /** Every id of one collection matching an indexed filter, read page by page. */
 async function idsWhere(store: Store, collection: Collection, where: NonNullable<ListQuery['where']>): Promise<string[]> {
@@ -43,7 +43,7 @@ async function runsOf(store: Store, conversationId: string): Promise<Run[]> {
 }
 
 /** Wait until every run row is terminal: a run that is still finalizing must not find its rows deleted. */
-async function settled(store: Store, runIds: string[]): Promise<boolean> {
+export async function settled(store: Store, runIds: string[]): Promise<boolean> {
   const deadline = Date.now() + STOP_WAIT_MS;
   for (;;) {
     let pending = false;
@@ -111,7 +111,7 @@ export async function deleteConversationCascade(deps: AgentdDeps, ownerId: strin
       for (const id of await idsWhere(store, collection, { conversationId })) await store.delete(collection, id);
     }
     const roots = [...new Set([...conv.agentIds, ...runs.map((run) => run.agentId)])].map((agentId) => sessionKey(agentId, conversationId));
-    const inSession = (key: string): boolean => roots.some((root) => key === root || key.startsWith(root + CHILD_SESSION_MARKER));
+    const inSession = (key: string): boolean => roots.some((root) => key === root || key.startsWith(root + SUBAGENT_SESSION_MARKER));
     await deleteSessionRows(store, 'transcripts', inSession);
     await deleteSessionRows(store, 'compactions', inSession);
     await store.delete('conversations', conversationId);

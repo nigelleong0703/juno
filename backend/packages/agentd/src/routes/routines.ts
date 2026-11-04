@@ -151,7 +151,7 @@ export function registerRoutines(app: Hono, deps: AgentdDeps) {
         patch.agentId = target.agent.id;
         patch.delivery = delivery;
       }
-      const updated = await deps.store.patch('routines', id, patch);
+      const updated = await deps.store.patch('routines', id, enabling ? { ...patch, preview: undefined } : patch);
       await deps.enqueuer.scheduleRoutine(id);
       await deps.store.emit({ type: 'routine.updated', routine: updated });
       return c.json(await settleRoutine(deps, ownerId, updated));
@@ -184,7 +184,8 @@ export function registerRoutines(app: Hono, deps: AgentdDeps) {
       if (deliveryError) {
         return c.json({ error: { code: deliveryError.code, message: deliveryError.message } }, deliveryError.status);
       }
-      const enabled = await deps.store.patch('routines', id, { enabled: true });
+      // The owner switching a routine on is the answer to a trial-run card too: it is no longer on trial.
+      const enabled = await deps.store.patch('routines', id, { enabled: true, preview: undefined });
       await deps.enqueuer.scheduleRoutine(id);
       await deps.store.emit({ type: 'routine.updated', routine: enabled });
       return c.json(await settleRoutine(deps, ownerId, enabled));

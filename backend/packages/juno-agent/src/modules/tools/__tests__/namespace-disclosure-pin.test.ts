@@ -15,15 +15,14 @@ describe('namespace disclosure lead acceptance', () => {
     expect(shown.filter((tool) => tool.mcp === true)).toHaveLength(0);
   });
 
-  it('offers curated browser and computer actions directly while rare tools stay deferred', async () => {
+  it('does not declare browser and computer actions up front: the directory names the families, tool_search returns them', async () => {
     const registry = await createToolRegistry({ store: createMemoryStore(), enqueuer: new NoopEnqueuer(), computer: () => { throw new Error('disclosure must not create a computer'); } });
     const shown = presentForModel(await registry.forAgent('agent'), {});
     const names = shown.map(tool => tool.name);
-    expect(names).toEqual(expect.arrayContaining(['browser.advance', 'browser.navigate', 'browser.snapshot', 'browser.click', 'browser.type', 'browser.fill', 'browser.get_text', 'browser.dialog', 'computer.screenshot', 'computer.click', 'computer.type', 'computer.key', 'computer.scroll']));
-    expect(names).not.toContain('computer.record_audio');
-    expect(names).not.toContain('browser.new_tab');
-    expect(names).not.toContain('files.read');
-    expect(shown.find(tool => tool.name === 'browser.advance')?.parameters).toMatchObject({ required: ['goal', 'stage'] });
+    expect(names.filter((name) => name.startsWith('browser.') || name.startsWith('computer.'))).toEqual([]);
+    expect(registry.get('browser.click')).toBeDefined();
+    expect(registry.get('computer.screenshot')).toBeDefined();
+    expect(names).not.toContain('files.edit');
     expect(new Set(names).size).toBe(names.length);
     const discovered = { ...mcpTool('notion_read'), deferLoading: false };
     const refreshed = presentForModel([discovered, ...(await registry.forAgent('agent')).reverse()], {});
@@ -36,8 +35,8 @@ describe('namespace disclosure lead acceptance', () => {
     const all = await registry.forAgent('agent');
     const shown = presentForModel(all, {});
     expect(all.length).toBeGreaterThan(30);
-    expect(shown.length).toBeLessThanOrEqual(10);
-    expect(shown.map((tool) => tool.name)).toEqual(expect.arrayContaining(['tool_search', 'tool_call', 'skill_read', 'skill_search', 'send_message']));
+    expect(shown.length).toBeLessThanOrEqual(16);
+    expect(shown.map((tool) => tool.name)).toEqual(expect.arrayContaining(['tool_search', 'tool_call', 'skill_read', 'skill_search', 'send_message', 'web_fetch', 'subagent_start']));
     expect(registry.get('memory_search')).toBeDefined();
   });
 });
