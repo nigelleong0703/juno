@@ -7,9 +7,19 @@ struct WatchSession: Codable, Equatable {
     var token: String
 }
 
-/// The one backend every Juno build talks to (same address as the iPhone's `Backend.url`; set it to your own server before building).
+/// The one backend every Juno build talks to (the same address as the iPhone's `Backend.url`): the `JUNO_SERVER_URL` build setting
+/// (Config/Juno.xcconfig, overridden in the gitignored Config/Server.local.xcconfig), carried in the Info.plist as `JunoServerURL`.
 enum WatchServer {
-    static let url = URL(string: "https://juno.example.com")!
+    static let placeholder = "https://juno.example.com"
+
+    static let url: URL = {
+        let value = (Bundle.main.object(forInfoDictionaryKey: "JunoServerURL") as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let url = URL(string: value.isEmpty ? placeholder : value) ?? URL(string: placeholder)!
+        #if DEBUG
+        if url.absoluteString == placeholder { print("Juno Watch: JUNO_SERVER_URL is the placeholder \(placeholder); set it in Config/Server.local.xcconfig") }
+        #endif
+        return url
+    }()
 }
 
 struct WatchAPIError: LocalizedError {

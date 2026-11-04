@@ -5,4 +5,9 @@
 //   JUNO_PUSH_SWIFT_FLAG = -DJUNO_PUSH
 JUNO_PUSH_ENTITLEMENTS = Config/Juno.entitlements
 JUNO_PUSH_SWIFT_FLAG =
+
+// The server the app talks to. `$()` keeps the `//` of the URL from starting an xcconfig comment. The default is a placeholder: set your
+// own in Server.local.xcconfig (gitignored, next to this file), e.g. `JUNO_SERVER_URL = https:/$()/juno.yourdomain.com`.
+JUNO_SERVER_URL = https:/$()/juno.example.com
 #include? "Push.local.xcconfig"
+#include? "Server.local.xcconfig"

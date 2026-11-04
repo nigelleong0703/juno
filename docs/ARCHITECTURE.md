@@ -10,7 +10,7 @@ Juno is a server that hosts persistent AI agents. People talk to an agent in the
 | agentd | `backend/packages/agentd`, `juno-agent` | Private. Owns agents, conversations, requests and approvals, routines, goals and the event stream. Runs the harness: the model loop (Pi AI and Pi Agent Core), tools, context building and compaction. |
 | computerd | `backend/packages/computerd`, `sandbox-adapters` | Private. One computer per owner, one screen per agent. Allocates screens, serves screen actions, bridges the live view and take-over, pauses and resumes. |
 | memoryd | `backend/packages/memoryd`, `memory-graph` | The memory read/write port. Runs inside agentd unless `MEMORYD_URL` points at a separate process. |
-| PostgreSQL | `backend/packages/db` | The only database: documents, durable-run tables, the event log and memory search vectors (`pgvector`, so the server image is `pgvector/pgvector:pg18`). File bytes are not stored in it; they go to the blob directory or S3-compatible storage. |
+| PostgreSQL | `backend/packages/db` | The only database: documents, durable-run tables, the event log and memory search vectors (`pgvector`, built into `deploy/postgres/Dockerfile`). File bytes are not stored in it; they go to the blob directory or S3-compatible storage. |
 
 The shipped Compose deployment runs API, agentd and computerd as three processes in one container on its loopback, behind Caddy. agentd and computerd never listen on a public interface. Internal calls carry a service bearer; the API resolves the owner and passes it on.
 

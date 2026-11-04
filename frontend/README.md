@@ -16,4 +16,6 @@ packages/
 tests/fixtures/  Test doubles for the API
 ```
 
+The iPhone and Watch apps read their server from the `JUNO_SERVER_URL` build setting (placeholder `https://juno.example.com` in `packages/ios/Config/Juno.xcconfig` and `packages/watch/Config/Juno.xcconfig`). Set yours in `Config/Server.local.xcconfig` next to each (gitignored), e.g. `JUNO_SERVER_URL = https:/$()/your.server`; `$()` keeps the `//` from starting an xcconfig comment.
+
 Clients talk to the backend only through the public HTTP, SSE and WebSocket API. Wire schemas come from `backend/packages/public-contracts`; never copy them. Swift and Kotlin types are generated (`pnpm -C frontend gen:swift`, `gen:kotlin`).

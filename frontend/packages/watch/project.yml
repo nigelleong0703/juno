@@ -27,6 +27,10 @@ targets:
         WKApplication: true
         WKWatchOnly: true
         NSMicrophoneUsageDescription: Juno listens while you talk to it.
+        JunoServerURL: $(JUNO_SERVER_URL)
+    configFiles:
+      Debug: Config/Juno.xcconfig
+      Release: Config/Juno.xcconfig
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.nigelleong0703.juno.watch

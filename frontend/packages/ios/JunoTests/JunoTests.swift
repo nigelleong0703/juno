@@ -1507,3 +1507,20 @@ final class AguiNativeTests: XCTestCase {
         XCTAssertEqual(world.requests.first { $0.id == "req2" }?.status, "pending")
     }
 }
+
+final class ServerURLTests: XCTestCase {
+    /// The app's address is the `JUNO_SERVER_URL` build setting, carried in its Info.plist.
+    func testBackendURLComesFromTheBundleSetting() throws {
+        let configured = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "JunoServerURL") as? String)
+        XCTAssertFalse(configured.isEmpty)
+        XCTAssertEqual(Backend.url, URL(string: configured))
+        XCTAssertEqual(Backend.serverURL(in: .main), Backend.url)
+    }
+
+    /// A bundle without the key falls back to the placeholder instead of crashing.
+    func testMissingSettingFallsBackToThePlaceholder() {
+        let bare = Bundle(for: ServerURLTests.self)
+        XCTAssertNil(bare.object(forInfoDictionaryKey: "JunoServerURL"))
+        XCTAssertEqual(Backend.serverURL(in: bare).absoluteString, Backend.placeholder)
+    }
+}

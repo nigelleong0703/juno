@@ -81,6 +81,7 @@
 		6D2A294E38B6CC4360D63036 /* mint-thinking.heic */ = {isa = PBXFileReference; path = "mint-thinking.heic"; sourceTree = "<group>"; };
 		7A29DFDC3B675786F91672A0 /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
 		7AD7E919840616DADF91E546 /* purple-failed.heic */ = {isa = PBXFileReference; path = "purple-failed.heic"; sourceTree = "<group>"; };
+		85D0848B82D90479D968DCDB /* Juno.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Juno.xcconfig; sourceTree = "<group>"; };
 		90E4A810E4D11B39CAF720C5 /* star-sleeping.heic */ = {isa = PBXFileReference; path = "star-sleeping.heic"; sourceTree = "<group>"; };
 		99ABCF10C498EBC609F61289 /* bean-sleeping.heic */ = {isa = PBXFileReference; path = "bean-sleeping.heic"; sourceTree = "<group>"; };
 		A138458237D061C4A910F0AF /* Sprite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sprite.swift; sourceTree = "<group>"; };
@@ -158,9 +159,18 @@
 			children = (
 				D1CAC30C3B53DBB63241C304 /* Models */,
 				9782CF9CAA08777113857B64 /* Characters */,
+				D4BDDC9693E82BFD19EBD1E5 /* Config */,
 				F11A4E6A2144EED7EBCAC4C8 /* JunoWatch */,
 				B21C046FCBEBF5D1F59111F2 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		D4BDDC9693E82BFD19EBD1E5 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				85D0848B82D90479D968DCDB /* Juno.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 		F11A4E6A2144EED7EBCAC4C8 /* JunoWatch */ = {
@@ -357,6 +367,7 @@
 		};
 		7E71DFEFDB5EB0A5515A09BF /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 85D0848B82D90479D968DCDB /* Juno.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CURRENT_PROJECT_VERSION = 1;
@@ -373,6 +384,7 @@
 		};
 		CC9DB7D14CEBE04581A87772 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 85D0848B82D90479D968DCDB /* Juno.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CURRENT_PROJECT_VERSION = 1;

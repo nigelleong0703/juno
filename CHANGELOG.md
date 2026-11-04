@@ -8,7 +8,7 @@
 - Agents in groups: observed group messages, per-group settings, teammate permissions, Slack-native surfaces (`/juno`, message shortcut, canvas) and an outbox with retry, visibility and a pause switch for every delivery to a chat platform or phone.
 - iPhone access (contacts, location, health, photos, music, home, reminders) through the device-call path; undo for agent file writes with kept versions; memory per agent with items the owner can share.
 - Subagents replace "child" tasks throughout (wake kind, harness units, tools, UI); background subagent runs, deep research and deep search skills.
-- Memory vectors move to pgvector (`vector(n)` with an HNSW index): the infra compose file uses `pgvector/pgvector:pg18`, and unit suites install a test-only stand-in on the embedded cluster.
+- Memory vectors move to pgvector (`vector(n)` with an HNSW index): the infra compose file uses `pgvector/pgvector:pg18` and the server's Compose PostgreSQL image is rebuilt from `postgres:18-alpine` with pgvector, so existing volumes upgrade in place, and unit suites install a test-only stand-in on the embedded cluster.
 - Sandbox: one network namespace per agent with an egress guard, shorter idle pause, orphan sweep, platform skills synced by content version; the image builds on E2B cloud (`E2B_API_KEY`).
 - Connectors: hosted connectors are internal and answer only `HOSTED_MCP_TOKEN`; Asana added; Strava, Dropbox and the Singapore transport connector removed.
 - Contract and quality: public-contracts 0.72.0 to 0.81.0 (deletion events, outbox, file history, group settings, voice call, memory `agentId`), a plain-sentence rule for failed runs, and MCP argument checks that resolve `$ref`.

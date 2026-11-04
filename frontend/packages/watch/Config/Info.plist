@@ -18,6 +18,8 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>JunoServerURL</key>
+	<string>$(JUNO_SERVER_URL)</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Juno listens while you talk to it.</string>
 	<key>WKApplication</key>

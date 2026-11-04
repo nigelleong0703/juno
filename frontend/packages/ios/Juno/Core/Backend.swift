@@ -5,9 +5,25 @@ import Security
 // (packages/client/src/http/*). Account mode signs in with email + password and sends the
 // session token as a Bearer header (Better Auth `bearer()` plugin, backend/api/src/account-auth.ts).
 
-/// The one backend every build talks to (debug included). Nothing in the app lets the person change it; set it to your own server before building.
+/// The one backend every build talks to (debug included). Nothing in the app lets the person change it: the address is the
+/// `JUNO_SERVER_URL` build setting (Config/Juno.xcconfig, overridden in the gitignored Config/Server.local.xcconfig), carried in the
+/// Info.plist as `JunoServerURL`.
 enum Backend {
-    static let url = URL(string: "https://juno.example.com")!
+    static let placeholder = "https://juno.example.com"
+
+    /// The address in a bundle's Info.plist, or the placeholder when the key is missing or not a URL.
+    static func serverURL(in bundle: Bundle) -> URL {
+        let value = (bundle.object(forInfoDictionaryKey: "JunoServerURL") as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return URL(string: value.isEmpty ? placeholder : value) ?? URL(string: placeholder)!
+    }
+
+    static let url: URL = {
+        let url = serverURL(in: .main)
+        #if DEBUG
+        if url.absoluteString == placeholder { print("Juno: JUNO_SERVER_URL is the placeholder \(placeholder); set it in Config/Server.local.xcconfig") }
+        #endif
+        return url
+    }()
 }
 
 /// A `server` key in a session saved by an older build is ignored when it is decoded.

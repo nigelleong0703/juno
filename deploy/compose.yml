@@ -87,7 +87,9 @@ x-app-environment: &app-environment
 
 services:
   postgres:
-    image: pgvector/pgvector:pg18
+    image: juno-postgres:${JUNO_IMAGE_TAG:-local}
+    build:
+      context: postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run node deploy/setup.mjs first}

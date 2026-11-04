@@ -36,6 +36,8 @@ release/
 
 # Paid-team push opt-in (iOS)
 packages/ios/Config/Push.local.xcconfig
+packages/ios/Config/Server.local.xcconfig
+packages/watch/Config/Server.local.xcconfig
 
 # Personal Claude Code instructions
 CLAUDE.local.md

@@ -54,6 +54,8 @@ targets:
         # With limited photo access the system would otherwise ask to change the selection in the middle of an agent's search;
         # the owner changes it from Settings > iPhone access > Photos instead.
         PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
+        # The server address comes from the JUNO_SERVER_URL build setting (Config/Juno.xcconfig, Config/Server.local.xcconfig).
+        JunoServerURL: $(JUNO_SERVER_URL)
     configFiles:
       Debug: Config/Juno.xcconfig
       Release: Config/Juno.xcconfig

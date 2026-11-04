@@ -34,7 +34,7 @@ It does not import the iPhone app's code; it has its own small client (`JunoWatc
   sentence with the best installed voice for the language (premium, then enhanced, else default). Tapping while it speaks
   stops it. The audio session is `.record` while listening and `.playback` while speaking. Decisions and fallbacks are logged
   with `Logger` (subsystem `io.github.nigelleong0703.juno.watch`, category `voice`).
-- **Server** — fixed: `WatchServer.url` in `JunoWatch/Client.swift` is a placeholder (`https://juno.example.com`); set it to your own server before building. There is no in-app setting.
+- **Server** — fixed: `WatchServer.url` in `JunoWatch/Client.swift` is read from the `JUNO_SERVER_URL` build setting (`Config/Juno.xcconfig`, placeholder `https://juno.example.com`). Set yours in `Config/Server.local.xcconfig` (gitignored): `JUNO_SERVER_URL = https:/$()/your.server`. There is no in-app setting.
 
 ```sh
 cd packages/watch && scripts/fetch-models.sh && xcodegen generate
