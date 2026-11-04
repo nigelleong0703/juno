@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createAccount, defaultAgent, listenEvents, runReport, stackUrls, toolActivity } from '../harness/client';
 
 /**
- * Real model, owner evidence of 2026-11-02 (conversation cvn-4ebd3003…): a paused computer was reported as "unavailable", a Chinese
+ * Real model, observed 2026-11-02: a paused computer was reported as "unavailable", a Chinese
  * chat got an English opening line, a bare chip row was the whole reply, and a plain "go find it" was answered with "shall I?".
  * The computer is the fake provider: it pauses and resumes like the platform's (passive reads refuse, the first real call resumes).
  */

@@ -1,7 +1,7 @@
 /**
  * `inputSchema` of two Google Maps Grounding Lite tools exactly as https://mapstools.googleapis.com/mcp listed them (tools/list, 2026-11-02),
  * with only the `description` and `x-google-enum-descriptions` text dropped. Every object field is a `$ref` into `$defs` and nothing else
- * (no `type`, no `oneOf`), which is the shape that let a JSON-encoded string through (run_997c1501…, 2026-11-02).
+ * (no `type`, no `oneOf`), which is the shape that let a JSON-encoded string through (seen 2026-11-02).
  */
 const latLng = { properties: { latitude: { format: 'double', type: 'number' }, longitude: { format: 'double', type: 'number' } }, type: 'object' };
 
