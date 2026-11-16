@@ -20,7 +20,7 @@
                 android:resource="@xml/file_paths" />
         </provider>
         <!-- singleTask: the connector sign-in browser returns to this running instance (juno://connectors, see state/ConnectorReturn.kt). -->
-        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask">
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

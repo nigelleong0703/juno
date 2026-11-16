@@ -48,6 +48,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.composables:icons-lucide:1.1.0")
+    // Real backdrop blur for the floating tab bar and tab header (RenderEffect, API 31+; below that or when turned off it
+    // draws an opaque-enough scrim). 1.7.3 is the last 1.x line: it needs Compose UI 1.12.0 and Kotlin 2.3 stdlib, both
+    // met here. 2.0.x is a different API (blur moved to haze-blur) and wants activity 1.13 / lifecycle 2.11.
+    implementation("dev.chrisbanes.haze:haze:1.7.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // Images (Coil 3, OkHttp-backed) and Markdown rendering. Versions checked against Maven Central release dates.
     implementation("io.coil-kt.coil3:coil-compose:3.6.3")
