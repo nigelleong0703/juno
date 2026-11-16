@@ -522,5 +522,7 @@ export type { ModelSelection, ModelSelectionErrorCode, ModelSnapshot } from './m
 export { appendToTranscript, appendWakeEvents, readTranscript } from './transcript.js';
 export { offloadImages } from './transcript-images.js';
 export { assistantMessage, toolMessage, wakeMessage, parseMessage } from './messages.js';
-export { chatHasRoomAgents, chatTakesReactions } from './where-you-are.js';export type { Brain, BrainContext, AssistantTurn } from '../../contracts/index.js';
+export { chatHasRoomAgents, chatTakesReactions } from './where-you-are.js';
+export { recentlyUsedTools } from './recent-tools.js';
+export type { Brain, BrainContext, AssistantTurn } from '../../contracts/index.js';
 export type { ComputerEnvironmentSource, RunComputerEnvironment } from './context.js';

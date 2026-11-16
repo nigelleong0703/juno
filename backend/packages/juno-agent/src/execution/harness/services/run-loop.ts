@@ -9,7 +9,7 @@
  * old hand-rolled self-loop is retired.
  */
 import { LIMITS, type Brain } from '../../../contracts/index.js';
-import { chatHasRoomAgents, chatTakesReactions } from '../../brain/index.js';
+import { chatHasRoomAgents, chatTakesReactions, recentlyUsedTools } from '../../brain/index.js';
 import { speaksOnlyBySend } from '../logic/run-origin.js';
 import { runCoreTurn } from '../engines/pi-core/turn.js';
 import type { LengthBudget } from '../engines/pi-core/types.js';
@@ -66,6 +66,8 @@ export async function runLoop(
   // Read once and journaled, like the browser interface: the core tool list must not change within a run.
   const reactions = await ctx.run('chat-reactions', () => chatTakesReactions(services.store, input.conversationId));
   const roomTalk = await ctx.run('chat-room-talk', () => chatHasRoomAgents(services.store, input.conversationId));
+  // The tools this chat used lately stay in the short list (brain/recent-tools.ts); journaled, so a replay sends the same tools.
+  const recentTools = await ctx.run('chat-recent-tools', () => recentlyUsedTools(services.store, input.conversationId));
   // A run nobody is waiting on speaks only through send_message: its final text is a record line. Read once and journaled, so a replay takes the same branch.
   input.sendOnly = await ctx.run('send-only', async () => speaksOnlyBySend(await services.store.get('runs', runId)));
   let stepIndex = 0;
@@ -75,7 +77,7 @@ export async function runLoop(
     if (await cancellation.peek() === true) return 'stopped';
     const turn = await runCoreTurn({
       ctx: timer.ctx, services, input, runId, stepIndex, brainCtx: context, cancellation, deliveredTexts, citations, progress, gate, lengthBudget, cardRetry, promiseRetry, noReply,
-      budget, goalBrowserMode, reactions, roomTalk, compactions,
+      budget, goalBrowserMode, reactions, roomTalk, recentTools, compactions,
     });
     timer.report(services.log, { runId, step: stepIndex, outcome: turn.outcome });
     context = turn.brainCtx;

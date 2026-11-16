@@ -303,6 +303,8 @@ export interface ModelToolOptions {
   reactions?: boolean;
   /** The chat is an app room with other agents in it: `message_agent` is then one of the core tools (no tool_search round trip before every reply). */
   roomTalk?: boolean;
+  /** Tools this conversation used in its latest runs (brain/recent-tools.ts): shown directly, so they are not searched for again. */
+  recent?: readonly string[];
 }
 
 /**
@@ -330,6 +332,8 @@ function splitForModel(tools: readonly Tool[], env: Record<string, string | unde
   if (goalMode) tools = tools.map(tool => GOAL_BROWSER_NAMES.some(name => name === tool.name) ? { ...tool, deferLoading: false } : tool);
   if (options.reactions === true) tools = tools.map(tool => tool.name === 'react' ? { ...tool, deferLoading: false } : tool);
   if (options.roomTalk === true) tools = tools.map(tool => tool.name === 'message_agent' ? { ...tool, deferLoading: false } : tool);
+  const recent = options.recent ?? [];
+  if (recent.length > 0) tools = tools.map(tool => recent.includes(tool.name) && !isDiscoveryTool(tool.name) ? { ...tool, deferLoading: false } : tool);
   // Fixed harness schemas precede discovered tools, independent of registry refresh order.
   const fixed = [...CORE_TOOL_NAMES, ...GOAL_BROWSER_NAMES];
   const rank = new Map(fixed.map((name, index) => [name, index]));

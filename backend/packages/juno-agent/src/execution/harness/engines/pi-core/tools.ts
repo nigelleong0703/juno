@@ -33,15 +33,15 @@ export function toolIndexOf(toolCalls: Array<{ id: string }>, id: string, fallba
  * cancellable); a discovery aborted by the run's stop returns null so the caller reports a stop
  * instead of a failed run.
  */
-export async function discoverTools(registry: ToolRegistry, agentId: string, signal: AbortSignal, options: { goalMode?: boolean; reactions?: boolean; roomTalk?: boolean; ownerOnly?: boolean; turn?: string } = {}): Promise<Tool[] | null> {
-  const { goalMode, reactions, roomTalk, ownerOnly, turn } = options;
+export async function discoverTools(registry: ToolRegistry, agentId: string, signal: AbortSignal, options: { goalMode?: boolean; reactions?: boolean; roomTalk?: boolean; recent?: readonly string[]; ownerOnly?: boolean; turn?: string } = {}): Promise<Tool[] | null> {
+  const { goalMode, reactions, roomTalk, recent, ownerOnly, turn } = options;
   try {
     // The registry holds every tool; the model is shown a short list and reaches the rest through tool_search (the hidden
     // ones come last, marked `deferLoading`), and the policy keeps reading the full list, so a hidden tool still has to pass its rules.
     // A tool that is owner-only is not offered to a run where anyone else is in the chat.
     const offered = (await registry.forAgent(agentId, turn === undefined ? { signal } : { signal, turn }))
       .filter((tool) => tool.ownerOnly !== true || ownerOnly === true);
-    return toolsForModel(offered, goalMode === undefined ? process.env : { ...process.env, BROWSER_INTERFACE: goalMode ? 'goal' : 'direct' }, { reactions: reactions === true, roomTalk: roomTalk === true });
+    return toolsForModel(offered, goalMode === undefined ? process.env : { ...process.env, BROWSER_INTERFACE: goalMode ? 'goal' : 'direct' }, { reactions: reactions === true, roomTalk: roomTalk === true, recent: recent ?? [] });
   } catch (error) {
     if (signal.aborted) return null;
     throw error;

@@ -66,7 +66,7 @@ async function runCoreTurnOnVersion(deps: CoreTurnDeps): Promise<CoreTurnResult>
   // Owner-only tools (person_link) are offered only when the owner is alone with the agent in this run.
   const audience = await profileAudience(services.store, { agentId: input.agentId, conversationId: input.conversationId, wake: input.wakeEvents });
   // One model step is one turn: an MCP connection re-lists at most once within it (see McpRefreshOptions).
-  const discovered = await discoverTools(services.toolRegistry, input.agentId, cancellation.signal, { goalMode, reactions: deps.reactions === true, roomTalk: deps.roomTalk === true, ownerOnly: audience.ownerOnly, turn: runId + ':' + String(stepIndex) });
+  const discovered = await discoverTools(services.toolRegistry, input.agentId, cancellation.signal, { goalMode, reactions: deps.reactions === true, roomTalk: deps.roomTalk === true, recent: deps.recentTools ?? [], ownerOnly: audience.ownerOnly, turn: runId + ':' + String(stepIndex) });
   if (discovered === null) return { outcome: 'stopped', brainCtx };
   // Stable order: the session's persisted order first, tools added since appended (see brain/tool-order.ts).
   // The run's frozen snapshot decides once whether the provider's own search replaces Juno's, so the list never changes mid-run.

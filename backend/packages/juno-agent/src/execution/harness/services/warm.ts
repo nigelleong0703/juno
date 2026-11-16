@@ -3,7 +3,7 @@
  * would send now with the run's own rules for the tool list (same discovery inputs, same order, same cache key) and has the brain make
  * one tiny provider call. Nothing durable: no run, no items, no journal, no transcript row.
  */
-import { chatHasRoomAgents, chatTakesReactions } from '../../brain/index.js';
+import { chatHasRoomAgents, chatTakesReactions, recentlyUsedTools } from '../../brain/index.js';
 import { profileAudience } from '../../../modules/profile/index.js';
 import { discoverTools } from '../engines/pi-core/tools.js';
 import { findSystemEntry, metaOf } from '../../brain/context-notes.js';
@@ -37,6 +37,7 @@ export async function warmConversation(services: RunServices, target: WarmTarget
     goalMode: await services.toolRegistry.nativeBrowserAvailable?.(agentId) === true,
     reactions: await chatTakesReactions(services.store, conversationId),
     roomTalk: await chatHasRoomAgents(services.store, conversationId),
+    recent: await recentlyUsedTools(services.store, conversationId),
     ownerOnly: audience.ownerOnly,
   });
   // A turn reads the tool texts of the harness version its session is pinned to; the warm-up must read the same ones.

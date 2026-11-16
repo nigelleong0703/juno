@@ -22,6 +22,8 @@ export interface CoreTurnDeps {
   reactions?: boolean;
   /** The chat is an app room with several agents, so `message_agent` is a core tool (constant per conversation, journaled once per run). */
   roomTalk?: boolean;
+  /** Tools this conversation used in its latest runs, shown directly instead of behind tool_search (journaled once per run). */
+  recentTools?: readonly string[];
   ctx: RunContext;
   services: RunServices;
   input: RunInput;
