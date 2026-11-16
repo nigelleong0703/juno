@@ -156,6 +156,20 @@ describe('public screen API', () => {
     expect(((await notHeld.json()) as { control: boolean }).control).toBe(false);
   });
 
+  it('adds voxlUrl (same ticket, on the screen host, trailing slash) only when SCREEN_HOST is set', async () => {
+    const stream = async () => (await (await userApp.request('/v1/screens/scr-1/stream', { method: 'POST', headers: auth, body: JSON.stringify({ control: true }) })).json()) as { url: string; voxlUrl?: string };
+    expect((await stream()).voxlUrl).toBeUndefined();
+    const config = getConfig();
+    config.SCREEN_HOST = 'computer.example.test';
+    try {
+      const body = await stream();
+      const ticket = new URL(body.url).searchParams.get('t');
+      expect(body.voxlUrl).toBe(`https://computer.example.test/s/${ticket}/`);
+    } finally {
+      config.SCREEN_HOST = '';
+    }
+  });
+
   it('carries the authenticated owner on every screen route and parses as ScreenResponse', async () => {
     for (const [path, init] of [
       ['/v1/computers/computer-member-robin/screens', { headers: auth }],

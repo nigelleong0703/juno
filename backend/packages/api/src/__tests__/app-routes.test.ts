@@ -258,6 +258,20 @@ describe('app-owned settings', () => {
     }
   });
 
+  it('stores the daily proactive check time and switch, rejects a bad time, and tells agentd to reschedule', async () => {
+    const h = build(createMemoryStore());
+    const view = z.object({ general: z.object({ dailyCheck: z.object({ enabled: z.boolean().optional(), time: z.string().optional(), quiet: z.object({ from: z.string(), to: z.string() }).optional() }).optional() }) });
+    const ok = await call(h, '/v1/settings', 'sess-a', { method: 'PATCH', body: { general: { dailyCheck: { enabled: true, time: '07:45' } } } });
+    expect(ok.status).toBe(200);
+    expect((await parseBody(ok, view)).general.dailyCheck).toEqual({ enabled: true, time: '07:45' });
+    expect(h.upstream.filter((url) => url.endsWith('/v1/proactive/reschedule'))).toHaveLength(1);
+    expect((await parseBody(await call(h, '/v1/settings', 'sess-a', { method: 'PATCH', body: { general: { dailyCheck: { enabled: false } } } }), view)).general.dailyCheck).toEqual({ enabled: false, time: '07:45' });
+    expect((await parseBody(await call(h, '/v1/settings', 'sess-a', { method: 'PATCH', body: { general: { dailyCheck: { quiet: { from: '22:30', to: '08:00' } } } } }), view)).general.dailyCheck).toEqual({ enabled: false, time: '07:45', quiet: { from: '22:30', to: '08:00' } });
+    expect((await call(h, '/v1/settings', 'sess-a', { method: 'PATCH', body: { general: { dailyCheck: { quiet: { from: '25:00', to: '08:00' } } } } })).status).toBe(400);
+    for (const time of ['7:45', '24:00', '07:60', '07:45:00']) expect((await call(h, '/v1/settings', 'sess-a', { method: 'PATCH', body: { general: { dailyCheck: { time } } } })).status, time).toBe(400);
+    expect((await parseBody(await call(h, '/v1/settings', 'sess-b'), view)).general.dailyCheck).toBeUndefined();
+  });
+
   it('replaces the usage budget so clearing a field removes the constraint', async () => {
     const store = createMemoryStore();
     const h = build(store);

@@ -27,6 +27,8 @@ export type GoalWriteInput = z.infer<typeof goalWriteSchema>;
 export interface GoalWriter {
   ownerId: string;
   agentId: string;
+  /** The chat the goal is made in; recorded on a new goal so its check-ins go back there. */
+  conversationId?: string;
   /** The run that writes, when there is one; goes on the timeline entry. */
   runId?: string;
 }
@@ -93,6 +95,7 @@ export async function writeGoal(deps: { store: Store; enqueuer?: Enqueuer }, who
     id: 'goal-' + String(Date.now()) + '-' + randomUUID().slice(0, 8),
     ownerId: who.ownerId,
     agentId: who.agentId,
+    ...(who.conversationId === undefined ? {} : { conversationId: who.conversationId }),
     kind: input.kind ?? 'goal',
     title: input.title,
     summary: input.summary,

@@ -38,6 +38,7 @@ import { createOwnerComputerApp } from './transport/owner-routes.js';
 import { createGatewayProxy } from './transport/gateway-proxy.js';
 import { createLinkServer } from './transport/link-endpoint.js';
 import { createVncProxy } from './transport/proxy.js';
+import { createVoxlProxy } from './transport/voxl-proxy.js';
 
 const log = createLogger({ service: 'computerd' });
 
@@ -95,7 +96,7 @@ async function main(): Promise<void> {
     legacyBinding: isLocal ? null : config.E2B_SANDBOX_ID ? { sandboxId: config.E2B_SANDBOX_ID, template: config.E2B_TEMPLATE } : null,
     providerForOwner: (owner, hooks) => {
       if (config.COMPUTER_PROVIDER === 'fake') return createFakeProvider({ sandboxId: `fake-${randomUUID()}` });
-      if (isLocal) return createLocalProvider({ ownerId: owner, image: config.LOCAL_SANDBOX_IMAGE, storage, hub, linkUrl, deployment, onStarted: hooks.onStarted, skills });
+      if (isLocal) return createLocalProvider({ ownerId: owner, image: config.LOCAL_SANDBOX_IMAGE, storage, hub, linkUrl, deployment, onStarted: hooks.onStarted, skills, screenStream: config.SCREEN_STREAM });
       return createE2bProvider({
         template: config.E2B_TEMPLATE,
         apiKey: config.E2B_API_KEY,
@@ -108,6 +109,7 @@ async function main(): Promise<void> {
         linkUrl,
         onStarted: hooks.onStarted,
         skills,
+        screenStream: config.SCREEN_STREAM,
         ...(storage.kind === 'none' ? {} : { storage: { ownerId: owner, storage } }),
       });
     },
@@ -144,7 +146,13 @@ async function main(): Promise<void> {
   // for an authenticated private-network deployment. Never default to 0.0.0.0.
   const host = process.env['COMPUTERD_HOST'] || '127.0.0.1';
   const respond = getRequestListener(app.fetch);
-  const server = createServer((request, response) => (gatewayProxy.matches(request.url) ? gatewayProxy.handleRequest(request, response) : void respond(request, response)));
+  // voxl's HTTP and WebSocket for the API's screen host (BACKEND 7.1b); declared before `server`, which routes to it, and given its keep-alive below.
+  const voxlHolder: { proxy?: ReturnType<typeof createVoxlProxy> } = {};
+  const server = createServer((request, response) => {
+    if (gatewayProxy.matches(request.url)) return gatewayProxy.handleRequest(request, response);
+    if (voxlHolder.proxy?.matches(request.url)) return voxlHolder.proxy.handleRequest(request, response);
+    void respond(request, response);
+  });
   server.listen(config.COMPUTERD_PORT, host, () => {
     log.info({ host, port: config.COMPUTERD_PORT, provider: config.COMPUTER_PROVIDER }, 'computerd listening');
   });
@@ -170,7 +178,18 @@ async function main(): Promise<void> {
     keepAliveMs,
     log: (fields, message) => log.info(fields, message),
   });
-  server.on('upgrade', (request, socket, head) => (gatewayProxy.matches(request.url) ? gatewayProxy.handleUpgrade(request, socket, head) : proxy.handleUpgrade(request, socket, head)));
+  voxlHolder.proxy = createVoxlProxy({
+    forOwner: (owner) => computers.forOwner(owner),
+    token: config.COMPUTERD_TOKEN,
+    secret: config.SCREEN_TICKET_SECRET,
+    keepAliveMs,
+    log: (fields, message) => log.info(fields, message),
+  });
+  server.on('upgrade', (request, socket, head) => {
+    if (gatewayProxy.matches(request.url)) return gatewayProxy.handleUpgrade(request, socket, head);
+    if (voxlHolder.proxy?.matches(request.url)) return voxlHolder.proxy.handleUpgrade(request, socket, head);
+    proxy.handleUpgrade(request, socket, head);
+  });
 
   // Local Docker only: containers outlive a computerd that is gone, so each start (and every ten minutes) cleans up after the dead ones.
   if (isLocal) {

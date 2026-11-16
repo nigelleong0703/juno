@@ -28,6 +28,7 @@ export interface LocalProviderOptions {
   onStarted?: (context: StartedContext) => Promise<void>;
   linkWaitMs?: number;
   skills?: LinkedProviderOptions['skills'];
+  screenStream?: LinkedProviderOptions['screenStream'];
 }
 
 export function createLocalProvider(options: LocalProviderOptions): ComputerProvider & { dispose(): void } {
@@ -41,5 +42,6 @@ export function createLocalProvider(options: LocalProviderOptions): ComputerProv
     ...(options.onStarted ? { onStarted: options.onStarted } : {}),
     ...(options.linkWaitMs === undefined ? {} : { linkWaitMs: options.linkWaitMs }),
     ...(options.skills ? { skills: options.skills } : {}),
+    ...(options.screenStream ? { screenStream: options.screenStream } : {}),
   });
 }

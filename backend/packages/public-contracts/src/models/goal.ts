@@ -47,6 +47,8 @@ export type GoalMilestone = z.infer<typeof goalMilestoneSchema>;
 export const goalSchema = z.object({
   id: idSchema,
   agentId: idSchema,
+  /** The chat the goal was made in (by its agent, or from a digest of that chat): its check-ins are posted there. Absent: the agent's in-app direct chat. */
+  conversationId: idSchema.optional(),
   kind: goalKindSchema,
   title: z.string().min(1),
   /** One line on where it stands. */

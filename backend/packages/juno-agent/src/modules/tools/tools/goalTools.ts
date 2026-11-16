@@ -63,7 +63,7 @@ export function createGoalUpdateTool(): Tool {
       const input = parsed.data;
       // One durable step: a replay returns the recorded outcome instead of creating a second goal.
       return ctx.step('goal_update', async (): Promise<ToolResult> => {
-        const written = await writeGoal(ctx, { ...who, runId: ctx.runId }, input);
+        const written = await writeGoal(ctx, { ...who, runId: ctx.runId, conversationId: ctx.conversationId }, input);
         if (!written.ok) return result(written.error, true);
         return result((written.created ? 'Created goal ' : 'Updated goal ') + written.goal.id + '.');
       });

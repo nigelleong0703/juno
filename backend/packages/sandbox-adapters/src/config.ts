@@ -37,6 +37,11 @@ export const computerConfigSchema = z.object({
   E2B_TEMPLATE: z.string().default('desktop-debian'),
   /** Local Docker image for COMPUTER_PROVIDER=local; built and verified separately. */
   LOCAL_SANDBOX_IMAGE: z.string().default('juno-desktop:local'),
+  /**
+   * Which desktop stream a display boots with (BACKEND 7.1b): `novnc` (x11vnc + websockify, the default, nothing changes), `voxl`
+   * (H.264 over WebSocket, needs a template that ships /usr/local/bin/voxl and SCREEN_HOST on the API) or `both` side by side.
+   */
+  SCREEN_STREAM: z.enum(['novnc', 'voxl', 'both']).default('novnc'),
   COMPUTER_RESOLUTION: z.string().default(DEFAULT_SCREEN_RESOLUTION),
   /** IANA timezone for the agent screens (the start page clock, sites, apps). No per-user setting yet. */
   COMPUTER_TIMEZONE: z.string().regex(/^[A-Za-z0-9_+\-/]+$/, 'COMPUTER_TIMEZONE must be an IANA name like Asia/Singapore').default('UTC'),

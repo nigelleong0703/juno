@@ -50,7 +50,7 @@ export async function runCoreTurn(deps: CoreTurnDeps): Promise<CoreTurnResult> {
 }
 
 async function runCoreTurnOnVersion(deps: CoreTurnDeps): Promise<CoreTurnResult> {
-  const { ctx, services, input, runId, stepIndex, cancellation, deliveredTexts, citations, progress, gate, cardRetry, noReply } = deps;
+  const { ctx, services, input, runId, stepIndex, cancellation, deliveredTexts, citations, progress, gate, cardRetry, promiseRetry, noReply } = deps;
   const state: TurnState = { stopped: false, journaled: false, steeredInFlight: false, persisted: new Set() };
   let brainCtx = deps.brainCtx;
   let lastTurn: AssistantTurn | null = null;
@@ -272,9 +272,9 @@ async function runCoreTurnOnVersion(deps: CoreTurnDeps): Promise<CoreTurnResult>
             // A run that speaks only through send_message keeps its final text as the task's record line and delivers nothing (a child's text is still its result for the parent).
             const posted = sendOnly && !subagentRun
               ? await recordStep(ctx, services, stepIndex, runId, finalTurn.text)
-              : await replyStep(ctx, services, input, stepIndex, finalTurn.text, cancellation, deliveredTexts, runId, citations, settle === 'completed' ? cardRetry : undefined);
+              : await replyStep(ctx, services, input, stepIndex, finalTurn.text, cancellation, deliveredTexts, runId, citations, settle === 'completed' ? cardRetry : undefined, settle === 'completed' ? promiseRetry : undefined);
             if (posted === CANCELLED) state.stopped = true;
-            else if (typeof posted === 'object') await gate.hint(`card-retry:${stepIndex}`, posted.retry);
+            else if (typeof posted === 'object') await gate.hint(`retry:${stepIndex}`, posted.retry);
             else settled = settle;
           }
         }

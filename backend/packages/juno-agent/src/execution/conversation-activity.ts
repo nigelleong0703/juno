@@ -100,7 +100,7 @@ export async function conversationActivity(store: Store, conversation: Conversat
 }
 
 /** The platform origin of a channel chat (stored with routing detail the client never sees), or undefined for an in-app chat. */
-function channelOrigin(conversation: Conversation): Conversation['channel'] {
+export function channelOrigin(conversation: Conversation): Conversation['channel'] {
   const stored: unknown = Reflect.get(conversation, 'channel');
   if (typeof stored !== 'object' || stored === null) return undefined;
   const kind: unknown = Reflect.get(stored, 'kind');

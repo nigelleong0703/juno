@@ -160,6 +160,14 @@ export class RunnerEnqueuer implements Enqueuer {
     }
   }
 
+  async rescheduleIdeas(ownerId: string): Promise<void> {
+    try {
+      await this.runner.sendTo({ service: SERVICE.ideasTimer, key: ownerId, handler: 'reschedule', input: undefined });
+    } catch (error) {
+      log.error({ err: error }, 'rescheduleIdeas error');
+    }
+  }
+
   async routineResultsRead(receipt: { routineId: string; conversationId: string; readCutoff: string; resultIds: string[] }): Promise<void> {
     try {
       await this.runner.sendTo(
@@ -202,6 +210,10 @@ export class NoopEnqueuer implements Enqueuer {
 
   async scheduleCalendarItem(itemId: string): Promise<void> {
     this.calls.push({ method: 'scheduleCalendarItem', args: [itemId] });
+  }
+
+  async rescheduleIdeas(ownerId: string): Promise<void> {
+    this.calls.push({ method: 'rescheduleIdeas', args: [ownerId] });
   }
 
   async routineResultsRead(receipt: unknown): Promise<void> {

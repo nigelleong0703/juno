@@ -80,7 +80,7 @@ export const pidDir = (displayNo: number) => `/tmp/agent-screen-${displayNo}`;
 export const rootDir = (displayNo: number) => `/run/juno/screen-${displayNo}`;
 
 /** Services root starts; every other service of a display runs as the agent. */
-const ROOT_SERVICES = 'xvfb|vnc|vncview|novnc|novncview';
+const ROOT_SERVICES = 'xvfb|vnc|vncview|novnc|novncview|voxl|voxlview';
 
 /**
  * Kill functions for root-run programs. `kill_root` trusts only files in the root-only directory. `kill_agent` acts
@@ -175,6 +175,39 @@ export function userControlStopCommand(displayNo: number): string {
   ].join('\n');
 }
 
+/** Whether a stream mode boots noVNC / voxl (absent means noVNC only: nothing changes unless an operator turns voxl on). */
+const wantsNovnc = (stream: ScreenBootRequest['stream']) => stream === undefined || stream === 'novnc' || stream === 'both';
+const wantsVoxl = (stream: ScreenBootRequest['stream']) => stream === 'voxl' || stream === 'both';
+
+/**
+ * The tuning every voxl instance shares (BACKEND 7.1b), sized for the 2 vCPU computer: 30 fps, 6 Mbps ceiling, one encoder thread that
+ * fans out only under sustained motion, no audio. Loopback only (the link reaches it, nothing else does). The Files panel is off
+ * because the process is root and its default root is root's home; recordings and screenshots stay behind the password.
+ * `=` forms throughout: voxl's parser takes a following non-flag word as a value, so a bare boolean could swallow the next flag.
+ */
+const voxlArgs = (port: number, readOnly: boolean): string =>
+  [
+    '--addr=127.0.0.1',
+    `--port=${port}`,
+    '--framerate=30',
+    '--max-kbps=6000',
+    '--adaptive-threads=true',
+    '--audio-enabled=false',
+    '--enable-basic-auth=true',
+    '--file-transfers=none',
+    '--enable-resize=false',
+    '--title=Juno',
+    ...(readOnly ? ['--read-only=true'] : []),
+  ].join(' ');
+
+/**
+ * One voxl instance as root: DISPLAY and the per-agent XAUTHORITY come from the boot shell (exported above); the password goes in the
+ * environment (`VOXL_PASSWORD`), not the command line. voxl has one read-only switch per process, so watchers get their own instance
+ * (idle costs nothing: it encodes only for a connected viewer).
+ */
+const voxlStart = (name: 'voxl' | 'voxlview', port: number, password: string, readOnly: boolean): string =>
+  `alive ${name} || start_bg ${name} env VOXL_PASSWORD=${shq(password)} "\${VOXL_BIN:-/usr/local/bin/voxl}" ${voxlArgs(port, readOnly)}`;
+
 export function startScreenScript(request: ScreenBootRequest): string {
   const ports = screenPorts(request.displayNo);
   const { width, height } = parseResolution(request.resolution);
@@ -227,8 +260,15 @@ export function startScreenScript(request: ScreenBootRequest): string {
     // (the VNC ports are root-only by the firewall rules), with the cookie.
     `alive vnc || start_bg vnc x11vnc -display :${d} $VNC_AUTH -forever -shared -localhost -rfbport ${ports.vnc} -passwd ${shq(request.controlPassword)} -quiet`,
     `alive vncview || start_bg vncview x11vnc -display :${d} $VNC_AUTH -forever -shared -viewonly -localhost -rfbport ${ports.readOnlyVnc} -passwd ${shq(request.viewPassword)} -quiet`,
-    `alive novnc || start_bg novnc "\${NOVNC_PROXY:-/opt/noVNC/utils/novnc_proxy}" --vnc localhost:${ports.vnc} --listen ${ports.web} --web "\${NOVNC_DIR:-/opt/noVNC}"`,
-    `alive novncview || start_bg novncview "\${NOVNC_PROXY:-/opt/noVNC/utils/novnc_proxy}" --vnc localhost:${ports.readOnlyVnc} --listen ${ports.readOnlyWeb} --web "\${NOVNC_DIR:-/opt/noVNC}"`,
+    ...(wantsNovnc(request.stream)
+      ? [
+          `alive novnc || start_bg novnc "\${NOVNC_PROXY:-/opt/noVNC/utils/novnc_proxy}" --vnc localhost:${ports.vnc} --listen ${ports.web} --web "\${NOVNC_DIR:-/opt/noVNC}"`,
+          `alive novncview || start_bg novncview "\${NOVNC_PROXY:-/opt/noVNC/utils/novnc_proxy}" --vnc localhost:${ports.readOnlyVnc} --listen ${ports.readOnlyWeb} --web "\${NOVNC_DIR:-/opt/noVNC}"`,
+        ]
+      : []),
+    ...(wantsVoxl(request.stream)
+      ? [voxlStart('voxl', ports.voxl, request.controlPassword, false), voxlStart('voxlview', ports.readOnlyVoxl, request.viewPassword, true)]
+      : []),
     // A live xfwm4 pid can precede its EWMH setup. Wait before creating a new browser window
     // so Chromium's maximization request reaches the WM; never resize an existing user window.
     `ready_wm() { for i in $(seq 1 60); do xdotool get_desktop >/dev/null 2>&1 && return 0; sleep 0.25; done; return 1; }`,
@@ -263,8 +303,18 @@ export function startScreenScript(request: ScreenBootRequest): string {
     // Pid files and logs written by root since the chown above: the agent's watchdog must be able to rewrite chromium.pid.
     `[ -n "\${SCREEN_NO_ISOLATION:-}" ] || chown "$AU:$AU" "${dir}"/* 2>/dev/null || true`,
     `ready_port() { for i in $(seq 1 20); do curl -fsS "http://127.0.0.1:$1/vnc.html" >/dev/null 2>&1 && return 0; sleep 0.25; done; return 1; }`,
-    `ready_port ${ports.web} || echo "warn: novnc :${d} not answering yet"`,
-    `ready_port ${ports.readOnlyWeb} || echo "warn: novnc view :${d} not answering yet"`,
+    ...(wantsNovnc(request.stream)
+      ? [`ready_port ${ports.web} || echo "warn: novnc :${d} not answering yet"`, `ready_port ${ports.readOnlyWeb} || echo "warn: novnc view :${d} not answering yet"`]
+      : []),
+    // voxl answers /healthz without a password. It waits for the display, so a miss here is a warning, never a failed boot: the
+    // noVNC stream (when on) and the agent's own screenshots do not depend on it.
+    ...(wantsVoxl(request.stream)
+      ? [
+          `ready_voxl() { for i in $(seq 1 40); do curl -fsS "http://127.0.0.1:$1/healthz" >/dev/null 2>&1 && return 0; sleep 0.25; done; return 1; }`,
+          `ready_voxl ${ports.voxl} || { echo "warn: voxl :${d} not answering yet"; tail -n 20 "$RD/voxl.log" 2>/dev/null || true; }`,
+          `ready_voxl ${ports.readOnlyVoxl} || echo "warn: voxl view :${d} not answering yet"`,
+        ]
+      : []),
     `echo "screen :${d} ready"`,
   ].join('\n');
 }
@@ -282,7 +332,7 @@ export function stopScreenCommand(displayNo: number): string {
     `AUID=$(ls -nd ${shq(dir)} 2>/dev/null | awk '{print $3}')`,
     ...killHelpers('$AUID'),
     // An unknown or root owner means there is no agent process to prove: those files are only dropped.
-    `for n in chromiumwatch novncview novnc vncview vnc chromium dock wm xvfb; do case "$n" in ${ROOT_SERVICES}) kill_root "$n";; *) if [ -n "$AUID" ] && [ "$AUID" != 0 ]; then kill_agent "$n"; else rm -f "$(pf "$n")"; fi;; esac; done`,
+    `for n in chromiumwatch voxlview voxl novncview novnc vncview vnc chromium dock wm xvfb; do case "$n" in ${ROOT_SERVICES}) kill_root "$n";; *) if [ -n "$AUID" ] && [ "$AUID" != 0 ]; then kill_agent "$n"; else rm -f "$(pf "$n")"; fi;; esac; done`,
     `rm -f "${dir}/dock.ready" "${dir}/user-control"`,
     'true',
   ].join('\n');
@@ -292,7 +342,7 @@ export function stopScreenCommand(displayNo: number): string {
 export function legacyStopScreenCommand(displayNo: number): string {
   const dir = pidDir(displayNo);
   return [
-    `for n in chromiumwatch novncview novnc vncview vnc chromium dock wm xvfb; do p="${dir}/$n.pid"; ` +
+    `for n in chromiumwatch voxlview voxl novncview novnc vncview vnc chromium dock wm xvfb; do p="${dir}/$n.pid"; ` +
       `if [ -f "$p" ]; then pkill -P "$(cat "$p")" 2>/dev/null || true; kill "$(cat "$p")" 2>/dev/null || true; rm -f "$p"; fi; done`,
     `rm -f "${dir}/dock.ready" "${dir}/user-control"`,
   ].join('\n');

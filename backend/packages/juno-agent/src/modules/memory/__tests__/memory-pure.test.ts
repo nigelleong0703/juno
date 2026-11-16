@@ -5,7 +5,7 @@ import { localDate } from '../../home/paths.js';
 import { claimIdOfLine } from '../claims.js';
 import { itemLine, viewPathOf } from '../views.js';
 import { repeatsRetracted, repeatsText, verifyEvidence } from '../evidence.js';
-import { sanitizeAlignment } from '../jobs/alignment.js';
+import { cleanAlignment } from '../jobs/alignment.js';
 import { nextHourlyAt, nightlyDue } from '../jobs/schedule.js';
 import { computeStyleStats, type StatItem } from '../jobs/stats.js';
 import { targetFile } from '../jobs/claims.js';
@@ -116,24 +116,39 @@ describe('how the user writes (counted)', () => {
 });
 
 describe('alignment synthesis', () => {
-  const text = '# How to talk\n- Short. [claim:clm_a]\n- Formal. [claim:clm_gone]\n- Odd. [claim:clm_ghost]\n## Juno（agt-1）\n- Use Dutch.\n## Ghost（agt-9）\n- Secret.\n## Style\n- Plain.';
+  const claim = (id: string, status: 'active' | 'retracted', itemId = 'itm-1', quote = 'keep it short'): [string, never] => [id, { id, ownerId: 'o', text: 't', evidence: [{ itemId, quote }], confidence: 1, status, createdAt: '', updatedAt: '' } as never];
+  const agents = [{ id: 'agt-1', name: 'Juno' }, { id: 'agt-2', name: 'Mint' }];
+  const sources = new Map([['itm-1', 'please keep it short, thanks']]);
 
   it('gives an agent the shared part plus its own section only', () => {
+    const text = '- Short.\n## Juno（agt-1）\n- Use Dutch.\n## Ghost（agt-9）\n- Secret.\n## Agent: "Mint"\n- Mint only.\n## Style\n- Plain.';
+    for (const id of ['agt-1', 'agt-2', 'agt-3']) expect(alignmentFor(text, id)).not.toContain('Mint only.');
     expect(alignmentFor(text, 'agt-1')).toContain('Use Dutch.');
     expect(alignmentFor(text, 'agt-1')).not.toContain('Secret.');
     expect(alignmentFor(text, 'agt-2')).not.toContain('Use Dutch.');
     expect(alignmentFor(text, 'agt-2')).toContain('Plain.');
   });
 
-  it('drops lines on retracted claims, tags that do not exist, and sections of agents that are gone', () => {
-    const clean = sanitizeAlignment(text, { agentIds: new Set(['agt-1']), statuses: new Map([['clm_a', 'active'], ['clm_gone', 'retracted']]) });
+  it('checks stored lines: retracted or unbacked ones, one-off events and sections of gone agents are removed with a log line each', () => {
+    const text = '- Short. [claim:clm_a]\n- Formal. [claim:clm_gone]\n- Odd. [claim:clm_ghost]\n- Reminders at 9:30 every day. [src:itm-1]\n- Brief. [src:itm-1]\n## Juno（agt-1）\n- Use Dutch. [src:itm-1]\n## Ghost（agt-9）\n- Secret. [src:itm-1]\n## To confirm\n- Ask about the trip.';
+    const { text: clean, changes } = cleanAlignment(text, { agents, claims: new Map([claim('clm_a', 'active'), claim('clm_gone', 'retracted')]), sources });
     expect(clean).toContain('- Short. [claim:clm_a]');
-    expect(clean).not.toContain('Formal.');
-    expect(clean).toContain('- Odd.\n');
-    expect(clean).not.toContain('clm_ghost');
+    expect(clean).toContain('- Brief. [src:itm-1]');
     expect(clean).toContain('Use Dutch.');
-    expect(clean).not.toContain('Secret.');
-    expect(clean).toContain('Plain.');
+    expect(clean).toContain('Ask about the trip.');
+    for (const gone of ['Formal.', 'Odd.', 'Reminders', 'Secret.']) expect(clean).not.toContain(gone);
+    expect(changes).toHaveLength(4);
+    expect(changes.join('\n')).toContain('Removed from the reply style: "Formal."');
+  });
+
+  it('renames a non-canonical agent heading when exactly one agent has that name, and removes it otherwise', () => {
+    const text = '- Short. [src:itm-1]\n## Agent: "Mint"\n- Only Mint. [src:itm-1]\n## Assistant: Nobody\n- Orphan. [src:itm-1]';
+    const { text: clean, changes } = cleanAlignment(text, { agents, claims: new Map(), sources });
+    expect(clean).toContain('## Mint（agt-2）\n- Only Mint.');
+    expect(clean).not.toContain('Orphan.');
+    expect(changes).toHaveLength(2);
+    expect(alignmentFor(clean, 'agt-1')).not.toContain('Only Mint.');
+    expect(alignmentFor(clean, 'agt-2')).toContain('Only Mint.');
   });
 });
 

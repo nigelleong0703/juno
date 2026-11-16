@@ -148,7 +148,14 @@ export const screenPorts = (displayNo: number) => ({
   /** Read-only websockify listener. */
   readOnlyWeb: 6090 + displayNo,
   cdp: 9222 + displayNo,
+  /** Read-write voxl (H.264 over WebSocket; loopback inside the computer, root-run). Only started when SCREEN_STREAM includes voxl. */
+  voxl: 6900 + displayNo,
+  /** Read-only voxl (\`--read-only\`) for watchers. */
+  readOnlyVoxl: 6910 + displayNo,
 });
+
+/** Which desktop streams a display boots with: noVNC (default), voxl, or both side by side (SCREEN_STREAM). */
+export type ScreenStreamMode = 'novnc' | 'voxl' | 'both';
 
 /** Hard cap on simultaneously live displays (BACKEND §7.1). */
 export const MAX_LIVE_SCREENS = 4;

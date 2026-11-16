@@ -66,6 +66,14 @@ export type ScreenResponse = z.infer<typeof screenResponseSchema>;
 export const screenStreamTicketSchema = z.object({
   url: z.string().min(1),
   expiresAt: isoDateTimeSchema,
+  /** Whether this ticket may drive the screen (the person holds it); a watcher's is false. */
+  control: z.boolean().optional(),
+  /**
+   * voxl's own browser client for this screen (H.264 over WebSocket, needs https): `https://<SCREEN_HOST>/s/<ticket>/`. Present only when
+   * the server has SCREEN_HOST set; the page is meant to be embedded in an iframe (allow="clipboard-read; clipboard-write; fullscreen")
+   * or opened in a tab, and expires with the ticket (`expiresAt`). The noVNC `url` stays.
+   */
+  voxlUrl: z.string().min(1).optional(),
 });
 export type ScreenStreamTicket = z.infer<typeof screenStreamTicketSchema>;
 

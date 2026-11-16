@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assistantMessage, parseMessage, pruneOldScreenshots, toolMessage, wakeMessage } from '../messages.js';
+import { assistantMessage, parseMessage, pruneOldScreenshots, pruneOldUserImages, toolMessage, wakeMessage } from '../messages.js';
 import type { AssistantTurn, WakeEvent } from '../../../contracts/index.js';
 
 const turn: AssistantTurn = {
@@ -182,5 +182,23 @@ describe('screenshot pruning', () => {
     expect(pruned[0]).toBe(user);
     expect(pruned.slice(6)).toEqual(seven.slice(6));
     expect(JSON.stringify(pruneOldScreenshots(seven))).toBe(JSON.stringify(pruned));
+  });
+
+  it('keeps a user photo while it is current and replaces it once, the same way every time, after two more messages of theirs', () => {
+    const said = (text: string, at: number) => ({ role: 'user' as const, content: text, timestamp: at });
+    const photo = { role: 'user' as const, content: [{ type: 'text' as const, text: 'my lunch' }, { type: 'image' as const, mimeType: 'image/jpeg', data: 'meal' }], timestamp: 10 };
+    const update = said('<context_update>\n## Memory\n</context_update>', 15);
+    const oneLater = [photo, update, said('was it healthy?', 20)];
+    // A harness update is not the user talking, and one message of theirs is not enough.
+    expect(pruneOldUserImages(oneLater)).toBe(oneLater);
+    const twoLater = [...oneLater, said('and dinner?', 30)];
+    const pruned = pruneOldUserImages(twoLater);
+    const first = pruned[0];
+    if (first?.role !== 'user' || typeof first.content === 'string') throw new Error('expected the photo message');
+    expect(first.content.some((block) => block.type === 'image')).toBe(false);
+    expect(first.content[0]).toEqual({ type: 'text', text: 'my lunch' });
+    expect(first.timestamp).toBe(30);
+    expect(pruned.slice(1)).toEqual(twoLater.slice(1));
+    expect(JSON.stringify(pruneOldUserImages([...twoLater]))).toBe(JSON.stringify(pruned));
   });
 });

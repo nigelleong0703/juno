@@ -7,8 +7,8 @@ import asyncio
 import time
 
 import aiohttp
-from livekit.agents import (Agent, metrics, AgentSession, AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, JobContext, JobProcess,
-                            WorkerOptions, cli, llm)
+from livekit.agents import (Agent, metrics, AgentSession, AudioConfig, BackgroundAudioPlayer, BuiltinAudioClip, FlushSentinel, JobContext,
+                            JobProcess, WorkerOptions, cli, llm)
 from livekit.plugins import elevenlabs, fishaudio, silero
 
 from juno_bridge import JunoBridge, VoiceBridgeError
@@ -54,7 +54,10 @@ class JunoAgent(Agent):
             return
         try:
             async for text in self.bridge.answer(message.text_content):
-                yield text + "\n"
+                yield text
+                # Each piece is a whole sentence: end the TTS segment so it is spoken now. Without the flush the TTS plugin's
+                # sentence tokenizer holds the last sentence until more text arrives (the whole next sentence, or the run's end).
+                yield FlushSentinel()
         except (VoiceBridgeError, aiohttp.ClientError, TimeoutError):
             log.warning("Juno voice turn failed")
             yield "抱歉，我暂时无法连接，请稍后再试。"
@@ -80,6 +83,13 @@ def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load(min_silence_duration=_env_float("VOICE_VAD_MIN_SILENCE", 0.4))
 
 
+def _canceller(task: "asyncio.Task[object]"):
+    """A shutdown callback that cancels the task: livekit awaits every callback, so a plain lambda fails the shutdown (and skips the rest)."""
+    async def cancel() -> None:
+        task.cancel()
+    return cancel
+
+
 async def entrypoint(ctx: JobContext):
     started = time.monotonic()
     metadata = json.loads(ctx.job.metadata)
@@ -92,14 +102,15 @@ async def entrypoint(ctx: JobContext):
                         metadata["ownerId"], metadata["conversationId"], metadata["agentId"])
     # The model's prompt cache is primed while the room is joined (fire and forget: the call never waits on it, and it never fails the call).
     warm = asyncio.create_task(bridge.warm())
-    ctx.add_shutdown_callback(lambda: warm.cancel())
+    ctx.add_shutdown_callback(_canceller(warm))
     # Joining the room does not depend on the conversation check; run both so the agent is in the room sooner.
     await asyncio.gather(bridge.verify(), ctx.connect())
     joined = time.monotonic()
     session = AgentSession(
         stt=build_stt(),
         vad=ctx.proc.userdata["vad"],
-        tts=fishaudio.TTS(model=os.getenv("FISH_TTS_MODEL", "s2.1-pro"), voice_id=os.environ["FISH_VOICE_ID"]),
+        tts=fishaudio.TTS(model=os.getenv("FISH_TTS_MODEL", "s2.1-pro"), voice_id=os.environ["FISH_VOICE_ID"],
+                          latency_mode=os.getenv("FISH_TTS_LATENCY", "balanced")),
         turn_handling={
             "endpointing": {"min_delay": _env_float("VOICE_ENDPOINT_MIN_DELAY", 0.3),
                             "max_delay": _env_float("VOICE_ENDPOINT_MAX_DELAY", 2.0)},
@@ -120,12 +131,13 @@ async def entrypoint(ctx: JobContext):
     prepare_on_speech(session, bridge)
     # Once at call start too (fire and forget), so the first utterance is covered even if it begins before the first speech event.
     prepare = asyncio.create_task(bridge.prepare())
-    ctx.add_shutdown_callback(lambda: prepare.cancel())
+    ctx.add_shutdown_callback(_canceller(prepare))
     await session.start(agent=JunoAgent(bridge), room=ctx.room)
     log.info("voice session ready", extra={"joinMs": round((joined - started) * 1000),
                                             "readyMs": round((time.monotonic() - started) * 1000)})
-    # Soft typing while the agent is thinking (user turn ended, no speech yet), so a long run is not dead air.
-    volume = _env_float("VOICE_THINKING_VOLUME", 0.5)
+    # Optional sound while the agent is thinking (user turn ended, no speech yet). Off by default (owner, 2026-11-06): keyboard
+    # typing on a phone call sounded wrong. Set VOICE_THINKING_VOLUME > 0 to bring it back.
+    volume = _env_float("VOICE_THINKING_VOLUME", 0)
     if volume > 0:
         thinking = BackgroundAudioPlayer(thinking_sound=[AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING, volume=volume),
                                                          AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=volume)])

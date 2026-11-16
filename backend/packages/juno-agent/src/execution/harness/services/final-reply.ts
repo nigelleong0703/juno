@@ -18,6 +18,7 @@ import { layoutReply, type ReplyBubble } from './reply-layout.js';
 import { NO_REPLY_FAILURE, REFUSED_FAILURE } from '../logic/plain-errors.js';
 import { countedKind, hasRoomToPost, logPosted } from '../../../modules/proactive/service.js';
 import { isVoiceWake } from '../../voice-channel.js';
+import { promisePhrase, promiseRetryHint, punctuationRetryHint, scheduledSomething, unpunctuatedRun, type PromiseRetryBudget } from './promise-check.js';
 
 /** A source a web tool returned (the public Citation shape). */
 export interface ReplyCitation { id: string; title: string; url?: string; source?: string }
@@ -166,6 +167,8 @@ export async function replyStep(
   citations: ReplyCitation[] = [],
   /** The run's single card retry; absent means the reply must be posted now (cards dropped if broken). */
   retry?: CardRetryBudget,
+  /** The run's single promise retry; absent means a promise without a schedule is posted as is. */
+  promiseRetry?: PromiseRetryBudget,
 ): Promise<typeof CANCELLED | 'completed' | 'silent' | ReplyRetry> {
   // The final reply is the message the people in this chat see, in every run someone waits on (a calendar wake and
   // a finished task the owner asked for included; a run nobody waits on keeps its text as a record line, `recordStep`).
@@ -200,6 +203,21 @@ export async function replyStep(
       return { retry: cardRetryHint(layout.cardErrors) };
     }
     services.log?.({ runId, errors: layout.cardErrors }, 'reply card dropped');
+  }
+  // A promise to remind or follow up later, in a run that scheduled nothing, is sent back once: schedule it or drop it.
+  const promised = promiseRetry !== undefined && !promiseRetry.used && runId !== undefined && expectsReply(input) ? promisePhrase(text) : null;
+  if (promised !== null && promiseRetry !== undefined && runId !== undefined) {
+    const planned = await ctx.run(`promise-scheduled:${stepIndex}`, async () => scheduledSomething((await services.store.get('runs', runId))?.steps ?? []));
+    if (!planned) {
+      promiseRetry.used = true;
+      return { retry: promiseRetryHint(promised) };
+    }
+  }
+  // Prose with no punctuation over a long stretch is sent back once to be punctuated. Not in a call: the words are already spoken.
+  const runOn = promiseRetry !== undefined && promiseRetry.punctuationUsed !== true && !input.wakeEvents.some(isVoiceWake) ? unpunctuatedRun(text) : null;
+  if (runOn !== null && promiseRetry !== undefined) {
+    promiseRetry.punctuationUsed = true;
+    return { retry: punctuationRetryHint(runOn) };
   }
   // Never leave the user without a reply: when nothing usable remains, the raw text is the bubble.
   const bubble = layout.bubble ?? { markdown: text.trim() };

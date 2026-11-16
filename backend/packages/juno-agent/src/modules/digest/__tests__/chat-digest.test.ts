@@ -254,6 +254,35 @@ describe('chat digest', () => {
     expect(await runWithOwner(s.owner, () => agentCalendarItems(s.store, AGENT, 'scheduled'))).toHaveLength(1);
   });
 
+  it('a direct chat: reminders become follow_up items woken by wake.reminder; once per matter, never past or beyond the horizon, the agent is shown what is already scheduled', async () => {
+    const reminders = [
+      { at: '2026-11-04T20:00:00+08:00', about: 'Coding test tomorrow 10:00-14:30' },
+      { at: '2026-10-22T09:00:00Z', about: 'in the past' },
+      { at: '2027-03-01T09:00:00Z', about: 'beyond the horizon' },
+    ];
+    const answer = JSON.stringify({ memory: [], reminders });
+    const s = await setup({ kind: 'direct', model: scriptedModel(answer, answer), items: (owner) => [ownerLine(owner, 'itm-r0', '2026-10-22T09:00:00Z', 'I have a coding test 11/5 10:00-14:30 and a Google screening call 11/5 15:40.')] });
+    await runWithOwner(s.owner, () => s.store.put('agentCalendar', { id: 'cal-existing', agentId: AGENT, ownerId: s.owner, kind: 'follow_up', title: 'Reminder: Google screening call at 15:40', at: '2026-11-05T07:10:00.000Z', timezone: 'UTC', instructions: 'x', status: 'scheduled', createdAt: NOW.toISOString(), updatedAt: NOW.toISOString() } as never));
+    expect(await s.run()).toMatchObject({ outcome: 'done' });
+    expect(s.model.prompts[0]).toContain('## Reminders');
+    expect(s.model.prompts[0]).toContain('Reminder: Google screening call at 15:40');
+    const made = (await runWithOwner(s.owner, () => agentCalendarItems(s.store, AGENT, 'scheduled'))).filter((item) => item.id !== 'cal-existing');
+    expect(made.map((item) => ({ title: item.title, at: item.at, conversationId: item.conversationId }))).toEqual([
+      { title: 'Reminder: Coding test tomorrow 10:00-14:30', at: '2026-11-04T12:00:00.000Z', conversationId: 'c1' },
+    ]);
+    expect(made[0]?.instructions).toContain('A reminder you set from this chat is due: Coding test tomorrow 10:00-14:30');
+    // The same reminders at the next digest are not made again.
+    await s.run();
+    expect(await runWithOwner(s.owner, () => agentCalendarItems(s.store, AGENT, 'scheduled'))).toHaveLength(2);
+  });
+
+  it('a group: reminders in the model answer are ignored and the prompt has no Reminders section', async () => {
+    const s = await setup({ kind: 'room', model: scriptedModel(JSON.stringify({ memory: [], reminders: [{ at: '2026-11-04T12:00:00Z', about: 'x' }] })), items: (owner) => [ownerRoomLine(owner, 'itm-g0', '2026-10-22T09:00:00Z', 'Amy, please book the table for Friday by tomorrow.')] });
+    expect(await s.run()).toMatchObject({ outcome: 'done' });
+    expect(s.model.prompts[0]).not.toContain('## Reminders');
+    expect(await runWithOwner(s.owner, () => agentCalendarItems(s.store, AGENT, 'scheduled'))).toEqual([]);
+  });
+
   it('a group where the owner did not let the agent speak up: the picture is written, no follow-up wakes the agent, and the model is told so', async () => {
     const team = { loops: ['Amy owes the group the booking by 2026-10-23 (Amy, 2026-10-22) - open'], followUps: [{ at: '2026-10-23T12:00:00Z', about: 'Amy: booking by 2026-10-23' }] };
     const s = await setup({ kind: 'room', model: scriptedModel(JSON.stringify({ memory: [], team })), items: (owner) => [ownerRoomLine(owner, 'itm-g0', '2026-10-22T09:00:00Z', 'Amy, please book the table for Friday by tomorrow.'), strangerLine('itm-g1', '2026-10-22T09:01:00Z', 'Amy', 'booking the table for seven, I will do it by tomorrow')] });

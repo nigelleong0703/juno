@@ -95,6 +95,11 @@ export interface ComputerProvider {
    * `control` picks the read-write or read-only listener. Only the server calls this; nothing of it reaches a client.
    */
   screenStream(binding: E2bBinding, displayNo: number, control: boolean, signal: AbortSignal): Promise<Duplex>;
+  /**
+   * A byte stream to the voxl server of one display (HTTP and its WebSocket), through the computer link. `control` picks the read-write
+   * instance or the `--read-only` one. Refused unless SCREEN_STREAM includes voxl. Only computerd's voxl proxy calls this.
+   */
+  voxlStream(binding: E2bBinding, displayNo: number, control: boolean, signal: AbortSignal): Promise<Duplex>;
   /** Spaces (BACKEND 5.12), root in the computer. Every listening TCP port with its owner uid (resumes a paused computer). */
   listeningPorts(binding: E2bBinding, signal: AbortSignal): Promise<ListeningPort[]>;
   /** Verify the app listens on `port` as this agent's user (from the kernel's table), wire its gateway route and firewall rule. Throws `failed` with the reason. */

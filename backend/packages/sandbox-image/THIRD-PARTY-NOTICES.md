@@ -108,3 +108,7 @@ The Bilibili channel calls `bilibili-cli` 0.6.2 (https://github.com/jackwener/bi
 2.0, https://www.apache.org/licenses/LICENSE-2.0), installed unmodified into `/opt/juno/reach/bili` from
 PyPI with the dependencies frozen in `files/reach/constraints-bili-cli.txt`. The how-to text served to
 agents for these apps (`files/skills/_reach/`) adapts Agent Reach's own `SKILL_en.md` (MIT, same notice).
+
+## voxl
+
+`/usr/local/bin/voxl` is built at image-build time from the crate `voxl-server` 0.3.3 (https://github.com/tembo/voxl, commit 47bb94e; MIT). It links x264, which is GPL-2.0, so the binary is distributed under the GPL-2.0. It is an optional desktop stream: the platform starts it only when `SCREEN_STREAM` includes `voxl`.

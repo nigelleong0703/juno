@@ -49,6 +49,10 @@ export const backendConfigSchema = z.object({
   COMPUTERD_TOKEN: z.string().default(''),
   /** HMAC key for the short-lived per-screen stream tickets. */
   SCREEN_TICKET_SECRET: z.string().default(''),
+  /** The API's screen host (voxl's client at `https://<host>/s/<ticket>/`, BACKEND 7.1b). Empty: the stream response carries no `voxlUrl`. Same value as the API's SCREEN_HOST. */
+  SCREEN_HOST: z.string().default(''),
+  /** Scheme browsers reach SCREEN_HOST with (voxl's decoder needs https outside localhost). */
+  SCREEN_HOST_SCHEME: z.enum(['http', 'https']).default('https'),
   /** Stream ticket lifetime. */
   SCREEN_TICKET_TTL_MS: z.coerce.number().int().default(5 * 60 * 1000),
   E2B_API_KEY: z.string().default(''),

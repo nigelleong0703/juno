@@ -3,6 +3,7 @@ import type { WakeEvent } from '../../../../contracts/index.js';
 import { createMemoryStore } from '../../../../testing/store.js';
 import { NEVER_CANCELLED } from '../cancel.js';
 import { ackStep, citationsOf, emptyFinalStep, isLongWork, replyStep, selectCitations } from '../final-reply.js';
+import { promisePhrase, unpunctuatedRun } from '../promise-check.js';
 import { unwrapProxyCalls } from '../../../brain/tool-proxy.js';
 import type { RunContext, RunInput, RunServices } from '../run-types.js';
 
@@ -178,5 +179,61 @@ describe('the opening line is one bubble and is recorded as delivered', () => {
     expect(delivered).toEqual([text]);
     expect((await store.list('items', { where: { conversationId: 'c' }, limit: 20 })).items.map((item) => (item.type === 'agent_message' ? item.markdown : ''))).toEqual([text]);
     expect(await emptyFinalStep(ctx, { store } as unknown as RunServices, 'run-1', { text: '', stopReason: 'stop' }, delivered, { retried: false })).toBe('fine');
+  });
+});
+
+describe('a promise to follow up later needs a schedule (promise-check.ts)', () => {
+  it('spots a first-person promise about later action and ignores offers, questions and finished work', () => {
+    for (const text of ['等连上了我直接帮你加上', '下周一下午2点45我会提醒你', '明天早上我再提醒你', '我会跟进这件事', '回头我告诉你结果', "I'll remind you tomorrow", 'I will follow up on Friday.', "Done. I'll check back tomorrow.", "I'll let you know"]) {
+      expect(promisePhrase(text), text).not.toBeNull();
+    }
+    for (const text of ['要我提醒你吗？', '需要我明天再提醒你吗', 'Want me to remind you?', "Should I follow up? I'll do it if so?", '已经帮你设好提醒了', '你记得提醒我', '等你好了提醒我一下', "I'll check the weather now", '我会尽力']) {
+      expect(promisePhrase(text), text).toBeNull();
+    }
+  });
+
+  /** Run replyStep twice with one shared budget for a user-message run whose finished steps are `tools`. */
+  async function promised(tools: string[], text = '明天早上我再提醒你'): Promise<{ first: unknown; second: unknown; posted: string[] }> {
+    const store = createMemoryStore();
+    await store.put('runs', { id: 'run-p', steps: tools.map((tool) => ({ tool, status: 'completed' })) } as never);
+    let drawn = 0;
+    const ctx = { run: async (_name: string, action: () => Promise<unknown>) => action(), rand: { uuidv4: () => 'id' + String(drawn++) } } as unknown as RunContext;
+    const input: RunInput = { agentId: 'a', conversationId: 'c', sessionKey: 'a:c', wakeEvents: [wake('user_message', 'user')] };
+    const budget = { used: false };
+    const delivered: string[] = [];
+    const run = (index: number) => replyStep(ctx, { store } as unknown as RunServices, input, index, text, NEVER_CANCELLED, delivered, 'run-p', [], undefined, budget);
+    const first = await run(0);
+    const second = await run(1);
+    const items = (await store.list('items', { where: { conversationId: 'c' }, limit: 20 })).items;
+    return { first, second, posted: items.flatMap((item) => (item.type === 'agent_message' ? [item.markdown] : [])) };
+  }
+
+  it('sends the reply back once when nothing was scheduled, then posts it', async () => {
+    const result = await promised(['web_search']);
+    expect(result.first).toEqual({ retry: expect.stringContaining('schedule_add') });
+    expect(result.second).toBe('completed');
+    expect(result.posted).toEqual(['明天早上我再提醒你']);
+  });
+
+  it('posts at once when the run scheduled something', async () => {
+    for (const tool of ['schedule_add', 'state_update', 'wake_at']) {
+      expect(await promised([tool]), tool).toMatchObject({ first: 'completed', posted: ['明天早上我再提醒你'] });
+    }
+  });
+
+  it('sends a reply with a long unpunctuated Chinese stretch back once to be punctuated, never in a call', async () => {
+    const runOn = '整顿1300多大卡糖和油都偏高跟你少糖的目标差得有点远不过蛋白还行明天要不要吃清淡点';
+    for (const text of ['卤肉饭加蛋大概700大卡蛋白20克炸南乳肉三块200大卡炸土豆150大卡煎饺三只180大卡', runOn]) expect(unpunctuatedRun(text), text).not.toBeNull();
+    for (const text of ['记下了，这顿挺丰盛的，我给你估一下。整顿1300多大卡，糖和油都偏高，跟你少糖的目标差得有点远。', '好啊想吃点什么跟我说我帮你记', 'see https://example.com/一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十 here', '`一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十`']) {
+      expect(unpunctuatedRun(text), text).toBeNull();
+    }
+    const result = await promised(['web_search'], runOn);
+    expect(result.first).toEqual({ retry: expect.stringContaining('no punctuation') });
+    expect(result.second).toBe('completed');
+    const store = createMemoryStore();
+    const ctx = { run: async (_name: string, action: () => Promise<unknown>) => action(), rand: { uuidv4: () => 'v' } } as unknown as RunContext;
+    const voice: WakeEvent = { ...wake('user_message', 'user'), payload: { channel: 'voice' } };
+    const spoken = await replyStep(ctx, { store } as unknown as RunServices, { agentId: 'a', conversationId: 'c', sessionKey: 'a:c', wakeEvents: [voice] }, 0, runOn, NEVER_CANCELLED, [], 'run-v', [], undefined, { used: false });
+    expect(spoken).toBe('completed');
   });
 });

@@ -29,6 +29,7 @@ export const WAKE_IDS = [
   'wake.room_everyone_waits',
   'wake.observed',
   'wake.loop_follow_up',
+  'wake.reminder',
   'wake.screen_control_start',
   'wake.screen_control_end_changes',
   'wake.screen_control_end_unchanged',

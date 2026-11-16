@@ -15,7 +15,7 @@ import { changesFiles } from '../../modules/home/paths.js';
 import { EMPTY_HOME_VIEW, homeViewSchema, type HomeView } from '../../modules/home/render.js';
 import type { Message } from '@earendil-works/pi-ai';
 import { isLocale, isTimeZone, type PermissionTiers } from '@agent-desktop/public-contracts';
-import { parseMessage, pruneOldScreenshots, withoutUserImages } from './messages.js';
+import { parseMessage, pruneOldScreenshots, pruneOldUserImages, withoutUserImages } from './messages.js';
 import { appendToTranscript, readTranscript } from './transcript.js';
 import { presenceLine } from '../presence.js';
 import { buildPhoneSection } from '../phone.js';
@@ -134,7 +134,7 @@ export function projectMessages(entries: TranscriptEntry[], checkpoint: Compacti
   const boundary = checkpoint === null ? undefined : Date.parse(checkpoint.createdAt);
   const boundaryTimestamp = boundary !== undefined && Number.isFinite(boundary) ? boundary : undefined;
   const rows = applyTrims(entries.filter((entry) => !isSystemEntry(entry) && (checkpoint === null || entry.seq > checkpoint.uptoSeq)), checkpoint?.trims, boundaryTimestamp);
-  const built = pruneOldScreenshots(buildMessages(system === undefined ? undefined : parseMessage(system.message), checkpoint?.summary, rows, checkpoint?.recentUsers, boundaryTimestamp));
+  const built = pruneOldUserImages(pruneOldScreenshots(buildMessages(system === undefined ? undefined : parseMessage(system.message), checkpoint?.summary, rows, checkpoint?.recentUsers, boundaryTimestamp)));
   return supportsImages ? built : withoutUserImages(built);
 }
 
@@ -430,9 +430,13 @@ async function buildContextAt(store: Store, opts: BuildContextOpts, version: Har
   // Nothing that changes during a session lives here; an edit arrives as a `profile` update note.
   // Plugin sections are static text fixed at process start and ordered by the host: part of the frozen prompt, never per run.
   const systemPrompt = [systemPromptFor(frozen?.snapshot.toolSearch ?? 'proxy'), ...(opts.promptSections ?? [])].join('\n\n');
-  const systemText = [systemPrompt, profile, ...agentTexts, aboutUser, alignment, identity].filter(part => part.length > 0).join('\n\n');
+  // What the person and the agent's own settings say: it changes during a session (an edited persona, the nightly reply style), the
+  // instructions above it do not. Only this part is re-sent as a `profile` note; a copy of the whole prompt (some 23k characters) used
+  // to be appended every time the learned reply style was rewritten, which piled four copies into a long chat and slowed every call.
+  const personal = [profile, ...agentTexts, aboutUser, alignment, identity].filter(part => part.length > 0).join('\n\n');
+  const systemText = [systemPrompt, personal].filter(part => part.length > 0).join('\n\n');
   const current: SectionTexts = {
-    profile: harnessText('profile.update') + '\n\n' + systemText,
+    profile: harnessText('profile.update') + '\n\n' + personal,
     where, groupNote, date, session, team, room,
     memory: memoryPart.section,
     goals, skills, tasks, userDetails, computerFacts,

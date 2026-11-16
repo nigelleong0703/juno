@@ -59,8 +59,11 @@ export interface CalendarTimerHandlers {
 
 export interface IdeasTimerHandlers {
   arm: (ctx: ObjectContext) => Promise<void>;
+  reschedule: (ctx: ObjectContext) => Promise<void>;
   fire: (ctx: ObjectContext, params: { generation: number }) => Promise<void>;
   runNow: (ctx: ObjectContext, params?: { force?: boolean }) => Promise<{ outcome: string }>;
+  /** A planned notice is due (a durable delayed send from `fire`): sent to its conversation's agent unless the daily check is off by then. */
+  deliver: (ctx: ObjectContext, params: { wake: WakeEvent }) => Promise<void>;
 }
 
 export interface ChatDigestHandlers {

@@ -33,6 +33,8 @@ export interface ModelProviderCatalogClient {
   effectiveSystemOneModel(ownerId: string): Promise<EffectiveSystemOneModel | null>;
   /** Tells agentd the owner chose their model, so a new account's unanswered first-run greeting can run (best effort; never throws). */
   modelChosen?(ownerId: string, providerId: string): Promise<void>;
+  /** Tells agentd the daily-check time or the time zone changed, so the ideas schedule moves (best effort; never throws). */
+  dailyCheckChanged?(ownerId: string): Promise<void>;
 }
 
 /** A configuration problem the route reports as 400 with its code (never silently dropped input). */
@@ -160,6 +162,14 @@ export function createAgentdModelProviderClient(deps: AgentdProviderClientDeps):
         method: 'POST',
         headers: { authorization: 'Bearer ' + deps.internalToken, 'x-owner-id': ownerId, 'content-type': 'application/json' },
         body: JSON.stringify({ providerId }),
+        redirect: 'manual',
+        signal: AbortSignal.timeout(deps.timeoutMs ?? 5000),
+      }).then((response) => response.body?.cancel()).catch(() => undefined);
+    },
+    async dailyCheckChanged(ownerId) {
+      await deps.fetchFn(deps.agentdUrl.replace(/\/$/, '') + '/v1/proactive/reschedule', {
+        method: 'POST',
+        headers: { authorization: 'Bearer ' + deps.internalToken, 'x-owner-id': ownerId, 'content-type': 'application/json' },
         redirect: 'manual',
         signal: AbortSignal.timeout(deps.timeoutMs ?? 5000),
       }).then((response) => response.body?.cancel()).catch(() => undefined);

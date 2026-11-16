@@ -25,7 +25,7 @@ const CALL_POLL_MS = 150;
  * The server's link to the iPhone app is the app's live connection, which drops for a few seconds when the app reconnects, so
  * "no link" is not proof that the person is away from the app: a person who is writing to the agent from the Juno app has it open.
  */
-export const PHONE_CLOSED = "The iPhone app isn't connected to the server at this moment, so nothing was done. This is often a few-second drop: if the person is writing to you from the Juno app they are in it, so do not tell them the app is closed or to open it; try the call once more. If it still fails, say you can't reach their phone right now and carry on without it.";
+export const PHONE_CLOSED = "The iPhone app isn't connected to the server at this moment, so nothing was done. This is often a few-second drop: if the person is writing to you from the Juno app they are in it, so do not tell them the app is closed or to open it; try the call once more. If it still fails, say you can't reach their phone right now and carry on without it; a reminder or alarm you were setting goes in your own schedule (schedule_add) instead, which reaches them here.";
 
 /**
  * What each declared action means in words: `cant` finishes "Juno on the iPhone can't ..." when it is missing, `row` is the row of

@@ -217,10 +217,13 @@ export function registerComputers(app: Hono, deps: ScreenRoutesDeps): void {
       const control = requested && screen.controller === 'user';
       const expiresAt = Date.now() + getConfig().SCREEN_TICKET_TTL_MS;
       const ticket = signScreenTicket({ screenId: screen.id, ownerId, agentId, control, epoch: screen.controlEpoch, expiresAt }, getConfig().SCREEN_TICKET_SECRET);
+      const { SCREEN_HOST, SCREEN_HOST_SCHEME } = getConfig();
       return {
         url: `${webSocketOrigin(c.req.url)}/v1/screens/${encodeURIComponent(screen.id)}/vnc?t=${encodeURIComponent(ticket)}`,
         expiresAt: new Date(expiresAt).toISOString(),
         control,
+        // voxl's own client (BACKEND 7.1b): the same ticket, on the screen host. The trailing slash matters (voxl's page uses relative URLs).
+        ...(SCREEN_HOST === '' ? {} : { voxlUrl: `${SCREEN_HOST_SCHEME}://${SCREEN_HOST}/s/${ticket}/` }),
       };
     }),
   );

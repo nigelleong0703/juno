@@ -38,12 +38,16 @@ export interface NightlyCheckpoint {
   date?: string;
   /** The newest change to any memory item the last tidy had seen or made: an item changed after it makes the next night tidy again. */
   tidiedAt?: string;
+  /** The owner's local date of the last tidy: dated plans can run out with nothing changing, so while any exist the tidy runs once a day. */
+  tidiedOn?: string;
   /**
    * The tidy version that last finished. The first tidy of an owner (none yet) is also the backfill: items without a topic get one and
    * old "User …" wordings are rewritten. It lives here, in the owner's timer state, because a marker row in the owner's home would be
    * synced to their computer; it is set only when the model answered, so a failed backfill is tried again the next night.
    */
   tidyVersion?: number;
+  /** The `ALIGNMENT_VERSION` the stored reply style was last checked under. */
+  alignmentVersion?: number;
 }
 
 export interface JobState {

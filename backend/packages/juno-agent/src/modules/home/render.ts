@@ -2,6 +2,7 @@
  * The context sections built from the agent's home (BACKEND §5.3). Pure: they read mirror rows, which the sync has just
  * made equal to the computer, and produce the texts `buildContext` places in the system message and the notes.
  */
+import { replyStyleFor } from '@agent-desktop/public-contracts';
 import { z } from 'zod';
 import type { AgentHomeRow } from '../../contracts/storage.js';
 import { ALIGNMENT_FILE, AGENT_USER_FILES, USER_FILE, agentFilePath } from './paths.js';
@@ -48,23 +49,8 @@ export function joinAgentsFile(instructions: string, reachOut: string): string {
   return [instructions.trim(), reachOut.trim().length === 0 ? '' : '## When to reach out\n' + reachOut.trim()].filter((part) => part.length > 0).join('\n\n');
 }
 
-const AGENT_SECTION = /^##[ \t]+.+[（(]([^）)]+)[）)][ \t]*$/;
-
-/** The agent id of a `## <name>（<agentId>）` heading line, else undefined. */
-export const agentSectionId = (line: string): string | undefined => AGENT_SECTION.exec(line)?.[1];
-
-/** The synthesis for one agent: everything except the sections written for other agents (BACKEND §5.7.6 rule 2). */
-export function alignmentFor(text: string, agentId: string): string {
-  const kept: string[] = [];
-  let keep = true;
-  for (const line of text.split('\n')) {
-    const heading = agentSectionId(line);
-    if (heading !== undefined) keep = heading === agentId;
-    else if (line.startsWith('## ')) keep = true;
-    if (keep) kept.push(line);
-  }
-  return kept.join('\n').trim();
-}
+/** The synthesis for one agent: the shared part and its own section (`@agent-desktop/public-contracts` reply-style, which the web reads too). */
+export const alignmentFor = replyStyleFor;
 
 /** The view for one agent from its mirror rows. The memory items are read from the database, not from the files (memory/section.ts). */
 export function renderHomeView(rows: ReadonlyMap<string, AgentHomeRow>, agentId: string, seq: number, dailyLog = ''): HomeView {

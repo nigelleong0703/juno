@@ -5,7 +5,7 @@ import unittest
 
 import aiohttp
 from aiohttp import web
-from livekit.agents import AgentSession, llm
+from livekit.agents import AgentSession, FlushSentinel, llm
 from livekit.agents.voice.events import UserStateChangedEvent
 from worker import JunoAgent, prepare_on_speech
 from juno_bridge import JunoBridge, SpeechChunker, VoiceBridgeError, local_agentd_url
@@ -423,7 +423,11 @@ class LiveKitWiringTests(unittest.IsolatedAsyncioTestCase):
         context.add_message(role="assistant", content="old answer")
         context.add_message(role="user", content="现在")
         agent = JunoAgent(bridge)
-        self.assertEqual([part async for part in agent.llm_node(context, [], None)], ["你好\n"])
+        parts = [part async for part in agent.llm_node(context, [], None)]
+        # Every sentence ends its TTS segment, so it is spoken without waiting for the next one.
+        self.assertEqual(parts[0], "你好")
+        self.assertIsInstance(parts[1], FlushSentinel)
+        self.assertEqual(len(parts), 2)
         self.assertEqual(bridge.sent, ["现在"])
 
 

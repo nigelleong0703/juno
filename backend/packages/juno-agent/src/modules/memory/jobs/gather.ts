@@ -24,7 +24,8 @@ export interface SourceItem {
 /** `agent:<id>`: the platform sender id agentd gives another of the owner's agents speaking in a chat (its post is stored as a user_message). */
 const AGENT_SENDER_PREFIX = 'agent:';
 
-const textOf = (item: Item, ownerId: string): SourceItem | undefined => {
+/** One stored item as a source the jobs may read (a user or agent message), else undefined. The one definition of whose words an item holds. */
+export const sourceItemOf = (item: Item, ownerId: string): SourceItem | undefined => {
   if (item.type === 'user_message') {
     const sender = item.channelSender?.externalId;
     // An agent's post in a platform chat is agent text (context, never a person's words), not an unknown human.
@@ -51,7 +52,7 @@ export async function itemsSince(store: Store, ownerId: string, after: string | 
         done = true;
         break;
       }
-      const source = textOf(item, ownerId);
+      const source = sourceItemOf(item, ownerId);
       if (source !== undefined) {
         found.push({ ...source, text: source.text.length > MAX_ITEM_CHARS ? source.text.slice(0, MAX_ITEM_CHARS) : source.text });
       }

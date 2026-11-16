@@ -6,12 +6,14 @@
  * - an item is only merged with another about the same person, for the same audience (and agent, and sensitivity). Nothing is ever moved
  *   to another audience: the tidy changes an item's text, topic, evidence and status, never who may hear it;
  * - a merged or dropped item that came through a claim keeps its claim in step (superseded, or given the merged wording);
- * - only a stale preference or circumstance that was not seen again for STALE_DAYS expires.
+ * - only a stale preference or circumstance that was not seen again for STALE_DAYS expires;
+ * - a plan or circumstance whose date is over (the model is told today's date) is either kept as what happened, worded in the past and
+ *   moved out of the always-read MEMORY.md into the experiences bank, or ended. Nothing else can be ended that way.
  * The first run for an owner is also the backfill: items without a topic get one, and items still worded the old way ("User wants…") are
  * rewritten. A model that does not answer changes nothing and leaves the backfill due.
  */
 import { z } from 'zod';
-import type { ItemFile, ItemTopic, MemoryItem } from '@agent-desktop/memory-graph/memory';
+import type { ItemFile, ItemKind, ItemTopic, MemoryItem } from '@agent-desktop/memory-graph/memory';
 import type { MemoryClaimDoc } from '../../../contracts/memory.js';
 import { harnessText } from '../../harness/loader.js';
 import { editHomeFile } from '../files.js';
@@ -30,12 +32,15 @@ const MAX_CONFIRM = 5;
 const MAX_ITEMS = 400;
 /** Stale items only expire from these files: they hold what the person is like, and nothing keeps them true. */
 const EXPIRING = new Set<ItemFile>(['bank:preferences', 'bank:circumstances']);
+/** The kinds of item that can carry a date and run out when it passes. */
+export const DATED_KINDS = new Set<ItemKind>(['plan', 'circumstance']);
 
 const proposalSchema = z.object({
   merge: z.array(z.object({
     keep: z.string(), drop: z.array(z.string()).min(1), text: z.string().trim().min(1).max(500), topic: topicSchema.optional().catch(undefined),
   })).default([]),
   stale: z.array(z.string()).default([]),
+  past: z.array(z.object({ id: z.string(), text: z.string().trim().min(1).max(500).optional().catch(undefined) })).default([]),
   confirm: z.array(z.string().trim().min(1).max(300)).default([]),
   fix: z.array(z.object({ id: z.string(), topic: topicSchema.optional().catch(undefined), text: z.string().trim().min(1).max(500).optional() })).default([]),
 });
@@ -43,6 +48,8 @@ const proposalSchema = z.object({
 export interface TidyResult {
   merged: number;
   expired: number;
+  /** Dated plans that are over: kept as an experience or ended. */
+  past: number;
   /** Items given a topic. */
   sorted: number;
   /** Items worded again. */
@@ -57,10 +64,10 @@ const needsWork = (item: MemoryItem): boolean => item.topic === null || OLD_WORD
 const uniqueEvidence = (all: MemoryClaimDoc['evidence']): MemoryClaimDoc['evidence'] => all.filter((entry, i) => all.findIndex((other) => other.itemId === entry.itemId && other.quote === entry.quote) === i);
 
 /** Null when the model gave no usable answer (nothing was changed). `backfill`: the first tidy of this owner, where old wordings are rewritten whatever the model says about them. */
-export async function tidyItems(deps: JobDeps, input: { ownerId: string; agentId: string; now: Date; backfill: boolean }): Promise<TidyResult | null> {
+export async function tidyItems(deps: JobDeps, input: { ownerId: string; agentId: string; now: Date; today: string; backfill: boolean }): Promise<TidyResult | null> {
   const { store, model, memory } = deps;
-  const { ownerId, agentId, now, backfill } = input;
-  const empty: TidyResult = { merged: 0, expired: 0, sorted: 0, reworded: 0, confirm: [] };
+  const { ownerId, agentId, now, today, backfill } = input;
+  const empty: TidyResult = { merged: 0, expired: 0, past: 0, sorted: 0, reworded: 0, confirm: [] };
   const active = await memory.items.listItems(ownerId, { status: 'active' });
   if (active.length === 0 || (active.length < 2 && !active.some(needsWork))) return empty;
 
@@ -92,12 +99,12 @@ export async function tidyItems(deps: JobDeps, input: { ownerId: string; agentId
     }
     return name;
   };
-  const listing = shown.map((item) => [item.id, bucketName(item), item.topic ?? '?', lastSeen(item).slice(0, 10), String(item.evidence?.length ?? 0) + ' quotes', item.text.replace(/\s+/g, ' ').trim()].join(' | '));
+  const listing = shown.map((item) => [item.id, bucketName(item), item.kind, item.topic ?? '?', lastSeen(item).slice(0, 10), String(item.evidence?.length ?? 0) + ' quotes', item.text.replace(/\s+/g, ' ').trim()].join(' | '));
   const ownerName = await ownerNameOf(store, ownerId);
   const startedAt = new Date();
   const reply = await model.complete({
     agentId, sessionKey: 'memory:tidy:' + ownerId, system: harnessText('job.tidy.system', { maxConfirm: String(MAX_CONFIRM), wordingRules: WORDING_RULES, topicRules: TOPIC_RULES }),
-    prompt: ['## The person being helped\n' + ownerName, '## Buckets\n' + legend.join('\n'), '## Active items (id | bucket | topic | last seen | evidence | text)\n' + listing.join('\n')].join('\n\n'),
+    prompt: ['## Today\n' + today, '## The person being helped\n' + ownerName, '## Buckets\n' + legend.join('\n'), '## Active items (id | bucket | kind | topic | last seen | evidence | text)\n' + listing.join('\n')].join('\n\n'),
   });
   if (reply === null) return null;
   await recordJobUsage(store, { ownerId, agentId, label: 'Memory: tidy', reply, startedAt, finishedAt: new Date() });
@@ -108,6 +115,7 @@ export async function tidyItems(deps: JobDeps, input: { ownerId: string; agentId
   const used = new Set<string>();
   let merged = 0;
   let expired = 0;
+  let past = 0;
   let sorted = 0;
   let reworded = 0;
   let changed = false;
@@ -149,6 +157,22 @@ export async function tidyItems(deps: JobDeps, input: { ownerId: string; agentId
     expired += 1;
   }
 
+  for (const entry of parsed.data.past) {
+    const item = byId.get(entry.id);
+    if (item === undefined || used.has(entry.id) || !DATED_KINDS.has(item.kind)) continue;
+    used.add(entry.id);
+    past += 1;
+    if (entry.text === undefined || OLD_WORDING.test(entry.text)) {
+      await end(item);
+      continue;
+    }
+    // What happened stays findable, but no longer in the file every run reads; a person's page keeps it on that page.
+    await memory.items.updateItem(ownerId, item.id, { text: entry.text, kind: 'experience', ...(item.file === 'person' ? {} : { file: 'bank:experiences' }) });
+    const claim = item.claimId === null ? undefined : claims.get(item.claimId);
+    if (claim !== undefined) await store.put('memoryClaims', { ...claim, text: entry.text, updatedAt: stamp }, { status: 'active' });
+    changed = true;
+  }
+
   for (const entry of parsed.data.fix) {
     const item = byId.get(entry.id);
     if (item === undefined || used.has(entry.id)) continue;
@@ -173,5 +197,5 @@ export async function tidyItems(deps: JobDeps, input: { ownerId: string; agentId
     if (confirm.length === 0) return content === '' ? null : '# To confirm\n\n(nothing right now)\n';
     return '# To confirm\n\nAsk about these naturally, once, when it fits the conversation. Do not interrogate.\n\n' + confirm.map((line) => '- ' + line).join('\n') + '\n';
   });
-  return { merged, expired, sorted, reworded, confirm };
+  return { merged, expired, past, sorted, reworded, confirm };
 }

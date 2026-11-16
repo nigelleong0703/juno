@@ -144,6 +144,8 @@ export interface Enqueuer {
   scheduleCalendarItem?(itemId: string): Promise<void>;
   /** Start the owner's hidden hourly/nightly memory schedule (BACKEND §5.4); idempotent, best-effort. */
   scheduleMemoryJobs?(ownerId: string): Promise<void>;
+  /** The owner changed the time of the daily proactive check or their time zone: the ideas schedule is made again (best-effort). */
+  rescheduleIdeas?(ownerId: string): Promise<void>;
   /** Deliver one authorized read receipt to RoutineTimer[routineId].recordRead (best-effort). */
   routineResultsRead?(receipt: RoutineReadReceipt): Promise<void>;
   /**
@@ -266,7 +268,7 @@ export const SERVICE = {
   run: 'Run', // Workflow keyed by runId: run, stop signal via cancellation
   routineTimer: 'RoutineTimer', // Virtual Object keyed by routineId: arm, fire, recordCompletion, recordRead
   calendarTimer: 'CalendarTimer', // Virtual Object keyed by calendar item id: arm, fire (the agent's own calendar)
-  ideasTimer: 'IdeasTimer', // Virtual Object keyed by ownerId: arm, fire, runNow (daily ideas job, BACKEND §5.10)
+  ideasTimer: 'IdeasTimer', // Virtual Object keyed by ownerId: arm, fire, deliver, runNow (daily ideas job, BACKEND §5.10)
   chatDigest: 'ChatDigest', // Virtual Object keyed by conversation id: touch, fire, runNow (background chat digest: memory, goals, group note; BACKEND §5.4)
   memoryTimer: 'MemoryTimer', // Virtual Object keyed by ownerId: arm, fire, runNow (hourly/nightly memory jobs, BACKEND §5.4)
   taskWatcher: 'TaskWatcher', // Virtual Object keyed by taskId: watch (H-72 background process completion)

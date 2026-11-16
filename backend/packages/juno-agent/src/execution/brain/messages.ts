@@ -280,6 +280,43 @@ export function withoutUserImages(messages: Message[]): Message[] {
 }
 
 /**
+ * A photo the user sent stays an image while it is the subject of the chat: until KEEP_USER_IMAGE_TURNS more messages
+ * of theirs have come. After that it becomes a short note. Some providers (OpenCode Go's models) cache a prompt only up
+ * to its first image, so a photo kept for good froze the cached prefix at that photo: every later turn re-read the whole
+ * history after it (one chat: 27k of 73k tokens cached on every call, ~0.9 MB of base64 sent each time). The note replaces
+ * the photo once, deterministically from the rows, so the prefix breaks there once and is cacheable again from then on.
+ */
+export const KEEP_USER_IMAGE_TURNS = 2;
+
+const USER_PHOTO_OMITTED: TextContent = {
+  type: 'text',
+  text: '[photo sent earlier, no longer attached: you saw it when it arrived and your reply then says what it showed; ask them to send it again if you need to look at it again]',
+};
+
+/** A message the user wrote (not a `<context_update>` row the harness appends). */
+function writtenByUser(message: Message): boolean {
+  if (message.role !== 'user') return false;
+  const text = typeof message.content === 'string' ? message.content : message.content.map((block) => (block.type === 'text' ? block.text : '')).join('');
+  return !text.trimStart().startsWith('<context_update>');
+}
+
+export function pruneOldUserImages(messages: Message[], keepTurns = KEEP_USER_IMAGE_TURNS): Message[] {
+  // The timestamps of the user's own messages, newest last: a photo is dropped once keepTurns of them come after it.
+  const written = messages.filter(writtenByUser).map((message) => message.timestamp);
+  let changed = false;
+  const out = messages.map((message) => {
+    if (message.role !== 'user' || typeof message.content === 'string' || !message.content.some((block) => block.type === 'image')) return message;
+    const later = written.filter((at) => at > message.timestamp);
+    const trigger = later[keepTurns - 1];
+    if (trigger === undefined) return message;
+    changed = true;
+    // Stamped with the message that dropped it, so a usage measurement taken before the change is known to be older (as pruneOldScreenshots).
+    return { ...message, content: message.content.map((block): TextContent | ImageContent => (block.type === 'image' ? USER_PHOTO_OMITTED : block)), timestamp: Math.max(message.timestamp, trigger) };
+  });
+  return changed ? out : messages;
+}
+
+/**
  * Screenshots kept as images in the model context: the newest KEEP_SCREENSHOTS always; older ones are replaced by
  * a short note in batches of PRUNE_BATCH (Anthropic's computer-use reference, `only_n_most_recent_images` with
  * `min_removal_threshold`). A screenshot is ~1-2k tokens and ~150-250 KB of base64 re-sent on every call: one run

@@ -7,8 +7,9 @@ import type { HomeComputer } from '../../../ports/computer/index.js';
 import { runWithOwner, requestScopedStore } from '../../../owner-context.js';
 import { createMemoryStore } from '../../../testing/store.js';
 import { homeHash } from '../../home/paths.js';
-import { getRow } from '../../home/mirror.js';
+import { getRow, newRow, putRow } from '../../home/mirror.js';
 import { loadHomeView } from '../../home/service.js';
+import { alignmentFor } from '../../home/render.js';
 import { runChatDigest, type DigestCheckpoint } from '../../digest/job.js';
 import { explainMemory } from '../explain.js';
 import { forgetClaims } from '../forget.js';
@@ -327,23 +328,107 @@ describe('chat digest: memory claims', () => {
 });
 
 describe('nightly job', () => {
-  it('writes the dream and a synthesis with only live agents and unretracted claims, then skips until something new happens', async () => {
-    const s = await setup(scriptedModel('## What I noticed\nShort messages.', '# How to talk\n- Keep it short. [claim:clm_live]\n- Formal. [claim:clm_dead]\n## Juno（agt-1）\n- Dutch.\n## Gone（agt-9）\n- Secret.'));
-    await s.inOwner(async () => {
-      await s.store.put('memoryClaims', { id: 'clm_live', ownerId: s.owner, text: 'Short', evidence: [{ itemId: 'itm-1', quote: 'q' }], confidence: 1, status: 'active', createdAt: NOW.toISOString(), updatedAt: NOW.toISOString() });
-      await s.store.put('memoryClaims', { id: 'clm_dead', ownerId: s.owner, text: 'Formal', evidence: [{ itemId: 'itm-1', quote: 'q' }], confidence: 1, status: 'retracted', createdAt: NOW.toISOString(), updatedAt: NOW.toISOString() });
-    });
-    const input = { ownerId: s.owner, agentId: AGENT, agents: [{ id: AGENT, name: 'Juno' }], checkpoint: {} };
-    const done = await s.inOwner(() => runNightly(s.deps, input));
+  const input = (s: Setup, checkpoint = {}) => ({ ownerId: s.owner, agentId: AGENT, agents: [{ id: AGENT, name: 'Juno' }, { id: 'agt-2', name: 'Mint' }], checkpoint });
+  /** The owner's messages the style rules quote: explicit instructions, a fact and a one-off task, in one conversation. */
+  const talk = async (s: Setup) => s.inOwner(async () => {
+    const say = (id: string, minute: number, text: string) => s.store.put('items', { id, conversationId: 'c1', at: '2026-10-14T09:' + String(minute).padStart(2, '0') + ':00Z', type: 'user_message', authorId: s.owner, text, attachments: [], mentions: [] });
+    await say('itm-s1', 10, 'Please keep your answers short, two sentences at most.');
+    await say('itm-s2', 11, 'Reply in Chinese, and no emoji please.');
+    await say('itm-s3', 12, '我在学粤语，平时用普通话跟我说就行。');
+    await say('itm-s4', 13, '每天发给我当天动态吧');
+    await s.store.put('items', { id: 'itm-a1', conversationId: 'c1', at: '2026-10-14T09:14:00Z', type: 'agent_message', agentId: AGENT, markdown: 'Always answer in two sentences, said the assistant.', citations: [] });
+  });
+  const proposal = (rules: unknown[]) => JSON.stringify({ rules, confirm: ['Do you still want shorter answers on weekends?'] });
+  const manner = (text: string, facet: string, itemId: string, quote: string, extra = {}) => ({ text, kind: 'manner', facet, evidence: [{ itemId, quote }], ...extra });
+
+  it('writes only manner rules whose quote is in the user\'s own words: facts go to memory, tasks and unbacked rules are dropped and logged', async () => {
+    const model = scriptedModel('## What I noticed\nShort messages.', proposal([
+      manner('Keep answers to two sentences at most.', 'length', 'itm-s1', 'keep your answers short'),
+      manner('Reply in Chinese without emoji.', 'emoji', 'itm-s2', 'no emoji please'),
+      manner('Only for Mint: be extra brief.', 'length', 'itm-s1', 'two sentences at most', { agentId: 'agt-2' }),
+      // A fact posing as a rule: the user is learning Cantonese. It is written to memory instead.
+      { text: 'Keep daily conversation in simplified Mandarin and Cantonese only inside learning material.', kind: 'manner', facet: 'language', evidence: [{ itemId: 'itm-s3', quote: '我在学粤语' }] },
+      { text: 'The user is learning Cantonese.', kind: 'fact', evidence: [{ itemId: 'itm-s3', quote: '我在学粤语' }] },
+      // A one-off task, labelled honestly and labelled as a manner.
+      { text: 'When they ask for daily updates, ask what topic and time first.', kind: 'task', evidence: [{ itemId: 'itm-s4', quote: '每天发给我当天动态吧' }] },
+      // The quote is not in that message, the source is the assistant's, the facet is missing, the agent does not exist.
+      manner('Use a warm tone.', 'tone', 'itm-s1', 'be very warm'),
+      manner('Always answer in two sentences.', 'length', 'itm-a1', 'Always answer in two sentences'),
+      manner('Be formal.', 'tone', 'itm-nowhere', 'be formal'),
+      { text: 'Skip greetings.', kind: 'manner', evidence: [{ itemId: 'itm-s2', quote: 'no emoji please' }] },
+      manner('Use French.', 'language', 'itm-s2', 'Reply in Chinese', { agentId: 'agt-9' }),
+    ]));
+    const s = await setup(model);
+    await talk(s);
+    const done = await s.inOwner(() => runNightly(s.deps, input(s)));
     expect(done.outcome).toBe('done');
-    expect(s.computer.files.get('dreams/2026-10-14.md')).toContain('Short messages.');
     const synthesis = s.computer.files.get('ALIGNMENT_SYNTHESIS.md') ?? '';
-    expect(synthesis).toContain('- Keep it short. [claim:clm_live]');
-    expect(synthesis).toContain('Dutch.');
-    expect(synthesis).not.toContain('Formal');
-    expect(synthesis).not.toContain('Secret');
-    expect(s.computer.files.get('self_improvement/2026-10-14-dream.md')).toContain('Rewrote ALIGNMENT_SYNTHESIS.md');
-    expect((await s.inOwner(() => runNightly(s.deps, { ...input, checkpoint: done.checkpoint }))).outcome).toBe('skipped');
+    expect(synthesis).toContain('- Keep answers to two sentences at most. [src:itm-s1]');
+    expect(synthesis).toContain('- Reply in Chinese without emoji. [src:itm-s2]');
+    expect(synthesis).toContain('## Mint（agt-2）\n- Only for Mint: be extra brief. [src:itm-s1]');
+    for (const gone of ['warm tone', 'two sentences.', 'Be formal', 'Skip greetings', 'Use French', 'daily updates']) expect(synthesis).not.toContain(gone);
+    expect(synthesis).toContain('## To confirm\n- Do you still want shorter answers on weekends?');
+    const receipt = s.computer.files.get('self_improvement/2026-10-14-dream.md') ?? '';
+    expect(receipt).toContain('"Use a warm tone." (no quote of the user\'s own words backs it)');
+    expect(receipt).toContain('"Always answer in two sentences." (no quote of the user\'s own words backs it)');
+    expect(receipt).toContain('a one-off task, not a way of answering');
+    expect(receipt).toContain('facts about you went to memory');
+    const memory = (await graph.graph.items.listItems(s.owner, { status: 'active' })).map((item) => item.text);
+    expect(memory).toContain('The user is learning Cantonese.');
+    // Only this agent's own section carries its rule.
+    expect(alignmentFor(synthesis, AGENT)).not.toContain('Only for Mint');
+    expect(alignmentFor(synthesis, 'agt-2')).toContain('Only for Mint');
+    expect((await s.inOwner(() => runNightly(s.deps, input(s, done.checkpoint)))).outcome).toBe('skipped');
+  });
+
+  it('keeps a rule backed by an active claim, drops one on a retracted claim, and strips an invented claim id', async () => {
+    const model = scriptedModel('## What I noticed\nShort.', proposal([
+      { text: 'Keep answers short.', kind: 'manner', facet: 'length', claimId: 'clm_live', evidence: [] },
+      { text: 'Be formal.', kind: 'manner', facet: 'tone', claimId: 'clm_dead', evidence: [{ itemId: 'itm-s1', quote: 'keep your answers short' }] },
+      manner('Reply in Chinese.', 'language', 'itm-s2', 'Reply in Chinese', { claimId: 'clm_ghost' }),
+    ]));
+    const s = await setup(model);
+    await talk(s);
+    await s.inOwner(async () => {
+      await s.store.put('memoryClaims', { id: 'clm_live', ownerId: s.owner, text: 'Short', evidence: [{ itemId: 'itm-s1', quote: 'keep your answers short' }], confidence: 1, status: 'active', createdAt: NOW.toISOString(), updatedAt: NOW.toISOString() }, { status: 'active' });
+      await s.store.put('memoryClaims', { id: 'clm_dead', ownerId: s.owner, text: 'Formal', evidence: [{ itemId: 'itm-s1', quote: 'keep your answers short' }], confidence: 1, status: 'retracted', createdAt: NOW.toISOString(), updatedAt: NOW.toISOString() }, { status: 'retracted' });
+    });
+    await s.inOwner(() => runNightly(s.deps, input(s)));
+    const synthesis = s.computer.files.get('ALIGNMENT_SYNTHESIS.md') ?? '';
+    expect(synthesis).toContain('- Keep answers short. [claim:clm_live] [src:itm-s1]');
+    expect(synthesis).toContain('- Reply in Chinese. [src:itm-s2]');
+    expect(synthesis).not.toContain('Be formal');
+    expect(synthesis).not.toContain('clm_ghost');
+  });
+
+  it('checks the stored synthesis again: lines that fail the gate and non-canonical agent headings are removed or fixed with a logged receipt, even on a day with no chat', async () => {
+    const s = await setup(scriptedModel(null));
+    await talk(s);
+    const stored = [
+      '- Keep daily conversation in simplified Mandarin and keep Cantonese only inside learning material.',
+      '- Ask what topic and where to send it before starting an update.',
+      '- Reply in Chinese. [src:itm-s2]',
+      '- Send the update at 9:30 every morning. [src:itm-s4]',
+      '## Agent: "Mint"',
+      '- Only for Mint. [src:itm-s1]',
+      '## Agent: "Nobody"',
+      '- Whose? [src:itm-s1]',
+    ].join('\n');
+    await s.inOwner(async () => { await putRow(s.store, newRow(s.owner, 'ALIGNMENT_SYNTHESIS.md', stored, 'platform', NOW.toISOString())); });
+    s.computer.files.set('ALIGNMENT_SYNTHESIS.md', stored);
+    const result = await s.inOwner(() => runNightly({ ...s.deps, now: () => new Date('2026-10-20T10:00:00Z') }, input(s)));
+    expect(result.outcome).toBe('done');
+    expect(result.checkpoint).toMatchObject({ alignmentVersion: 1 });
+    const after = s.computer.files.get('ALIGNMENT_SYNTHESIS.md') ?? '';
+    expect(after).toContain('- Reply in Chinese. [src:itm-s2]');
+    expect(after).toContain('## Mint（agt-2）\n- Only for Mint.');
+    for (const gone of ['Cantonese', '9:30', 'Whose?', 'Nobody', 'before starting']) expect(after).not.toContain(gone);
+    const receipt = s.computer.files.get('self_improvement/2026-10-20-dream.md') ?? '';
+    expect(receipt).toContain('Removed from the reply style: "Keep daily conversation in simplified Mandarin and keep Cantonese only inside learning material." (it names a date, a time, a schedule or a one-off event)');
+    expect(receipt).toContain('Removed from the reply style: "Ask what topic and where to send it before starting an update." (no message of the user backs it)');
+    expect(receipt).toContain('Renamed the section "Agent: "Mint""');
+    expect(receipt).toContain('Removed the section "Agent: "Nobody""');
+    expect((await s.inOwner(() => runNightly({ ...s.deps, now: () => new Date('2026-10-21T10:00:00Z') }, input(s, result.checkpoint)))).outcome).toBe('skipped');
   });
 });
 
@@ -391,13 +476,13 @@ describe('nightly tidy', () => {
   const run = (s: Setup, deps: JobDeps = s.deps, checkpoint: Parameters<typeof runNightly>[1]['checkpoint'] = {}) =>
     s.inOwner(() => runNightly(deps, { ownerId: s.owner, agentId: AGENT, agents: [{ id: AGENT, name: 'Juno' }], checkpoint }));
   /** An item with fixed id and creation instant; a claim row alongside when `claim` is given. */
-  const seed = async (s: Setup, input: { id: string; text: string; at: string; claim?: string; file?: 'memory' | 'bank:preferences'; audience?: string; saidIn?: string; about?: string | null; topic?: 'health' }) => {
+  const seed = async (s: Setup, input: { id: string; text: string; at: string; claim?: string; file?: 'memory' | 'bank:preferences'; kind?: 'plan'; audience?: string; saidIn?: string; about?: string | null; topic?: 'health' }) => {
     await s.inOwner(async () => {
       if (input.claim !== undefined) {
         await s.store.put('memoryClaims', { id: input.claim, ownerId: s.owner, text: input.text, evidence: [{ itemId: 'itm-' + input.claim, quote: input.text }], confidence: 0.9, status: 'active', target: { path: 'memory/bank/preferences.md' }, createdAt: input.at, updatedAt: input.at }, { status: 'active' });
       }
       await graph.graph.items.addItem(s.owner, {
-        id: input.id, text: input.text, kind: 'preference', file: input.file ?? 'bank:preferences', saidIn: input.saidIn ?? 'app', audience: input.audience ?? 'owner', createdAt: input.at,
+        id: input.id, text: input.text, kind: input.kind ?? 'preference', file: input.file ?? 'bank:preferences', saidIn: input.saidIn ?? 'app', audience: input.audience ?? 'owner', createdAt: input.at,
         aboutPersonId: input.about === undefined ? s.ownerPerson : input.about,
         ...(input.claim === undefined ? {} : { claimId: input.claim, evidence: [{ itemId: 'itm-' + input.claim, quote: input.text }] }), ...(input.topic === undefined ? {} : { topic: input.topic }),
       });
@@ -417,7 +502,7 @@ describe('nightly tidy', () => {
       fix: [{ id: 'mem_sugar', topic: 'health', text: 'Wants less sugar.' }, { id: 'mem_fine', topic: 'other' }],
     });
     const summaries = JSON.stringify({ summaries: { preferences: "You like short answers and tea.", health: "You're [[mem_sugar|cutting sugar]] and [[mem_m2|show demos]]; [[mem_made_up|nothing else]].", work: 'Your portfolio demos show the [[mem_m2|full phone screen]].', home: 'Not a topic that was due.' } });
-    const model = scriptedModel(proposal, summaries, '## What I noticed\nShort.', '# How to talk\n- Short.');
+    const model = scriptedModel(proposal, summaries, '## What I noticed\nShort.', JSON.stringify({ rules: [], confirm: [] }));
     const s = await setup(model);
     await seed(s, { id: 'mem_a', text: 'Likes brief replies.', at: '2026-08-01T00:00:01Z', claim: 'clm_a' });
     await seed(s, { id: 'mem_b', text: 'Wants short answers.', at: '2026-08-01T00:00:02Z', claim: 'clm_b' });
@@ -492,6 +577,34 @@ describe('nightly tidy', () => {
     expect(third.outcome).toBe('done');
     expect(quiet.prompts).toHaveLength(4);
     expect((await graph.graph.items.listTopicSummaries(s.owner)).map((entry) => entry.summary)).toEqual(["You're building muscle and cutting sugar."]);
+  });
+
+  it('puts away a dated plan once it is over, even when nothing changed: kept as an experience out of MEMORY.md, or ended; never a preference', async () => {
+    const proposal = JSON.stringify({ merge: [], fix: [], past: [{ id: 'mem_trip', text: 'Went to KL on 2026-10-18.' }, { id: 'mem_dentist' }, { id: 'mem_tea', text: 'Liked tea.' }] });
+    const model = scriptedModel(proposal, JSON.stringify({ summaries: {} }), JSON.stringify({ merge: [], fix: [], past: [] }), JSON.stringify({ summaries: {} }), JSON.stringify({ merge: [], fix: [], past: [] }), JSON.stringify({ summaries: {} }));
+    const s = await setup(model);
+    const deps = { ...s.deps, now: () => QUIET_DAY };
+    await seed(s, { id: 'mem_trip', text: 'Flies to KL on 2026-10-18', at: '2026-10-01T00:00:01Z', kind: 'plan', file: 'memory', claim: 'clm_trip', topic: 'health' });
+    await seed(s, { id: 'mem_dentist', text: 'Dentist on 2026-10-15', at: '2026-10-01T00:00:02Z', kind: 'plan', file: 'memory', topic: 'health' });
+    await seed(s, { id: 'mem_tea', text: 'Likes tea', at: '2026-10-01T00:00:03Z', topic: 'health' });
+    const first = await run(s, deps);
+    expect(first.outcome).toBe('done');
+    expect(model.prompts[0]).toContain('## Today\n2026-10-20');
+    expect(await itemOf(s, 'mem_trip')).toMatchObject({ status: 'active', text: 'Went to KL on 2026-10-18.', kind: 'experience', file: 'bank:experiences' });
+    expect((await s.inOwner(() => s.store.get('memoryClaims', 'clm_trip')))?.text).toBe('Went to KL on 2026-10-18.');
+    expect(await itemOf(s, 'mem_dentist')).toMatchObject({ status: 'retracted' });
+    expect(await itemOf(s, 'mem_tea')).toMatchObject({ status: 'active', text: 'Likes tea', kind: 'preference' });
+    expect(first.checkpoint).toMatchObject({ tidiedOn: '2026-10-20' });
+    // Same day, nothing changed: no second look. No plan left the next day: still nothing to do.
+    expect((await run(s, deps, first.checkpoint)).outcome).toBe('skipped');
+    expect((await run(s, { ...s.deps, now: () => new Date('2026-10-21T10:00:00Z') }, first.checkpoint)).outcome).toBe('skipped');
+    // A new plan with nothing else changing tomorrow does get its daily look.
+    await s.inOwner(() => graph.graph.items.addItem(s.owner, { text: 'Exam on 2026-10-25', kind: 'plan', file: 'memory', saidIn: 'app', audience: 'owner', aboutPersonId: s.ownerPerson, topic: 'health' }));
+    const second = await run(s, { ...s.deps, now: () => new Date('2026-10-21T10:00:00Z') }, first.checkpoint);
+    expect(second.outcome).toBe('done');
+    const third = await run(s, { ...s.deps, now: () => new Date('2026-10-22T10:00:00Z') }, second.checkpoint);
+    expect(third.outcome).toBe('done');
+    expect(model.prompts.filter((text) => text.startsWith('## Today'))).toHaveLength(3);
   });
 
   it('never merges across audiences or people, and never lets a summary read a group\'s items', async () => {

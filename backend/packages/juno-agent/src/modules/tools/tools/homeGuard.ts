@@ -8,6 +8,7 @@
  */
 import { homedir } from 'node:os';
 import { posix } from 'node:path';
+import { agentSectionId } from '@agent-desktop/public-contracts';
 import type { ToolContext, ToolResult } from '../../../contracts/index.js';
 import { evalReportsDir } from '../../evaluation/paths.js';
 import { ALIGNMENT_FILE, HOME_ROOT, MEMORY_FILE, PROACTIVE_FILE, USER_FILE, isDailyLog, isOwnDailyLog, relativeToHome } from '../../home/paths.js';
@@ -57,9 +58,6 @@ export async function refuseHomeRead(opts: FileToolOptions, ctx: ToolContext, pa
   return options.search === true && isMemoryViewTree(rel) && !isOwnDailyLog(rel, ctx.agentId) ? refusal(path, SEARCH_VIEWS, 'memory_search_only') : undefined;
 }
 
-/** A person page's section heading for an agent: `## <name>（<agent id>）` (memory/views.ts). */
-const AGENT_SECTION_HEADING = /^## .*（([^（）\n]+)）\s*$/;
-
 /**
  * The text of a file for `agentId` to read. A view of memory (MEMORY.md, a bank file, a person page) is shared by the owner's agents
  * above its first section, but a `## <name>（<id>）` section holds that agent's own lines (items with agent_id, BACKEND 5.4a): the
@@ -72,7 +70,7 @@ export function visibleFileText(path: string, content: string, agentId: string):
   const kept: string[] = [];
   for (const line of content.split('\n')) {
     if (line.startsWith('## ')) {
-      const section = AGENT_SECTION_HEADING.exec(line)?.[1];
+      const section = agentSectionId(line);
       hidden = section !== undefined && section !== agentId;
     }
     if (!hidden) kept.push(line);

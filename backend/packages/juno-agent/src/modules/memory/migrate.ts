@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import type { ItemStatus } from '@agent-desktop/memory-graph/memory';
 import type { Store } from '../../contracts/index.js';
 import { getRow, newRow, putRow } from '../home/mirror.js';
-import { agentSectionId } from '../home/render.js';
+import { agentSectionId } from '@agent-desktop/public-contracts';
 import type { HomeDeps } from '../home/service.js';
 import { jobAgent } from './jobs/agent.js';
 import { claimIdOfLine } from './claims.js';

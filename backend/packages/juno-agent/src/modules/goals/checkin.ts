@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Agent, Conversation, Goal, GoalMilestone } from '@agent-desktop/public-contracts';
 import { sessionKey, type Enqueuer, type Store, type WakeEvent } from '../../contracts/index.js';
+import { channelOrigin } from '../../execution/conversation-activity.js';
 import { docOwner } from '../../execution/execution-owner.js';
 import { listAll } from '../memory/util.js';
 import { rulesForWake } from '../proactive/service.js';
@@ -48,10 +49,20 @@ export function checkinText(goal: Goal, reason: CheckinReason, now: Date): strin
   return lines.join('\n');
 }
 
-/** The agent's direct chat the wake runs in (the goal's progress messages land there); created when the agent has none yet. */
-export async function goalConversationId(store: Store, ownerId: string, agent: Agent): Promise<string> {
-  const chats = await listAll(store, 'conversations');
-  const found = chats.find((chat) => chat.kind === 'direct' && chat.agentIds.includes(agent.id) && docOwner(chat) === ownerId);
+/**
+ * The chat a proactive message of `agent` goes to. `source` is the chat the thing came from (the conversation a goal was made in, the one
+ * a notice is about): when it is the owner's and has the agent in it, that is the answer, and no chat is ever created for it. Otherwise
+ * the agent's in-app direct chat (the most recently active one), and only when the owner has none, a platform chat of the agent; a new
+ * in-app chat is made as the last resort. A platform chat is never preferred: the owner did not choose it for this.
+ */
+export async function goalConversationId(store: Store, ownerId: string, agent: Agent, source?: string): Promise<string> {
+  if (source !== undefined) {
+    const chat = await store.get('conversations', source);
+    if (chat !== null && docOwner(chat) === ownerId && chat.agentIds.includes(agent.id)) return chat.id;
+  }
+  const direct = (await listAll(store, 'conversations')).filter((chat) => chat.kind === 'direct' && chat.agentIds.includes(agent.id) && docOwner(chat) === ownerId)
+    .sort((a, b) => b.lastItemAt.localeCompare(a.lastItemAt) || a.id.localeCompare(b.id));
+  const found = direct.find((chat) => channelOrigin(chat) === undefined) ?? direct[0];
   if (found !== undefined) return found.id;
   const now = new Date().toISOString();
   const created: Conversation & { ownerId: string } = {
@@ -68,7 +79,7 @@ export async function buildGoalWake(store: Store, goal: Goal, reason: CheckinRea
   const ownerId = docOwner(goal);
   const agent = await store.get('agents', goal.agentId);
   if (ownerId === undefined || agent === null || docOwner(agent) !== ownerId) return undefined;
-  const conversationId = await goalConversationId(store, ownerId, agent);
+  const conversationId = await goalConversationId(store, ownerId, agent, goal.conversationId);
   // A scheduled check-in is the agent's own decision to message: it gets the owner's proactive rules in the wake text (never the frozen prompt).
   // A manual check, the plan and a deadline reminder are things the owner asked for or set, and run as set.
   const rules = reason === 'scheduled' ? await rulesForWake(store, ownerId, now) : '';

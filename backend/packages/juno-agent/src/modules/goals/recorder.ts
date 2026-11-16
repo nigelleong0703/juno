@@ -75,7 +75,7 @@ export async function recordGoals(
       ...(existing === undefined && entry.note !== undefined ? [{ kind: 'note' as const, text: entry.note }] : []),
       ...quotes.map((quote) => ({ kind: 'quote' as const, actor: 'user' as const, text: norm(quote.text).slice(0, QUOTE_CHARS), milestoneTitle: quote.milestone })),
     ];
-    const result = await writeGoal({ store }, { ownerId, agentId }, {
+    const result = await writeGoal({ store }, { ownerId, agentId, conversationId }, {
       ...(existing === undefined ? {} : { id: existing.id }), title: existing?.title ?? entry.title, summary: entry.summary, milestones,
       ...(entry.note === undefined ? {} : { note: entry.note }),
     }, extra);

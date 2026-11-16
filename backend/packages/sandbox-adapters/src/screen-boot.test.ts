@@ -60,6 +60,7 @@ const run = (script: string, extraEnv: Record<string, string> = {}) =>
       NOVNC_PROXY: join(bin, 'novnc_proxy'),
       NOVNC_DIR: bin,
       SCREEN_DOCK: join(bin, 'agent-screen-dock'),
+      VOXL_BIN: join(bin, 'voxl'),
       // Fake binaries and no agent users here: the isolation (setpriv, X cookie, chown) is covered by the live docker test.
       SCREEN_NO_ISOLATION: '1',
       ...extraEnv,
@@ -90,6 +91,8 @@ describe('screen boot program (real sh, fake tools)', () => {
       'printf "%s\\n" "DISPLAY=$DISPLAY" "$@" >> "$SCREEN_HOME/chromium-args"',
       'exec sleep 120',
     ].join('\n'));
+    // The fake streamer records its arguments and the password it was given in the environment, then stays up like the real one.
+    fake('voxl', 'printf "%s\\n" "pw=$VOXL_PASSWORD" "$@" > "$SCREEN_HOME/voxl-$2-args"; exec sleep 120');
     fake('xdpyinfo', 'exit 0');
     fake('curl', 'exit 0');
   });
@@ -147,6 +150,49 @@ describe('screen boot program (real sh, fake tools)', () => {
     expect(existsSync(pidPath('dock'))).toBe(false);
     expect(existsSync(join(pidDir(DISPLAY), 'dock.ready'))).toBe(false);
     expect(() => process.kill(first.dock, 0)).toThrow();
+  });
+
+  it('boots no voxl by default and none for novnc: nothing changes unless an operator turns it on', () => {
+    for (const stream of [undefined, 'novnc'] as const) {
+      const script = startScreenScript(stream ? { ...REQUEST, stream } : REQUEST);
+      expect(script).not.toContain('VOXL_PASSWORD');
+      expect(script).toContain('alive novnc ||');
+    }
+  });
+
+  it('starts one control and one read-only voxl as root, localhost-only, tuned for 2 vCPU, password in the environment', () => {
+    const script = startScreenScript({ ...REQUEST, stream: 'both' });
+    const ports = screenPorts(DISPLAY);
+    expect(script).toContain('alive novnc ||');
+    // The password is never on a command line (ps shows those to every agent user).
+    expect(script).not.toMatch(/--basic-auth-password/);
+    run(script);
+    for (const name of ['voxl', 'voxlview', 'novnc']) expect(alive(name), `${name} alive`).toBe(true);
+    const control = readFileSync(join(home, `voxl---port=${ports.voxl}-args`), 'utf8').trim().split('\n');
+    const view = readFileSync(join(home, `voxl---port=${ports.readOnlyVoxl}-args`), 'utf8').trim().split('\n');
+    expect(control[0]).toBe('pw=ctl-pw');
+    expect(view[0]).toBe('pw=view-pw');
+    for (const args of [control, view]) {
+      expect(args).toEqual(expect.arrayContaining(['--addr=127.0.0.1', '--framerate=30', '--max-kbps=6000', '--adaptive-threads=true', '--audio-enabled=false', '--enable-basic-auth=true', '--file-transfers=none']));
+    }
+    expect(control).not.toContain('--read-only=true');
+    expect(view).toContain('--read-only=true');
+    // Idempotent like the other services, and stopped with the display.
+    const pid = readPid('voxl');
+    run(script);
+    expect(readPid('voxl')).toBe(pid);
+    run(stopScreenCommand(DISPLAY));
+    expect(existsSync(pidPath('voxl'))).toBe(false);
+    expect(() => process.kill(pid, 0)).toThrow();
+  });
+
+  it('voxl alone boots no noVNC listeners', () => {
+    const script = startScreenScript({ ...REQUEST, stream: 'voxl' });
+    expect(script).not.toContain('alive novnc ||');
+    expect(script).not.toContain('novnc_proxy');
+    run(script);
+    expect(alive('voxl')).toBe(true);
+    expect(existsSync(pidPath('novnc'))).toBe(false);
   });
 
   it('runs the screen in the configured timezone, UTC when none is given', () => {

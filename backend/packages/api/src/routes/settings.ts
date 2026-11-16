@@ -34,6 +34,7 @@ export function registerSettings(app: Hono, deps: AppRoutesDeps): void {
         // The owner chose their model: a new account's first greeting, which could not run without one, runs now.
         const chosen = saved.models?.providerId;
         if (patch.models !== undefined && chosen && saved.models?.defaultModel) await deps.providerClient?.modelChosen?.(requestOwner(c), chosen);
+        if (patch.general?.dailyCheck !== undefined || patch.general?.timezone !== undefined) await deps.providerClient?.dailyCheckChanged?.(requestOwner(c));
         return c.json(await withEffectiveModels(deps, requestOwner(c), saved));
       } catch (error) {
         if (error instanceof UnknownModelError) {

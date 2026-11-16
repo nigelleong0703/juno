@@ -83,4 +83,19 @@ describe('daily schedule', () => {
     const newYork = nextIdeasAt(new Date('2026-10-15T11:00:00Z'), 'owner-1', 'America/New_York');
     expect(newYork.toISOString()).toBe(new Date(Date.UTC(2026, 9, 15, 12, minute)).toISOString());
   });
+
+  it('runs at the owner\'s chosen local time in their zone, across a DST change and a zone change, and keeps the default when none is set', () => {
+    // 21:30 Shanghai (UTC+8) is 13:30 UTC.
+    expect(nextIdeasAt(new Date('2026-10-14T20:00:00Z'), 'owner-1', 'Asia/Shanghai', '21:30').toISOString()).toBe('2026-10-15T13:30:00.000Z');
+    // Already past today: tomorrow.
+    expect(nextIdeasAt(new Date('2026-10-15T14:00:00Z'), 'owner-1', 'Asia/Shanghai', '21:30').toISOString()).toBe('2026-10-16T13:30:00.000Z');
+    // New York leaves daylight time on 2026-11-01: 07:00 local is 11:00 UTC before, 12:00 UTC after.
+    expect(nextIdeasAt(new Date('2026-10-31T13:00:00Z'), 'owner-1', 'America/New_York', '07:00').toISOString()).toBe('2026-11-01T12:00:00.000Z');
+    expect(nextIdeasAt(new Date('2026-10-30T13:00:00Z'), 'owner-1', 'America/New_York', '07:00').toISOString()).toBe('2026-10-31T11:00:00.000Z');
+    // The same wall-clock time after moving zones is a different instant.
+    expect(nextIdeasAt(new Date('2026-10-14T20:00:00Z'), 'owner-1', 'Europe/Amsterdam', '07:00').toISOString()).toBe('2026-10-15T05:00:00.000Z');
+    // Never set, or not a valid HH:MM: today's behaviour.
+    expect(nextIdeasAt(new Date('2026-10-14T20:00:00Z'), 'owner-1', 'Asia/Shanghai', undefined).toISOString()).toBe(nextIdeasAt(new Date('2026-10-14T20:00:00Z'), 'owner-1', 'Asia/Shanghai').toISOString());
+    expect(nextIdeasAt(new Date('2026-10-14T20:00:00Z'), 'owner-1', 'Asia/Shanghai', '25:99').toISOString()).toBe(nextIdeasAt(new Date('2026-10-14T20:00:00Z'), 'owner-1', 'Asia/Shanghai').toISOString());
+  });
 });

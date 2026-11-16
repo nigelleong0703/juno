@@ -166,8 +166,13 @@ describe('append-only context', () => {
     expect(wire(second.messages).slice(0, wire(first.messages).length)).toEqual(wire(first.messages));
     expect(String(second.messages[0]?.content)).not.toContain('pirate');
     const update = noteTexts(second.messages).at(-1) ?? '';
-    expect(update).toContain('replaces the system message above');
+    expect(update).toContain('parts of the system message above');
     expect(update).toContain('Now a pirate.');
+    // Only the changed personal part is re-sent, never another copy of the instructions (it once piled ~23k characters per nightly edit).
+    const instructions = String(first.messages[0]?.content).split('\n\n').find((part) => part.length > 400) ?? '';
+    expect(instructions.length).toBeGreaterThan(400);
+    expect(update).not.toContain(instructions);
+    expect(update.length).toBeLessThan(String(first.messages[0]?.content).length / 3);
   });
 });
 

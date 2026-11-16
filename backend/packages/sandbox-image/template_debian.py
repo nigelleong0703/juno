@@ -107,6 +107,29 @@ template = (
         "/opt/noVNC/utils/websockify",
         branch="v0.12.0",
     )
+    # voxl (https://github.com/tembo/voxl): H.264-over-WebSocket desktop streamer, an alternative to noVNC (BACKEND 7.1b). Pinned to crate
+    # voxl-server 0.3.3 (= tag at commit 47bb94e) and built here with a throwaway Rust toolchain and esbuild; only /usr/local/bin/voxl and its
+    # runtime libraries stay. The build fails if the binary does not run or has an unresolved library. GPL (it links x264); the platform starts
+    # it only when SCREEN_STREAM includes voxl.
+    .apt_install(
+        ["build-essential", "pkg-config", "clang", "libclang-dev", "libxcb1-dev", "libx264-dev", "libyuv-dev", "libopus-dev", "libpulse-dev"],
+        no_install_recommends=True,
+    )
+    .run_cmd(
+        [
+            "set -e;"
+            " export CARGO_HOME=/var/tmp/cargo RUSTUP_HOME=/var/tmp/rustup CARGO_TARGET_DIR=/var/tmp/voxl-target CARGO_PROFILE_RELEASE_DEBUG=0; df -h /tmp /var/tmp /usr/local;"
+            " curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain stable"
+            " && mkdir /var/tmp/esbuild && npm install --prefix /var/tmp/esbuild esbuild@0.25.5"
+            " && ESBUILD=/var/tmp/esbuild/node_modules/.bin/esbuild /var/tmp/cargo/bin/cargo install voxl-server --version 0.3.3 --locked --root /usr/local"
+            " && rm -rf /var/tmp/cargo /var/tmp/rustup /var/tmp/esbuild /var/tmp/voxl-target /root/.cargo /root/.npm"
+            # runtime libraries by name, then dev packages and the compilers go (no autoremove: it takes busybox, which E2B builds need)
+            " && apt-get install -y --no-install-recommends libx264-164 libyuv0 libopus0 libpulse0"
+            " && apt-get purge -y build-essential clang libclang-dev libxcb1-dev libx264-dev libyuv-dev libopus-dev libpulse-dev"
+            " && apt-get clean && rm -rf /var/lib/apt/lists/*"
+            " && voxl --version && ! ldd /usr/local/bin/voxl | grep 'not found'"
+        ]
+    )
     .run_cmd(
         [
             # Chromium is the browser

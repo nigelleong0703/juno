@@ -23,7 +23,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Duplex } from 'node:stream';
-import { DEFAULT_IDLE_PAUSE_MINUTES, type E2bBinding } from '@agent-desktop/contracts';
+import { DEFAULT_IDLE_PAUSE_MINUTES, type E2bBinding, type ScreenStreamMode } from '@agent-desktop/contracts';
 import { createLogger } from '@agent-desktop/log';
 import { idleWindowMs, type CreateSpec, type LifecycleDriver } from './driver.js';
 import { isIdempotentAction } from './action-policy.js';
@@ -88,6 +88,8 @@ export interface LinkedProviderOptions {
   linkWaitMs?: number;
   /** Brings a computer to the server's platform skills bundle (`skills-rollout.ts`), shared with the link hub's link-up hook. */
   skills?: SkillsRollout;
+  /** Which desktop streams a display boots with (SCREEN_STREAM); absent is noVNC only, so nothing changes unless an operator turns voxl on. */
+  screenStream?: ScreenStreamMode;
 }
 
 interface ComputerState {
@@ -440,7 +442,7 @@ export function createLinkedProvider(options: LinkedProviderOptions): ComputerPr
           const pending = state.restartPending.has(request.displayNo);
           if (!(await displayXvfbLive(root, request.displayNo, signal))) await cleanDisplayState(root, request.displayNo, signal);
           if (pending) await cleanChromiumSingletons(root, request.agentId, signal);
-          await bootScreen(root, request);
+          await bootScreen(root, options.screenStream ? { ...request, stream: options.screenStream } : request);
           state.screens.add(request.displayNo);
           state.restartPending.delete(request.displayNo);
         }
@@ -573,6 +575,14 @@ export function createLinkedProvider(options: LinkedProviderOptions): ComputerPr
       if (!states.get(binding.sandboxId)?.screens.has(displayNo)) throw noScreen(`screen :${displayNo} is not allocated on this connection`);
       const ports = screenPorts(displayNo);
       return link.openStream(control ? ports.web : ports.readOnlyWeb, signal);
+    },
+
+    async voxlStream(binding, displayNo, control, signal): Promise<Duplex> {
+      if (options.screenStream === undefined || options.screenStream === 'novnc') throw failed('the voxl stream is not enabled on this server (SCREEN_STREAM)');
+      const link = await ready(binding, control, signal);
+      if (!states.get(binding.sandboxId)?.screens.has(displayNo)) throw noScreen(`screen :${displayNo} is not allocated on this connection`);
+      const ports = screenPorts(displayNo);
+      return link.openStream(control ? ports.voxl : ports.readOnlyVoxl, signal);
     },
 
     ...spaceMethods((binding, signal, fn) => provider.withRuntime(binding, signal, fn, { user: 'root' })),

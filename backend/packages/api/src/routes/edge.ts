@@ -5,6 +5,8 @@ import { parseSpaceHost } from '../space-origin.js';
 export interface EdgeTlsDeps {
   /** ARTIFACT_HOST; a port in it is ignored. */
   artifactHost: string;
+  /** SCREEN_HOST; empty: none. */
+  screenHost?: string;
   /** SPACE_DOMAIN; a port in it is ignored. */
   spaceDomain: string;
   /** Whether a published app has this id, for any owner. The answer is yes/no only. */
@@ -18,7 +20,7 @@ export function registerEdgeTlsCheck(app: Hono, deps: EdgeTlsDeps): void {
   app.get('/v1/edge/tls-check', async (c) => {
     const domain = c.req.query('domain')?.toLowerCase();
     const spaceId = parseSpaceHost(domain, withoutPort(deps.spaceDomain));
-    const allowed = domain === withoutPort(deps.artifactHost) || (spaceId !== undefined && (await deps.spaceExists(spaceId)));
+    const allowed = domain === withoutPort(deps.artifactHost) || (deps.screenHost !== undefined && deps.screenHost !== '' && domain === withoutPort(deps.screenHost)) || (spaceId !== undefined && (await deps.spaceExists(spaceId)));
     return allowed ? c.text('ok', 200) : c.text('not found', 404);
   });
 }

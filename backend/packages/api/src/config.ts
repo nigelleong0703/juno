@@ -49,6 +49,8 @@ const apiEnvSchema = z.object({
   SCREEN_TICKET_SECRET: z.string().default(''),
   /** Host (with port when not default) that serves published HTML pages at `/a/<token>`, on the API's own port by Host; must be a separate site from the API host (BACKEND 5.11). Dev: usercontent.localhost:8787. */
   ARTIFACT_HOST: z.string().regex(/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:\d{1,5})?$/i, 'must be a host name with an optional port'),
+  /** Host that serves voxl's desktop stream at `/s/<signed ticket>/` (BACKEND 7.1b), on the API's own port by Host, e.g. computer.junoteam.app. Empty: off. Needs COMPUTERD_TOKEN and a computerd with SCREEN_STREAM=voxl|both. */
+  SCREEN_HOST: z.string().regex(/^([a-z0-9]([a-z0-9.-]*[a-z0-9])?(:\d{1,5})?)?$/i, 'must be a host name with an optional port').default(''),
   /** HMAC key for artifact render URLs; required at boot (like the other secrets). */
   ARTIFACT_URL_SECRET: z.string().default(''),
   /** Spaces (BACKEND 5.12): apps open on `<spaceId>.<SPACE_DOMAIN>`, served by the API port itself (dev: *.localhost resolves to this machine); must not equal or contain the API host. */

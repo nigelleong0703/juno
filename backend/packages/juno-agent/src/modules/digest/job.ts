@@ -8,6 +8,7 @@
 import { z } from 'zod';
 import type { ChannelOrigin } from '@agent-desktop/public-contracts';
 import { readOwnerTimeZone } from '../../execution/brain/context.js';
+import type { Store } from '../../contracts/index.js';
 import { docOwner } from '../../execution/execution-owner.js';
 import { currentHarnessVersion, harnessText } from '../harness/loader.js';
 import { getRow } from '../home/mirror.js';
@@ -22,8 +23,9 @@ import { TOPIC_RULES, WORDING_RULES } from '../memory/wording.js';
 import { describeGoal, recordGoals, workingGoals } from '../goals/recorder.js';
 import { aboutIsStale, aboutOf, groupChatOf, groupNotePath, groupNoteTitle, parseNote, teamLines, TEAM_SECTIONS, withWorkspace, type Team } from '../groups/note.js';
 import { groupNoteSource, writeGroupAbout, writeTeamPicture } from '../groups/job.js';
-import { scheduleLoopFollowUps } from '../groups/follow-up.js';
+import { REMINDER_KIND, scheduleLoopFollowUps } from '../groups/follow-up.js';
 import type { ChannelPort } from '../tools/tools/channelHistory.js';
+import { agentCalendarItems, formatCalendarTime } from '../calendar/index.js';
 import { worthDigesting } from './gate.js';
 
 const replySchema = z.object({
@@ -31,6 +33,8 @@ const replySchema = z.object({
   goals: z.array(z.unknown()).optional(),
   groupNote: z.unknown().optional(),
   team: z.unknown().optional(),
+  /** A malformed list costs only the reminders, not the rest of the digest. */
+  reminders: z.array(z.object({ at: z.string(), about: z.string() })).optional().catch(undefined),
 });
 const noteSchema = z.object({ about: z.string().trim().min(1) });
 const lines = z.array(z.string()).optional();
@@ -78,6 +82,14 @@ function teamLine(item: { at: string; role: string; text: string; from?: { name:
   return item.at.slice(0, 16).replace('T', ' ') + ' · ' + who + ': ' + item.text.replace(/\s+/g, ' ').replace(/<(\/?)untrusted/gi, '‹$1untrusted').slice(0, 600);
 }
 
+/** The direct chat's "Reminders" section: the time now and what the agent already has scheduled, so the model asks only for what is missing. */
+async function remindersSection(store: Store, agentId: string, now: Date, timeZone: string | undefined): Promise<string> {
+  const scheduled = (await agentCalendarItems(store, agentId, 'scheduled')).slice(0, 30);
+  return '## Reminders\nNow: ' + now.toISOString().slice(0, 16).replace('T', ' ') + ' UTC (' + now.toLocaleDateString('en-GB', { weekday: 'long', timeZone: 'UTC' }) + ')'
+    + (timeZone === undefined ? '' : '; the owner\'s time zone is ' + timeZone) + '.\nAlready scheduled for the assistant:\n'
+    + (scheduled.map((item) => '- ' + formatCalendarTime(item.at, timeZone ?? item.timezone) + ' ' + item.title.slice(0, 120)).join('\n') || '(nothing)');
+}
+
 export async function runChatDigest(deps: DigestDeps, input: DigestTarget & { agents: ReadonlyArray<{ id: string; name: string }>; checkpoint: DigestCheckpoint }): Promise<DigestResult> {
   const { store, model } = deps;
   const { ownerId, agentId, conversationId, checkpoint } = input;
@@ -118,8 +130,9 @@ export async function runChatDigest(deps: DigestDeps, input: DigestTarget & { ag
   if (source?.status === 'failed') deps.log?.({ ownerId, conversationId }, 'chat digest: the group history did not answer, the note waits for the next digest');
   const noteLines = source?.status === 'ok' ? source.lines : undefined;
 
+  const timeZone = await readOwnerTimeZone(store, ownerId);
   const sections = [claimsPart.prompt];
-  if (goalsAllowed) sections.push('## Current goals\n' + (goals.map(describeGoal).join('\n\n') || '(none)'));
+  if (goalsAllowed) sections.push('## Current goals\n' + (goals.map(describeGoal).join('\n\n') || '(none)'), await remindersSection(store, agentId, now, timeZone));
   if (noteLines !== undefined && groupChat !== undefined) {
     sections.push('## Group note\nGroup chat: ' + groupNoteTitle(conversation) + '\n'
       + (current === undefined ? 'There is no About text yet.' : 'Current About text' + (current.at === undefined ? '' : ' (as of ' + current.at + ')') + ':\n' + current.body)
@@ -127,7 +140,6 @@ export async function runChatDigest(deps: DigestDeps, input: DigestTarget & { ag
   }
   // The team picture (BACKEND 6.7) is updated on every group digest from the messages of this window: the model gets the picture as it is
   // and what is new, and answers with the lists it wants kept.
-  const timeZone = await readOwnerTimeZone(store, ownerId);
   const speaks = groupChat !== undefined && (await store.get('channels', channelRowId(groupChat.kind, groupChat.channelId)))?.groups?.[groupChat.chatId]?.speak === true;
   if (groupChat !== undefined && noteDoc !== undefined) {
     const picture = TEAM_SECTIONS.map(({ key, heading }) => heading + ':\n' + (teamLines(noteDoc, key).map((line) => '- ' + line).join('\n') || '(nothing yet)')).join('\n');
@@ -173,6 +185,10 @@ export async function runChatDigest(deps: DigestDeps, input: DigestTarget & { ag
     // The agent is woken from a digest only when the owner let it speak up without being mentioned (BACKEND 6.8); otherwise the picture is all the digest writes.
     if (speaks) followUps = await scheduleLoopFollowUps({ store, ...(deps.scheduleCalendarItem === undefined ? {} : { scheduleCalendarItem: deps.scheduleCalendarItem }) }, { ownerId, agentId, conversationId, timezone: timeZone ?? 'UTC', now, followUps: asked ?? [] });
   }
+  // A direct chat's reminders (the owner's dated events, the assistant's promises) go into the same schedule, woken with `wake.reminder`.
+  const reminders = goalsAllowed
+    ? await scheduleLoopFollowUps({ store, ...(deps.scheduleCalendarItem === undefined ? {} : { scheduleCalendarItem: deps.scheduleCalendarItem }) }, { ownerId, agentId, conversationId, timezone: timeZone ?? 'UTC', now, followUps: parsed.data.reminders ?? [], kind: REMINDER_KIND })
+    : 0;
   await appendReceipt(deps, {
     ownerId, agentId, job: 'digest', now, ...(timeZone === undefined ? {} : { timeZone }),
     lines: [
@@ -184,9 +200,10 @@ export async function runChatDigest(deps: DigestDeps, input: DigestTarget & { ag
       ...(noteWritten ? ['Wrote the group note.'] : []),
       ...(teamWritten ? ['Updated the team picture.'] : []),
       ...(followUps > 0 ? ['Scheduled ' + String(followUps) + ' follow-up(s).'] : []),
+      ...(reminders > 0 ? ['Scheduled ' + String(reminders) + ' reminder(s).'] : []),
     ],
   });
-  deps.log?.({ ownerId, conversationId, kind, called: true, claims: memory.accepted, relations: related.accepted, relationsProposed: memory.relationsProposed, goals: written.length, groupNote: noteWritten, team: teamWritten, followUps, harnessVersion }, 'chat digest');
+  deps.log?.({ ownerId, conversationId, kind, called: true, claims: memory.accepted, relations: related.accepted, relationsProposed: memory.relationsProposed, goals: written.length, groupNote: noteWritten, team: teamWritten, followUps, reminders, harnessVersion }, 'chat digest');
   const newest = items[items.length - 1]?.at;
   return { outcome: 'done', checkpoint: newest === undefined ? checkpoint : { itemsAt: newest } };
 }

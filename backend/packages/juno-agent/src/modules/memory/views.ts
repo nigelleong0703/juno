@@ -4,6 +4,7 @@
  * writes, so the sync, the search index and the context see them like any other file. An item that is not active (retracted, or
  * waiting for review) is not in any view. A note an agent made is marked with the agent that wrote it.
  */
+import { agentSectionHeading } from '@agent-desktop/public-contracts';
 import type { ItemFile, ItemKind, MemoryItem } from '@agent-desktop/memory-graph/memory';
 import { readRowsUnder } from '../home/mirror.js';
 import { MEMORY_FILE, noteAuthorSuffix } from '../home/paths.js';
@@ -101,7 +102,7 @@ export async function renderViews(deps: HomeDeps & { memory: MemoryGraph }, inpu
     if (page.shared.length > 0) out.push('', ...page.shared);
     for (const [sectionAgent, lines] of page.sections) {
       const label = (await store.get('agents', sectionAgent))?.name ?? sectionAgent;
-      out.push('', '## ' + label + '（' + sectionAgent + '）', ...lines);
+      out.push('', agentSectionHeading(label, sectionAgent), ...lines);
     }
     const content = out.join('\n') + '\n';
     await editHomeFile(deps, { ownerId, agentId: input.agentId, path }, () => content);

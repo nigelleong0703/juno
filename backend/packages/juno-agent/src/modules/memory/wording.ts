@@ -13,7 +13,8 @@ export const WORDING_RULES =
   'Write each item as one short, self-contained statement in the language the person writes in. About the person being helped, leave the subject out and write in their own register: ' +
   '"Wants to build muscle and cut sugar", "Prefers warm, normal-length replies", "Lives in Leiden". Never begin with "User", "The user" or "You" ' +
   '(other assistants read these lines, and "You" would read as the assistant itself). About anyone else, begin with their name: "Priya manages Tom", "Lily loves sushi". ' +
-  'Never write "I", "me" or "my" without saying whose they are.';
+  'Never write "I", "me" or "my" without saying whose they are. A plan or anything that only holds for a while carries its date as a date ' +
+  '("Flies to KL on 2026-11-06"), never "tomorrow" or "next week", so it can be put away once it is over.';
 
 const TOPIC_MEANING: Record<ItemTopic, string> = {
   identity: 'who they are: name, age, origin, languages, background, beliefs',

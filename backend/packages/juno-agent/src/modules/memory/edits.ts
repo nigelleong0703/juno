@@ -7,7 +7,7 @@
  */
 import type { AgentHomeRow } from '../../contracts/storage.js';
 import { getRow } from '../home/mirror.js';
-import { agentSectionId } from '../home/render.js';
+import { agentSectionId } from '@agent-desktop/public-contracts';
 import { HomeConflictError, type HomeDeps } from '../home/service.js';
 import type { MemoryGraph } from './graph.js';
 import { jobAgent } from './jobs/agent.js';

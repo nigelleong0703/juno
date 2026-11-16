@@ -309,6 +309,10 @@ export function createFakeProvider(opts: FakeProviderOptions = {}): FakeProvider
       throw failed('the fake computer has no screen stream');
     },
 
+    async voxlStream() {
+      throw failed('the fake computer has no voxl stream');
+    },
+
     async withRuntime(_binding, _signal, fn, options) {
       // Like the linked provider: an active call resumes a paused computer, a passive one leaves it asleep.
       if (options?.passive === true && paused) throw new ComputerAsleepError('the fake computer is paused');

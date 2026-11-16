@@ -156,6 +156,23 @@ export const appSettingsSchema = z.object({
     timezoneAuto: z.boolean().optional(),
     /** The device's BCP 47 locale (en-SG), reported with the timezone: region, currency, units, formats. */
     locale: z.string().optional(),
+    /**
+     * The daily proactive check (ideas and the one notice a day, BACKEND §5.10). Absent or `enabled` unset: on. `time` is the local
+     * wall-clock time in the owner's timezone as HH:MM (24 hours) when the daily planning pass runs (when messages go out is planned per item
+     * by the model, within `quiet`); absent: 08:00 plus a per-user minute, as before this setting existed.
+     */
+    dailyCheck: z.object({
+      enabled: z.boolean().optional(),
+      time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'time must be HH:MM, 24 hours').optional(),
+      /**
+       * Quiet hours (local, HH:MM, 24 hours; `from` later than `to` wraps midnight): a proactive message planned for this window is
+       * held until `to`. Absent: 23:00 to 07:30. `from` equal to `to` means no quiet hours.
+       */
+      quiet: z.object({
+        from: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'from must be HH:MM, 24 hours'),
+        to: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'to must be HH:MM, 24 hours'),
+      }).optional(),
+    }).optional(),
   }),
   appearance: z.object({
     theme: themePreferenceSchema,

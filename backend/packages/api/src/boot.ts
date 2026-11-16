@@ -26,6 +26,7 @@ import { parseApiConfig } from './config.js';
 import { createAuthDbProbe, createDependencyReadiness } from './readiness.js';
 import { createPostgresSettingsUpdater } from './modules/settings-postgres.js';
 import { createStreamProxy } from './stream-proxy.js';
+import { createScreenOrigin } from './screen-origin.js';
 import { createSpaceOrigin } from './space-origin.js';
 import { hostedSetup } from './modules/spaces-hosted.js';
 import { checkEdgeHosts, hostKind } from './edge-hosts.js';
@@ -45,7 +46,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function forceClose(server: unknown): void {
   if (!isRecord(server)) return;
   const closeAll = server['closeAllConnections'];
-  if (typeof closeAll === 'function') closeAll();
+  // Unbound it throws (it reads the server's own connection list), which crashed every stop that ran into the drain timeout.
+  if (typeof closeAll === 'function') closeAll.call(server);
 }
 
 /** The Postgres pool Better Auth keeps its sessions in. */
@@ -131,7 +133,7 @@ export async function startApi(env: NodeJS.ProcessEnv = process.env): Promise<Ru
     agentdUrl: config.AGENTD_URL,
   });
 
-  for (const warning of checkEdgeHosts({ apiOrigin: authMode.baseURL, artifactHost: config.ARTIFACT_HOST, spaceDomain: config.SPACE_DOMAIN })) log.warn({}, warning);
+  for (const warning of checkEdgeHosts({ apiOrigin: authMode.baseURL, artifactHost: config.ARTIFACT_HOST, spaceDomain: config.SPACE_DOMAIN, screenHost: config.SCREEN_HOST })) log.warn({}, warning);
   const computerdLink = { url: config.COMPUTERD_URL, token: config.COMPUTERD_TOKEN };
   if (!config.COMPUTERD_TOKEN) log.warn({}, 'COMPUTERD_TOKEN is not set: Spaces cannot reach computers (status unknown, previews fail)');
   const spaceScheme = config.EDGE_SCHEME ?? new URL(authMode.baseURL).protocol.replace(':', '');
@@ -153,6 +155,7 @@ export async function startApi(env: NodeJS.ProcessEnv = process.env): Promise<Ru
     edge: {
       artifactHost: config.ARTIFACT_HOST,
       spaceDomain: config.SPACE_DOMAIN,
+      screenHost: config.SCREEN_HOST,
       spaceExists: async (id) => (await store.get('spaces', id))?.status === 'published',
     },
     auth,
@@ -179,16 +182,33 @@ export async function startApi(env: NodeJS.ProcessEnv = process.env): Promise<Ru
     secure: spaceScheme === 'https',
     gateway: createGatewayResolver(computerdLink),
   });
+  const frameAncestors = [...new Set([new URL(authMode.baseURL).origin, ...TRUSTED_APP_ORIGINS, ...authMode.trustedOrigins])];
   // HTML artifacts: no auth, no cookies; the signed URL is the only credential. Only ever reached by Host === ARTIFACT_HOST.
   const artifactPages = createArtifactOriginApp({
     store,
     blobs,
     secret: config.ARTIFACT_URL_SECRET,
-    frameAncestors: [...new Set([new URL(authMode.baseURL).origin, ...TRUSTED_APP_ORIGINS, ...authMode.trustedOrigins])],
+    frameAncestors,
   });
-  const hosts = { artifactHost: config.ARTIFACT_HOST, spaceDomain: config.SPACE_DOMAIN };
+  const hosts = { artifactHost: config.ARTIFACT_HOST, spaceDomain: config.SPACE_DOMAIN, screenHost: config.SCREEN_HOST };
   // One port, three kinds of host. The untrusted ones never reach the API app (no session, CORS or cookie handling of ours).
-  const handlers = { artifact: artifactPages, space: spaceOrigin.app, api: app };
+  // Presence: agentd tells the agent the user is watching its screen. Best effort; a lost notice only means the agent does not know it is watched.
+  const onWatch = ({ ownerId, agentId }: { ownerId: string; agentId: string }, watching: boolean): void => {
+    void fetch(new URL('/v1/presence/screen', config.AGENTD_URL), {
+      method: 'POST',
+      headers: { authorization: `Bearer ${config.INTERNAL_AGENTD_TOKEN}`, 'x-owner-id': ownerId, 'content-type': 'application/json' },
+      body: JSON.stringify({ agentId, watching }),
+    }).catch((error: unknown) => log.warn({ err: error, agentId }, 'presence notice failed'));
+  };
+  const screenOrigin = createScreenOrigin({
+    secret: config.SCREEN_TICKET_SECRET,
+    computerd: computerdLink,
+    scheme: spaceScheme === 'https' ? 'https' : 'http',
+    frameAncestors,
+    log: (fields, message) => log.info(fields, message),
+    onWatch,
+  });
+  const handlers = { artifact: artifactPages, space: spaceOrigin.app, screen: screenOrigin.app, api: app };
   let boundPort = config.API_PORT;
   const server = await new Promise<ReturnType<typeof serve>>((resolveServer) => {
     const created = serve(
@@ -209,17 +229,14 @@ export async function startApi(env: NodeJS.ProcessEnv = process.env): Promise<Ru
     computerdUrl: config.COMPUTERD_URL,
     ticketSecret: config.SCREEN_TICKET_SECRET,
     log: (fields, message) => log.info(fields, message),
-    // Presence: agentd tells the agent the user is watching its screen. Best effort; a lost notice
-    // only means the agent does not know it is watched.
-    onWatch: ({ ownerId, agentId }, watching) => {
-      void fetch(new URL('/v1/presence/screen', config.AGENTD_URL), {
-        method: 'POST',
-        headers: { authorization: `Bearer ${config.INTERNAL_AGENTD_TOKEN}`, 'x-owner-id': ownerId, 'content-type': 'application/json' },
-        body: JSON.stringify({ agentId, watching }),
-      }).catch((error: unknown) => log.warn({ err: error, agentId }, 'presence notice failed'));
-    },
+    onWatch,
   });
-  server.on('upgrade', (request, socket, head) => (hostKind(request.headers.host, hosts) === 'space' ? spaceOrigin.handleUpgrade(request, socket, head) : proxy.handleUpgrade(request, socket, head)));
+  server.on('upgrade', (request, socket, head) => {
+    const kind = hostKind(request.headers.host, hosts);
+    if (kind === 'space') return spaceOrigin.handleUpgrade(request, socket, head);
+    if (kind === 'screen') return screenOrigin.handleUpgrade(request, socket, head);
+    proxy.handleUpgrade(request, socket, head);
+  });
 
   const stop = async (): Promise<void> => {
     // Requests in flight get 3 s to finish; after that their connections are cut so the stop completes.

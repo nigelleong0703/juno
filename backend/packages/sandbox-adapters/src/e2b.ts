@@ -22,6 +22,7 @@ export interface E2bProviderOptions extends E2bDriverOptions {
   onStarted?: (context: StartedContext) => Promise<void>;
   linkWaitMs?: number;
   skills?: LinkedProviderOptions['skills'];
+  screenStream?: LinkedProviderOptions['screenStream'];
 }
 
 export function createE2bProvider(options: E2bProviderOptions): ComputerProvider & { dispose(): void } {
@@ -35,5 +36,6 @@ export function createE2bProvider(options: E2bProviderOptions): ComputerProvider
     ...(options.onStarted ? { onStarted: options.onStarted } : {}),
     ...(options.linkWaitMs === undefined ? {} : { linkWaitMs: options.linkWaitMs }),
     ...(options.skills ? { skills: options.skills } : {}),
+    ...(options.screenStream ? { screenStream: options.screenStream } : {}),
   });
 }

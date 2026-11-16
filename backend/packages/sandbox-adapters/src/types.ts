@@ -5,7 +5,7 @@
  * `ensureScreen` and stores them inside the sandbox, and the HTTP layer only ever returns the
  * redacted screen (see \`@agent-desktop/contracts\` \`ScreenResponse\`).
  */
-import type { ScreenState } from '@agent-desktop/contracts';
+import type { ScreenState, ScreenStreamMode } from '@agent-desktop/contracts';
 import type { BrowserInput, BrowserResult } from './browser.js';
 import type { MeetInput, MeetResult } from './meet.js';
 
@@ -96,6 +96,8 @@ export interface ScreenRequest {
   controlPassword: string;
   /** Read-only x11vnc password. */
   viewPassword: string;
+  /** Which streams to boot (SCREEN_STREAM); absent means noVNC only. */
+  stream?: ScreenStreamMode;
 }
 
 export interface ScreenHandle {

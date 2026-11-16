@@ -35,6 +35,12 @@ export function registerOnboarding(app: Hono, deps: AgentdDeps): void {
     return c.json({ agentId: created.agent.id, conversationId: await goalConversationId(deps.store, ownerId, created.agent) });
   });
 
+  // The owner changed the time of the daily proactive check or their time zone (the API calls this after saving the setting).
+  app.post('/v1/proactive/reschedule', async (c) => {
+    await deps.enqueuer.rescheduleIdeas?.(getOwnerId(c));
+    return c.json({});
+  });
+
   // The owner chose their model: a still-new account whose greeting could not run gets it again.
   app.post('/v1/onboarding/model-chosen', async (c) => {
     const body: unknown = await c.req.json().catch(() => null);

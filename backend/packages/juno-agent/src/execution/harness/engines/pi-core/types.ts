@@ -4,6 +4,7 @@
 import type { BrainContext } from '../../../../contracts/index.js';
 import type { RunCancellation } from '../../services/cancel.js';
 import type { CardRetryBudget, NoReplyBudget, ReplyCitation } from '../../services/final-reply.js';
+import type { PromiseRetryBudget } from '../../services/promise-check.js';
 import type { RunContext, RunInput, RunServices } from '../../services/run-types.js';
 import type { RunBudget } from '../../services/run-budget.js';
 import type { SettleDecision, TodoGate } from '../../services/todo-gate.js';
@@ -37,6 +38,8 @@ export interface CoreTurnDeps {
   lengthBudget: LengthBudget;
   /** Run-wide: the one retry a reply with an invalid card gets. */
   cardRetry: CardRetryBudget;
+  /** Run-wide: the one retry a reply that promises something later without scheduling it gets. */
+  promiseRetry: PromiseRetryBudget;
   /** Run-wide: the one retry an empty or refused final turn gets when someone is waiting. */
   noReply: NoReplyBudget;
   /** The run's frozen usage/budget authority; the model step charges and checks it before tools. */

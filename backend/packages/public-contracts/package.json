@@ -1,6 +1,6 @@
 {
   "name": "@agent-desktop/public-contracts",
-  "version": "0.81.0",
+  "version": "0.84.0",
   "description": "Public wire contracts (models, API surface, live events) shared by the backend and every client. Depends only on zod.",
   "private": true,
   "type": "module",

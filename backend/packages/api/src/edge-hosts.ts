@@ -30,6 +30,8 @@ export interface EdgeHosts {
   apiOrigin: string;
   artifactHost: string;
   spaceDomain: string;
+  /** SCREEN_HOST (voxl's client and stream at `/s/<ticket>/`); empty or absent: the screen host is off. */
+  screenHost?: string;
 }
 
 /**
@@ -50,16 +52,26 @@ export function checkEdgeHosts(hosts: EdgeHosts): string[] {
       warnings.push(message);
     }
   }
+  // The screen host serves only the streamer's own static client, never an agent's or a user's content, and reads no cookie, so it
+  // may sit on the API's registrable domain (api.example.com / computer.example.com behind one wildcard certificate): that is a
+  // warning, not a refusal. It still must not equal or contain the API host, or collide with the other hosts.
+  if (hosts.screenHost) {
+    const bare = withoutPort(hosts.screenHost);
+    if (apiName === bare || apiName.endsWith('.' + bare)) throw new Error(`SCREEN_HOST (${hosts.screenHost}) must not equal or contain the API host (${apiName})`);
+    if (bare === withoutPort(hosts.artifactHost) || parseSpaceHost(hosts.screenHost, hosts.spaceDomain) !== undefined || bare.endsWith('.' + withoutPort(hosts.spaceDomain))) throw new Error(`SCREEN_HOST (${hosts.screenHost}) collides with ARTIFACT_HOST or SPACE_DOMAIN`);
+    if (registrableDomain(bare) === registrableDomain(apiName)) warnings.push(`SCREEN_HOST (${hosts.screenHost}) shares the registrable domain ${registrableDomain(apiName)} with the API host (${apiName}); it serves only voxl's client and reads no cookie, so this is accepted`);
+  }
   if (parseSpaceHost(hosts.artifactHost, hosts.spaceDomain) !== undefined) throw new Error(`ARTIFACT_HOST (${hosts.artifactHost}) is a Spaces host under SPACE_DOMAIN (${hosts.spaceDomain})`);
   return warnings;
 }
 
-export type HostKind = 'artifact' | 'space' | 'api';
+export type HostKind = 'artifact' | 'space' | 'screen' | 'api';
 
 /** Which handler a request belongs to, by Host: every host under SPACE_DOMAIN is Spaces' (a bad id is a 404 there, never the API's). */
-export function hostKind(host: string | undefined, hosts: Pick<EdgeHosts, 'artifactHost' | 'spaceDomain'>): HostKind {
+export function hostKind(host: string | undefined, hosts: Pick<EdgeHosts, 'artifactHost' | 'spaceDomain' | 'screenHost'>): HostKind {
   const lower = host?.toLowerCase();
   if (lower === undefined) return 'api';
   if (lower === hosts.artifactHost.toLowerCase()) return 'artifact';
+  if (hosts.screenHost && lower === hosts.screenHost.toLowerCase()) return 'screen';
   return lower.endsWith('.' + hosts.spaceDomain.toLowerCase()) ? 'space' : 'api';
 }

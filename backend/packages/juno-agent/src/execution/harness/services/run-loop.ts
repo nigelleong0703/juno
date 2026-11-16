@@ -24,6 +24,7 @@ import { markRunBlocked } from './run-block.js';
 import { loadRunBudget, persistBudgetSnapshot, preflightBudget } from './run-budget.js';
 import type { RunContext, RunInput, RunServices } from './run-types.js';
 import type { CardRetryBudget, NoReplyBudget, ReplyCitation } from './final-reply.js';
+import type { PromiseRetryBudget } from './promise-check.js';
 
 /** A run that spent its step budget never produced a settled final, so it is blocked, not complete. */
 const STEP_LIMIT_REASON = 'run blocked: the step limit was reached before the run produced a final answer';
@@ -54,6 +55,7 @@ export async function runLoop(
   const progress = { working: false };
   const lengthBudget: LengthBudget = { count: 0 };
   const cardRetry: CardRetryBudget = { used: false };
+  const promiseRetry: PromiseRetryBudget = { used: false };
   const noReply: NoReplyBudget = { retried: false };
   // The steps at which this run compacted, so a second compaction within a few steps ends the run instead of looping (pi-core/turn-context.ts).
   const compactions: CompactionLog = { steps: [] };
@@ -72,7 +74,7 @@ export async function runLoop(
     const timer = createStepTimer(ctx);
     if (await cancellation.peek() === true) return 'stopped';
     const turn = await runCoreTurn({
-      ctx: timer.ctx, services, input, runId, stepIndex, brainCtx: context, cancellation, deliveredTexts, citations, progress, gate, lengthBudget, cardRetry, noReply,
+      ctx: timer.ctx, services, input, runId, stepIndex, brainCtx: context, cancellation, deliveredTexts, citations, progress, gate, lengthBudget, cardRetry, promiseRetry, noReply,
       budget, goalBrowserMode, reactions, roomTalk, compactions,
     });
     timer.report(services.log, { runId, step: stepIndex, outcome: turn.outcome });
