@@ -142,3 +142,17 @@ export function isAssetPathConfined(rendererRootReal: string, resolvedReal: stri
   if (relToRoot === ".." || relToRoot.startsWith(".." + sep)) return false;
   return true;
 }
+
+/**
+ * The origin of a URL as Chromium sees it. Node's URL gives "null" for a custom scheme even when Electron registers it as
+ * standard, so `electron://app/…` never matched APP_ORIGIN and every microphone request (dictation, voice calls) was refused
+ * after the person had allowed it. Undefined when the URL cannot be read.
+ */
+export function originOf(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    return parsed.origin !== "null" ? parsed.origin : `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return undefined;
+  }
+}

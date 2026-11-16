@@ -736,3 +736,147 @@
 [data-slot="transcript"] [role="log"] > button {
   z-index: 10;
 }
+
+/*
+ * Voice call (components/call/VoiceCallOverlay.tsx; iOS VoiceCallView). The call is always dark, whatever the theme.
+ * `--level` (0...1) is the smoothed audio level the controller writes; connecting and thinking breathe on their own.
+ */
+.voice-call {
+  position: absolute;
+  /* Up over the column's top strip too, so the dark call fills the column to the window edge (no light band above it). */
+  inset: calc(-1 * var(--shell-header-height)) 0 0 0;
+  padding-top: var(--shell-header-height);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: #0a0a0d;
+  color: #fff;
+  -webkit-app-region: no-drag;
+  animation: voice-call-in 300ms var(--ease-standard, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+.voice-orb {
+  --level: 0;
+  --orb-pink: color-mix(in srgb, #ff9ecc 80%, var(--agent-accent, #ff9ecc) 20%);
+  --orb-lavender: color-mix(in srgb, #b8a3ff 80%, var(--agent-accent, #b8a3ff) 20%);
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: min(270px, 62vw);
+  aspect-ratio: 1;
+  transition: opacity 300ms ease;
+}
+
+.voice-orb[data-muted="true"] {
+  opacity: 0.45;
+}
+
+.voice-orb-glow {
+  position: absolute;
+  inset: -45%;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--orb-pink) 45%, transparent) 0%, color-mix(in srgb, var(--orb-lavender) 18%, transparent) 35%, transparent 62%);
+  opacity: calc(0.4 + 0.6 * var(--level));
+  transform: scale(calc(1 + 0.12 * var(--level)));
+  transition: transform 80ms linear, opacity 80ms linear;
+}
+
+.voice-orb-body {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 1px solid rgb(255 255 255 / 0.25);
+  background:
+    radial-gradient(circle at 30% 25%, #faf0ff 0%, transparent 55%),
+    radial-gradient(circle at 75% 70%, var(--orb-lavender) 0%, transparent 60%),
+    radial-gradient(circle at 70% 20%, var(--orb-pink) 0%, transparent 55%),
+    radial-gradient(circle at 25% 80%, var(--orb-pink) 0%, transparent 60%),
+    #faf0ff;
+  background-size: 140% 140%;
+  transform: scale(calc(1 + 0.06 * var(--level)));
+  transition: transform 80ms linear;
+  animation: voice-orb-drift 14s ease-in-out infinite alternate;
+}
+
+.voice-call[data-phase="connecting"] .voice-orb-body {
+  animation: voice-orb-drift 14s ease-in-out infinite alternate, voice-orb-breathe 1.8s ease-in-out infinite;
+}
+
+.voice-call[data-phase="thinking"] .voice-orb-body {
+  animation: voice-orb-drift 14s ease-in-out infinite alternate, voice-orb-breathe 2.8s ease-in-out infinite;
+}
+
+.voice-dots {
+  display: flex;
+  gap: 10px;
+}
+
+.voice-dots > i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  opacity: 0.5;
+  animation: voice-dot 2.5s ease-in-out infinite;
+}
+
+.voice-dots > i:nth-child(2) {
+  animation-delay: 0.25s;
+}
+
+.voice-dots > i:nth-child(3) {
+  animation-delay: 0.5s;
+}
+
+.voice-call[data-phase="connecting"] .voice-dots > i {
+  animation-duration: 0.9s;
+}
+
+.voice-call[data-phase="thinking"] .voice-dots > i {
+  animation-duration: 1.4s;
+}
+
+.voice-call[data-phase="ended"] .voice-dots > i,
+.voice-call[data-phase="failed"] .voice-dots > i {
+  animation: none;
+}
+
+@keyframes voice-call-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+@keyframes voice-orb-drift {
+  from {
+    background-position: 0% 0%;
+  }
+  to {
+    background-position: 100% 100%;
+  }
+}
+
+@keyframes voice-orb-breathe {
+  50% {
+    scale: 1.04;
+  }
+}
+
+@keyframes voice-dot {
+  50% {
+    opacity: 1;
+    transform: scale(1.25);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-call,
+  .voice-orb-body,
+  .voice-dots > i {
+    animation: none !important;
+  }
+}

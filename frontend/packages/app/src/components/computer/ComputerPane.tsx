@@ -12,6 +12,7 @@ import {
 } from "@agent-desktop/ui";
 import {
   ArrowLeft,
+  Monitor,
   Play,
   RefreshCw,
   Settings,
@@ -42,6 +43,7 @@ import { tc } from "./i18n";
 import { deriveScreenMode, resolveScreenPresence } from "./modes";
 import { ScreenPlaceholder } from "./ScreenPlaceholder";
 import { SelectScreenMenu } from "./SelectScreenMenu";
+import { screenTargetFromTicket } from "./streamTarget";
 import type { LiveScreenTarget } from "./types";
 import { useComputerState, resolveAgentComputer } from "./useScreenState";
 import { useScreenClipboard } from "./useScreenClipboard";
@@ -180,21 +182,24 @@ export function ComputerPane({
   // nothing about the model, so viewing, starting and taking over stay available.
   // Only a real, server-signed ticket ever produces a fragment buffer URL; the renderer holds no
   // password. No ready screen draws a truthful placeholder instead.
-  const target = streamTicket.data ? { url: streamTicket.data.url } : null;
+  const ticketData = streamTicket.data;
+  const target = useMemo(
+    () => (ticketData ? screenTargetFromTicket(ticketData, control) : null),
+    [ticketData, control],
+  );
 
   // Takeover/return flips the ticket query key with the control flag, so the fresh
   // ticket is briefly missing while the old session is still drawable. Hold the last
   // ticket for the SAME screen under a translucent overlay instead of flashing an
   // empty frame. The hold is keyed by screen id: a newly selected agent never
   // inherits the previous screen.
-  const ticketUrl = streamTicket.data?.url;
-  const [heldTicket, setHeldTicket] = useState<{ screenId: string; url: string } | null>(null);
+  const [heldTicket, setHeldTicket] = useState<{ screenId: string; target: LiveScreenTarget } | null>(null);
   useEffect(() => {
-    if (agentScreen && ticketUrl) setHeldTicket({ screenId: agentScreen.id, url: ticketUrl });
-  }, [agentScreen, ticketUrl]);
+    if (agentScreen && target) setHeldTicket({ screenId: agentScreen.id, target });
+  }, [agentScreen, target]);
   const heldForSameScreen =
     agentScreen && heldTicket?.screenId === agentScreen.id ? heldTicket : null;
-  const displayTarget = target ?? (heldForSameScreen ? { url: heldForSameScreen.url } : null);
+  const displayTarget = target ?? heldForSameScreen?.target ?? null;
   const controlPending = takeOverScreen.isPending || returnControlScreen.isPending;
   const ticketGap = !target && heldForSameScreen !== null;
   const transitioning = controlPending || ticketGap;
@@ -236,8 +241,8 @@ export function ComputerPane({
     }
     const ticket = await streamTicket.refetch({ throwOnError: true });
     if (!ticket.data) throw new Error("The stream ticket could not be refreshed.");
-    return { url: ticket.data.url };
-  }, [screenQuery, screensQuery, streamTicket, ensureScreen, computer, screenAgentId]);
+    return screenTargetFromTicket(ticket.data, control);
+  }, [control, screenQuery, screensQuery, streamTicket, ensureScreen, computer, screenAgentId]);
 
   // Explicit external site for a genuine sign-in request (payload always carries it); the
   // banner names the site instead of claiming the model paused.
@@ -361,7 +366,11 @@ export function ComputerPane({
                     {startError}
                   </p>
                 ) : runtime?.image.state === "missing" ? null : (
-                  <p className="text-sm text-fg-muted">{tc("computer.noComputerHint")}</p>
+                  <>
+                    <Monitor className="size-8 text-fg-subtle" aria-hidden="true" />
+                    <p className="text-base font-semibold text-fg">{tc("computer.noComputer")}</p>
+                    <p className="text-sm text-fg-muted">{tc("computer.noComputerHint", { name: agent?.name ?? "this agent" })}</p>
+                  </>
                 )}
                 <Button
                   variant="secondary"

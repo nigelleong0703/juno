@@ -12,6 +12,14 @@ struct RootView: View {
 
     var body: some View {
         content
+            // A call covers everything, like a system call; minimized, it rides as a bar above whatever is open.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let call = world.call, !call.presented { CallBar(call: call) }
+            }
+            .animation(.smooth(duration: 0.3), value: world.call?.presented)
+            .fullScreenCover(isPresented: Binding(get: { world.call?.presented == true }, set: { if !$0 { world.call?.presented = false } })) {
+                if let call = world.call { VoiceCallScreen(call: call).environment(world) }
+            }
             // A model was chosen on the "Connect a model" screen: continue into the default agent's chat.
             .onChange(of: world.modelProviders?.usable) { old, new in
                 if old == false, new == true { world.openChat(world.defaultDirectChat?.id) }

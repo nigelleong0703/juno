@@ -10,13 +10,17 @@ export interface SettingsPageProps {
   className?: string;
   /** The content is a page of its own (own header and scrolling). */
   bare?: boolean;
+  /** Rendered above the section entries. */
+  navHeader?: ReactNode;
+  /** A wide nav column for a full settings list. */
+  wide?: boolean;
 }
 
 /**
  * The Settings template (ARCHITECTURE §5.5): the ui `SettingsLayout` sidebar plus a content
  * panel, sized to the shell. App settings and per-agent settings share it.
  */
-export function SettingsPage({ sections, activeId, onSelect, children, className, bare }: SettingsPageProps) {
+export function SettingsPage({ sections, activeId, onSelect, children, className, bare, navHeader, wide }: SettingsPageProps) {
   const navCollapsed = useUiStore((state) => state.sidebarCollapsed);
   return (
     <SettingsLayout
@@ -25,6 +29,8 @@ export function SettingsPage({ sections, activeId, onSelect, children, className
       onSelect={onSelect}
       navCollapsed={navCollapsed}
       {...(bare ? { bare } : {})}
+      {...(navHeader ? { navHeader } : {})}
+      {...(wide ? { wide } : {})}
       className={cn("h-full min-h-0", className)}
     >
       {children}

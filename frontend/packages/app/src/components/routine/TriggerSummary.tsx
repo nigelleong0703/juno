@@ -3,6 +3,7 @@ import { cn } from "@agent-desktop/ui";
 import { CalendarClock, GitBranch, Mail, MessageSquare, Webhook, Hash, type LucideIcon } from "lucide-react";
 import { formatDuration } from "../../lib/format";
 import { t } from "../../lib/i18n";
+import { scheduleText } from "../../features/routines/cron";
 
 export interface TriggerSummaryProps {
   routine: Routine;
@@ -28,7 +29,7 @@ function triggerIcon(trigger: Routine["trigger"]): LucideIcon {
 }
 
 function triggerPrimary(trigger: Routine["trigger"]): string {
-  if (trigger.kind === "schedule") return t("routines.trigger.schedule", { human: trigger.human });
+  if (trigger.kind === "schedule") return t("routines.trigger.schedule", { human: scheduleText(trigger.cron ?? "", trigger.human) });
   if (trigger.kind === "event") return t("routines.trigger.event", { filter: trigger.filter });
   return t("routines.trigger.webhook");
 }

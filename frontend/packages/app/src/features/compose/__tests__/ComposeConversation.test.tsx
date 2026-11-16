@@ -105,7 +105,7 @@ describe("ComposeConversation immediate creation", () => {
       },
     };
     renderCompose(client);
-    fireEvent.click(await screen.findByText("Create new agent"));
+    fireEvent.click(await screen.findByRole("button", { name: "New agent" }));
     await screen.findByTestId("opened");
     expect(agentCalls).toHaveLength(1);
     // A blank agent omits the name: the server picks a unique one.

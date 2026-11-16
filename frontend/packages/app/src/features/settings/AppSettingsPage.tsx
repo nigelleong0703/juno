@@ -1,9 +1,8 @@
 import type { PlatformLoginItem } from "../../platform/adapter";
 import type { UpdateSettingsInput } from "@agent-desktop/client";
 import { Button, SegmentedControl, Switch, Textarea } from "@agent-desktop/ui";
-import { BellRing, Brain, ChevronRight, Contact, Cpu, Gauge, Info, LayoutGrid, Laptop, Monitor, Palette, Plug, ScrollText, UserRound, Workflow } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useParams } from "react-router";
 import { usePlatform } from "../../data/ClientProvider";
 import { useHomeFile, useWriteHomeFile } from "../../data/home";
 import { errorCode } from "../../data/model-providers";
@@ -12,107 +11,35 @@ import { useSettings } from "../../data/queries";
 import { t } from "../../lib/i18n";
 import { usePersistedTheme } from "../../lib/persistedTheme";
 import { useServerConnection } from "../../components/ServerConnection";
-import { SettingsPage } from "../../templates/SettingsPage";
 import { ModelsSection } from "./models/ModelsSection";
 import { MyMacSection } from "./MyMacSection";
-import { PauseOutgoing } from "./PauseOutgoing";
 import { ProactiveRulesSection } from "./ProactiveRules";
-import { Group, Row } from "./SettingsGroup";
+import { Group, Row, SettingsTitle } from "./SettingsGroup";
+import { isSettingsPage, SettingsShell, settingsPageLabel } from "./SettingsShell";
 import { TimeZoneSection } from "./TimeZoneSection";
 import { YourDetailsSection } from "./YourDetails";
-const SECTIONS = [
-  { id: "profile", labelKey: "settings.profile", icon: UserRound },
-  { id: "details", labelKey: "settings.details", icon: Contact },
-  { id: "models", labelKey: "settings.models", icon: Cpu },
-  { id: "budget", labelKey: "settings.budget", icon: Gauge },
-  { id: "workspace", labelKey: "settings.workspace", icon: LayoutGrid },
-  { id: "mac", labelKey: "settings.myMac", icon: Laptop },
-  { id: "proactive", labelKey: "settings.proactive", icon: BellRing },
-  { id: "appearance", labelKey: "settings.appearance", icon: Palette },
-  { id: "connection", labelKey: "settings.connection", icon: Plug },
-  { id: "about", labelKey: "settings.about", icon: Info },
-] as const;
-
-type SectionId = (typeof SECTIONS)[number]["id"];
-
-function isSection(value: string | undefined): value is SectionId {
-  return SECTIONS.some((entry) => entry.id === value);
-}
-
 export function AppSettingsPage() {
   const { section } = useParams<{ section?: string }>();
-  const navigate = useNavigate();
-  const active: SectionId = isSection(section) ? section : "models";
-  const label = (entry: (typeof SECTIONS)[number]) => (entry.id === "budget" ? "Budgets" : t(entry.labelKey));
-  const activeEntry = SECTIONS.find((entry) => entry.id === active) ?? SECTIONS[2];
-  const heading = active === "proactive" ? t("proactive.title") : label(activeEntry);
+  const active = isSettingsPage(section) ? (section as string) : "profile";
+  const heading = settingsPageLabel(active);
 
   return (
-    <SettingsPage
-      activeId={active}
-      onSelect={(id) => navigate("/settings/" + id)}
-      sections={SECTIONS.map((entry) => ({
-        id: entry.id,
-        label: label(entry),
-        icon: <entry.icon className="size-4" />,
-      }))}
-    >
-      <h1 className="pb-6 text-[30px] font-bold leading-tight tracking-[-0.01em] text-fg">{heading}</h1>
+    <SettingsShell activeId={active}>
       <div className="max-w-2xl space-y-8">
+        {active !== "profile" && active !== "details" && <SettingsTitle title={heading} />}
         {active === "models" && <ModelsSection />}
-        {active === "profile" && <ProfileSection />}
+        {active === "profile" && <ProfileSection title={heading} />}
         {active === "details" && (
-          <>
-            <TimeZoneSection />
-            <YourDetailsSection />
-          </>
+          <YourDetailsSection title={heading} before={<TimeZoneSection />} />
         )}
         {active === "budget" && <BudgetSection />}
-        {active === "workspace" && <WorkspaceSection />}
         {active === "mac" && <MyMacSection />}
-        {active === "proactive" && (
-          <>
-            <PauseOutgoing />
-            <ProactiveRulesSection />
-          </>
-        )}
+        {active === "proactive" && <ProactiveRulesSection />}
         {active === "appearance" && <AppearanceSection />}
         {active === "connection" && <ConnectionSection />}
         {active === "about" && <AboutSection />}
       </div>
-    </SettingsPage>
-  );
-}
-/** The pages that used to live in the account menu, reached from Settings like the iPhone's More page. */
-const WORKSPACE_LINKS = [
-  { to: "/automations", label: "nav.automations", icon: Workflow },
-  { to: "/rules", label: "nav.rules", icon: ScrollText },
-  { to: "/memories", label: "nav.memories", icon: Brain },
-  { to: "/settings/proactive", label: "proactive.title", icon: BellRing },
-  { to: "/usage", label: "nav.usage", icon: Monitor },
-  { to: "/settings/models", label: "settings.models", icon: Cpu },
-] as const;
-
-function WorkspaceSection() {
-  const navigate = useNavigate();
-  return (
-    <Group description={t("settings.workspaceHint")}>
-      {WORKSPACE_LINKS.map(({ to, label, icon: Icon }) => (
-        <button
-          key={to}
-          type="button"
-          onClick={() => navigate(to)}
-          className="block w-full rounded-xl text-left transition-colors hover:bg-interactive-hover focus-ring"
-        >
-          <Row label={t(label)}>
-            <span className="flex items-center gap-2 text-fg-subtle">
-              <Icon className="size-4" />
-              <ChevronRight className="size-4" />
-            </span>
-          </Row>
-        </button>
-      ))}
-    </Group>
+    </SettingsShell>
   );
 }
 
@@ -220,7 +147,7 @@ function BudgetSection() {
 }
 
 /** The owner's own free-text "about me": USER.md in the home, read by every agent. */
-function ProfileSection() {
+function ProfileSection({ title }: { title: string }) {
   const { file, isPending } = useHomeFile("USER.md");
   const save = useWriteHomeFile();
   const [draft, setDraft] = useState<string | undefined>(undefined);
@@ -228,50 +155,49 @@ function ProfileSection() {
   const served = file?.content ?? "";
   if (isPending) return null;
   const value = draft ?? served;
+  const onSave = () =>
+    save.mutate(
+      { path: "USER.md", content: value, ...(file === undefined ? {} : { expectedHash: file.hash }) },
+      {
+        onSuccess: () => {
+          setConflict(false);
+          setDraft(undefined);
+        },
+        onError: (error) => {
+          if (errorCode(error).status !== 409) return;
+          setConflict(true);
+          setDraft(undefined);
+        },
+      },
+    );
   return (
     <section className="space-y-4">
-      <header className="space-y-1">
-        <p className="text-xs text-fg-muted">
-          Free text every agent reads. Your own words here outrank agent instructions and remembered facts.
-        </p>
-      </header>
+      <SettingsTitle
+        title={title}
+        action={
+          <Button variant="primary" size="sm" disabled={value === served || save.isPending} onClick={onSave}>
+            Save
+          </Button>
+        }
+      />
       <p className="border-l-2 border-border pl-3 text-xs italic text-fg-muted">{t("fileNote.user")}</p>
       <Textarea
         aria-label="About you"
+        placeholder="Nothing here yet"
         rows={6}
         className="max-h-96 overflow-y-auto"
         value={value}
         disabled={save.isPending}
         onChange={(event) => setDraft(event.currentTarget.value)}
       />
+      <p className="px-1 text-xs text-fg-subtle">
+        Free text every agent reads. Your own words here outrank agent instructions and remembered facts.
+      </p>
       {conflict && (
         <p role="alert" className="text-xs text-danger">
           This changed elsewhere and was reloaded. Review it and make your edit again.
         </p>
       )}
-      <Button
-        variant="primary"
-        size="sm"
-        disabled={value === served || save.isPending}
-        onClick={() =>
-          save.mutate(
-            { path: "USER.md", content: value, ...(file === undefined ? {} : { expectedHash: file.hash }) },
-            {
-              onSuccess: () => {
-                setConflict(false);
-                setDraft(undefined);
-              },
-              onError: (error) => {
-                if (errorCode(error).status !== 409) return;
-                setConflict(true);
-                setDraft(undefined);
-              },
-            },
-          )
-        }
-      >
-        Save
-      </Button>
     </section>
   );
 }
@@ -381,9 +307,6 @@ function AboutSection() {
   return (
     <Group description={t("settings.aboutHint")}>
       <Row label={t("app.name")}>
-        <span className="text-sm text-fg-muted">{t("app.name")}</span>
-      </Row>
-      <Row label={t("settings.connection")}>
         <span className="text-sm text-fg-muted">
           {platform.isDesktop ? "Desktop app" : "Web client"}
         </span>

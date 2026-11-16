@@ -2,6 +2,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@agent-desktop/ui";
 import { useState, type ReactElement } from "react";
 import { useAgents, useConversation } from "../../../data/queries";
 import { noDragRegion } from "../../../lib/drag";
+import { t } from "../../../lib/i18n";
 import { useUiStore, type AgentPanelAnchor } from "../../../store/ui";
 import { AgentProfile } from "../card/AgentProfile";
 import { GroupMembers } from "./GroupMembers";
@@ -54,5 +55,5 @@ function AgentPanelBody({ conversationId }: { conversationId: string }) {
 
   if (isGroup && conversation && !agent) return <GroupMembers conversation={conversation} members={members} onOpen={setPicked} />;
   if (!agent) return null;
-  return <AgentProfile key={agent.id} agent={agent} {...(isGroup ? { onBack: () => setPicked(null) } : {})} />;
+  return <AgentProfile key={agent.id} agent={agent} {...(isGroup ? { onBack: () => setPicked(null), backLabel: t("agentPanel.members") } : {})} />;
 }

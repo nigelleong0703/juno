@@ -27,6 +27,7 @@ describe("MemoriesPage", () => {
   it("saves MEMORY.md with the hash it loaded; a concurrent change reloads it and tells the user", async () => {
     const client = createMockClient({ seed: 3 });
     renderPage(client);
+    fireEvent.click(await screen.findByRole("button", { name: /The short sheet every agent reads first/ }));
     const box = (await screen.findByLabelText("MEMORY.md")) as HTMLTextAreaElement;
     await waitFor(() => expect(box.value).toContain("three bullets"));
 
@@ -46,7 +47,7 @@ describe("MemoriesPage", () => {
   it("forgets the selected claims and removes their lines", async () => {
     const client = createMockClient({ seed: 3 });
     renderPage(client);
-    fireEvent.mouseDown(await screen.findByRole("tab", { name: "What I know and why" }));
+    fireEvent.click(await screen.findByRole("button", { name: /What I know and why/ }));
     fireEvent.click(await screen.findByLabelText("Select: Prefers concise updates: three bullets, no preamble."));
     fireEvent.click(screen.getByRole("button", { name: "Forget 1 selected" }));
     fireEvent.click(screen.getByRole("button", { name: "Forget" }));
@@ -62,7 +63,7 @@ describe("memory search hits", () => {
     await client.home.write("people/marta.md", { content: "# Marta\n\n- Marta keeps the books [mem:mem_marta]\n" });
     renderPage(client);
 
-    fireEvent.change(await screen.findByPlaceholderText("Search memory…"), { target: { value: "window" } });
+    fireEvent.change(await screen.findByPlaceholderText("Search memory"), { target: { value: "window" } });
     fireEvent.click(await screen.findByText("- Likes window seats"));
     expect(await screen.findByLabelText("memory/bank/preferences.md")).toBeTruthy();
   });
@@ -72,7 +73,7 @@ describe("memory search hits", () => {
     await client.home.write("people/marta.md", { content: "# Marta\n\n- Marta keeps the books [mem:mem_marta]\n" });
     renderPage(client);
 
-    fireEvent.change(await screen.findByPlaceholderText("Search memory…"), { target: { value: "books" } });
+    fireEvent.change(await screen.findByPlaceholderText("Search memory"), { target: { value: "books" } });
     const row = (await screen.findByText("- Marta keeps the books")).closest("[data-slot='list-row']");
     expect(row?.getAttribute("role")).toBeNull();
     expect(row?.textContent).toContain("People");

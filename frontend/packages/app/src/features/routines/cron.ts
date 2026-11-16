@@ -56,3 +56,18 @@ export function describeCron(cron: string): string | undefined {
 export function presetForCron(cron: string): SchedulePreset | undefined {
   return SCHEDULE_PRESETS.find((preset) => preset.cron && preset.cron === cron.trim());
 }
+
+/** Five or six cron fields: what an agent-made routine often stores as its "human" text. */
+const CRON_LIKE = /^\s*(\S+\s+){4,5}\S+\s*$/;
+
+/**
+ * The words a person sees for a schedule: a preset's own label ("Every day at 8:00"), else the stored phrase when it is one,
+ * else the cron in words. Routines an agent creates often store the raw cron as the phrase ("0 8 * * *"), which reads as noise.
+ */
+export function scheduleText(cron: string, human: string | undefined): string {
+  const preset = presetForCron(cron);
+  if (preset !== undefined) return preset.label;
+  const phrase = human?.trim() ?? "";
+  if (phrase !== "" && phrase !== cron.trim() && !CRON_LIKE.test(phrase)) return phrase;
+  return describeCron(cron) ?? describeCron(phrase) ?? "Scheduled";
+}

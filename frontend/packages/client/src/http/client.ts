@@ -15,6 +15,7 @@ import { createConversationsApi, createItemsApi } from './conversations.js';
 import { createRequestsApi, createRunsApi, createTasksApi } from './execution.js';
 import { createAppsApi } from './apps.js';
 import { createPluginsApi } from './integrations.js';
+import { createVoiceCallsApi } from './voice-calls.js';
 import { createSkillsApi } from './knowledge.js';
 import { createMemoryApi } from './memory.js';
 import { createMemoryItemsApi, createPeopleApi } from './people.js';
@@ -80,6 +81,7 @@ export function createHttpClient(opts: HttpClientOptions): ApiClient & EventSour
     computers: createComputersApi(http),
     conversations: createConversationsApi(http),
     items: createItemsApi(http),
+    voiceCalls: createVoiceCallsApi(http),
     runs: createRunsApi(http),
     requests: createRequestsApi(http),
     tasks: createTasksApi(http),

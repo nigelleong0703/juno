@@ -523,7 +523,7 @@ describe("UF6 composer controls", () => {
   it("never shows a Stop square without a stop handler, even when running", () => {
     renderComposer({ running: true });
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Submit" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Voice input" })).toBeDefined();
   });
 
   it("shows voice and send controls at idle, never Stop", () => {

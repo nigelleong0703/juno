@@ -194,6 +194,18 @@ describe("ConversationView", () => {
     expect(screen.queryByRole("button", { name: t("chat.more") })).toBeNull();
     expect(screen.getByRole("button", { name: t("chat.computer.show") })).toBeDefined();
   });
+  it("offers a call only in a direct chat with one agent, never in a group or a channel chat", () => {
+    const { unmount } = renderView({});
+    expect(screen.getByRole("button", { name: t("call.start", { name: "Juno" }) })).toBeDefined();
+    unmount();
+
+    renderView({ conversation: makeConversation({ id: "conv-room", kind: "room", agentIds: ["agent-1", "agent-2"] }) });
+    expect(screen.queryByRole("button", { name: /^Call / })).toBeNull();
+    cleanup();
+
+    renderView({ conversation: { ...makeConversation({ id: "conv-tg" }), channel: { kind: "telegram" } } as Conversation });
+    expect(screen.queryByRole("button", { name: /^Call / })).toBeNull();
+  });
   it("shows the computer toggle unpressed when the pane cannot be open", () => {
     useUiStore.setState({ layoutSynced: false });
     renderView({
@@ -323,7 +335,7 @@ describe("ConversationView", () => {
     expect(
       screen.queryByText(t("chat.status.workingOn", { title: "Someone else's task" })),
     ).toBeNull();
-    expect(screen.getByRole("button", { name: "Submit" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Voice input" })).toBeDefined();
   });
 
   it("H-93: shows Stop for this chat's running run and stops that run", () => {
@@ -342,7 +354,7 @@ describe("ConversationView", () => {
       onStopRun: () => {},
     });
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Submit" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Voice input" })).toBeDefined();
   });
 
   it("H-94: shows Stop for this chat's run waiting for the user's answer and stops that run", () => {
@@ -424,7 +436,7 @@ describe("ConversationView", () => {
     if (!(header instanceof HTMLElement)) throw new Error("conversation header not found");
     expect(header.textContent).not.toContain("Reading the inbox");
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Submit" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Voice input" })).toBeDefined();
   });
 
   it("dispatches a system row action through onSystemAction", () => {

@@ -48,10 +48,10 @@ export function AgentLibrary() {
   } else if (library.isError) {
     body = <ErrorState title={t("common.error")} onRetry={() => void library.refetch()} />;
   } else if (items.length === 0) {
-    body = <EmptyState title={narrowed ? t("library.noMatch") : t("library.empty")} description={narrowed ? undefined : t("library.emptyHint")} />;
+    body = <EmptyState centered title={narrowed ? t("library.noMatch") : t("library.empty")} description={narrowed ? t("library.noMatchHint") : t("library.emptyHint")} />;
   } else {
     body = (
-      <div data-slot="library-grid" className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+      <div data-slot="library-grid" className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4">
         {items.map((item: LibraryItem) => (
           <ArtifactCell
             key={item.id}
@@ -66,10 +66,11 @@ export function AgentLibrary() {
   }
 
   return (
-    <PageFrame fullWidth title={t("library.title")} scope={<AgentScopeButton bubble agents={agents} value={agentId} onChange={setAgentId} />}>
-      <div className="flex flex-wrap items-center gap-3 px-5 pb-4">
-        <SearchField className="w-60" size="sm" value={query} onValueChange={setQuery} placeholder={t("library.search")} />
+    <PageFrame title={t("library.title")} scope={<AgentScopeButton bubble agents={agents} value={agentId} onChange={setAgentId} />}>
+      <div className="flex flex-col gap-3 px-5 pb-4 pt-8">
+        <SearchField value={query} onValueChange={setQuery} placeholder={t("library.search")} />
         <SegmentedControl
+          fill
           aria-label={t("library.filter")}
           value={filter}
           onValueChange={(value) => setFilter(value as LibraryFilter)}
@@ -77,7 +78,7 @@ export function AgentLibrary() {
         />
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="mx-auto w-full max-w-6xl px-5 pb-10">{body}</div>
+        <div className="px-5 pb-10">{body}</div>
       </ScrollArea>
     </PageFrame>
   );

@@ -209,8 +209,9 @@ export function ChatRow({
           <span className="min-w-0 truncate text-base font-semibold text-fg">{name}</span>
           {conversation.channel && <ChannelBadge kind={conversation.channel.kind} iconOnly className="self-center" />}
           {conversation.muted && <BellOff aria-label={t("chatList.unmute")} className="size-3 shrink-0 self-center text-fg-subtle" />}
+          {/* An empty chat has no last message: its creation time is not a message time. */}
           <span className={cn("ml-auto shrink-0 text-xs", unread > 0 ? "text-fg" : "text-fg-subtle/80")}>
-            {formatChatTime(conversation.lastItemAt)}
+            {subtitle.text ? formatChatTime(conversation.lastItemAt) : ""}
           </span>
         </span>
         <span className="flex items-start gap-2">

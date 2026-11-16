@@ -118,6 +118,8 @@ final class World {
     var appActive = true
     var markReadTask: Task<Void, Never>?
     var sheet: SheetRoute?
+    /// The voice call in progress (ActiveCall.swift), shown full screen or minimized to the call bar.
+    var call: ActiveCall?
     /// The agent page (pushed onto the selected tab's stack, zooming out of the avatar named by `sourceId`).
     var agentPage: AgentPageTarget?
     /// The Feed post page (a full-screen cover like the agent page, zooming out of the card `feed-<id>`).
@@ -245,8 +247,9 @@ final class World {
         }
     }
 
+    /// The agent's own chat in the app; a platform chat with it (Feishu, Telegram) is direct too but never this one.
     func directConversation(for agentId: String) -> Conversation? {
-        conversations.first { $0.kind == "direct" && $0.agentIds == [agentId] }
+        conversations.first { $0.kind == "direct" && $0.agentIds == [agentId] && !$0.isChannelChat }
     }
 
     /// A question or connect card in a direct chat is the agent talking, not the owner being needed: it stays inline in

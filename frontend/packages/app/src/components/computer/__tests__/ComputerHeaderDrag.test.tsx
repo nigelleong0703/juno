@@ -192,7 +192,7 @@ describe("ComputerPane header native drag", () => {
   it("no-computer header exposes the shared slot with a bare draggable spacer", async () => {
     const { container } = renderPane(createNoComputerClient());
 
-    await waitFor(() => expect(screen.getByText(tc("computer.noComputerHint"))).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(tc("computer.noComputerHint", { name: "Juno" }))).toBeTruthy());
     expectDragContract(headerOf(container));
     // Header access survives the missing machine.
     expect(screen.getByLabelText(tc("computer.action.settings"))).toBeTruthy();

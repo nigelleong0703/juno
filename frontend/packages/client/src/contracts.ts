@@ -20,6 +20,7 @@ import type {
   ReviewMemoryItemInput,
   UpdateMemoryItemInput,
   Unsubscribe,
+  VoiceCallSession,
 } from '@agent-desktop/public-contracts';
 import type {
   AppSettingsResponse,
@@ -202,9 +203,19 @@ export interface ComputersApi extends Omit<PublicComputersApi, 'takeOverScreen' 
   returnControlScreen(screenId: Id, options?: ControlOptions): Promise<ScreenResponse>;
 }
 
+/**
+ * In-app voice calls. `start` opens a fresh room for a direct one-agent chat (`POST /v1/conversations/:id/voice-calls`);
+ * the credential is short-lived (10 min) and used at once. Errors: 400 VOICE_CALL_UNSUPPORTED (not a direct one-agent
+ * chat), 503 VOICE_CALL_UNAVAILABLE.
+ */
+export interface VoiceCallsApi {
+  start(conversationId: Id): Promise<VoiceCallSession>;
+}
+
 export interface ApiClient extends Omit<PublicApiClient, 'settings' | 'feed' | 'routines' | 'conversations' | 'computers'> {
   computers: ComputersApi;
   conversations: ConversationsApi;
+  voiceCalls: VoiceCallsApi;
   settings: SettingsApi;
   feed: FeedApi;
   routines: RoutinesApiWithWebhook;

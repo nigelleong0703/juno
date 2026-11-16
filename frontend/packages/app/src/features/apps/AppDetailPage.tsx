@@ -23,7 +23,7 @@ import { DetailPage } from "../../templates/DetailPage";
 import { ShowMore, useCapped } from "../agents/card/parts";
 import { AppAccounts } from "./AppAccounts";
 import { AppActions, AppAgents } from "./AppAgents";
-import { canAdd, expiredInstallation, isAdded, sourceNote, stateLabel } from "../../lib/apps";
+import { canAdd, expiredInstallation, isAdded, sourceNote, stateLabel, withAgentName } from "../../lib/apps";
 import { ChatConnectDialog } from "./chat/ChatConnectDialog";
 import type { ChatKind } from "./chat/flows";
 import { ConfigDialog } from "./ConfigDialog";
@@ -183,7 +183,7 @@ export function AppDetailPage() {
           <section aria-label={t("apps.tryAsking")} className="flex flex-col gap-2.5">
             <h2 className="text-sm font-semibold text-fg">{t("apps.tryAsking")}</h2>
             <div className="flex flex-wrap gap-2">
-              {app.tryAsking.map((prompt) => (
+              {app.tryAsking.map((raw) => withAgentName(raw, agents?.[0]?.name)).map((prompt) => (
                 <button
                   key={prompt}
                   type="button"

@@ -3,11 +3,13 @@ import { cn } from "@agent-desktop/ui";
 import type { ReactNode } from "react";
 import type { FramebufferSize, LiveScreenTarget } from "./types";
 import { NoVncSurface } from "./live/NoVncSurface";
+import { VoxlSurface } from "./live/VoxlSurface";
 import type { ScreenClipboardBridge } from "./live/screenClipboard";
 
 /**
- * The live picture of an agent's virtual computer (§6). It mounts a real `@novnc/novnc` session
- * against a signed websockify target; with no target it renders the caller's honest placeholder.
+ * The live picture of an agent's virtual computer (§6). A target with `voxlUrl` mounts the voxl
+ * player (an iframe of voxl's web client); otherwise it mounts a real `@novnc/novnc` session
+ * against a signed websockify target. With no target it renders the caller's honest placeholder.
  * There is no fabricated fallback desktop.
  *
  * `SCREEN_WIDTH`/`SCREEN_HEIGHT` are only the fallback for placeholders; the live
@@ -21,7 +23,7 @@ export const SCREEN_ASPECT = SCREEN_WIDTH / SCREEN_HEIGHT;
 
 export interface LiveScreenProps {
   computer: Computer;
-  /** Websocket endpoint for the `novnc` adapter. */
+  /** The stream: `voxlUrl` selects the voxl player, else the websocket `url` goes to noVNC. */
   target?: LiveScreenTarget | null;
   /** Watch (true, default) vs control (false) — noVNC only. */
   viewOnly?: boolean;
@@ -55,7 +57,9 @@ export function LiveScreen({
 }: LiveScreenProps) {
   return (
     <div className={cn("relative h-full w-full overflow-hidden bg-[#0b1220]", className)}>
-      {target ? (
+      {target?.voxlUrl ? (
+        <VoxlSurface target={target} viewOnly={viewOnly} onReconnect={onReconnect} screenKey={screenKey} />
+      ) : target ? (
         <NoVncSurface
           target={target}
           viewOnly={viewOnly}

@@ -68,14 +68,14 @@ async function chooseTier(label: string, option: string) {
 }
 
 describe("production agent surfaces (no planned provider)", () => {
-  it("renders the agent panel with its identity and the five management tabs", async () => {
+  it("renders the agent panel with its identity and the six management tabs", async () => {
     const { client, agent } = await seed();
     // No creator on record: the signed-in person may edit it.
     wrap(client, <AgentProfile agent={{ ...agent, createdBy: undefined }} />);
 
     expect(await screen.findByRole("heading", { name: agent.name, level: 2 })).toBeDefined();
-    const names = screen.getAllByRole("radio").map((radio) => radio.getAttribute("aria-label"));
-    expect(names).toEqual(["Activity", "Permissions", "Apps", "Automations", "Memory"]);
+    const names = screen.getAllByRole("radio").map((radio) => radio.textContent);
+    expect(names).toEqual(["Activity", "Apps", "Permissions", "Computer", "Automations", "Memory"]);
     // The pencil opens the Edit agent dialog; the identity files sit behind the Memory tab.
     fireEvent.click(screen.getByRole("button", { name: "Edit agent" }));
     expect(await screen.findByLabelText("Name")).toBeDefined();
@@ -124,12 +124,12 @@ describe("production agent surfaces (no planned provider)", () => {
     expect(await screen.findByRole("button", { name: /Open in Library/ })).toBeDefined();
     expect(screen.getByTestId("computer-pane").parentElement?.parentElement?.hasAttribute("hidden")).toBe(true);
 
-    // The header's name opens the management dropdown: the profile with its four tabs, no Computer.
+    // The header's name opens the management dropdown: the profile with its six tabs.
     fireEvent.click(screen.getByRole("button", { name: `Manage ${agent.name}` }));
     expect(await screen.findByRole("heading", { name: agent.name, level: 2 })).toBeDefined();
     const dropdown = document.querySelector<HTMLElement>("[data-slot=popover-content]");
     if (!dropdown) throw new Error("management dropdown not open");
-    expect(within(dropdown).getAllByRole("radio").map((radio) => radio.getAttribute("aria-label"))).toEqual(["Activity", "Permissions", "Apps", "Automations", "Memory"]);
+    expect(within(dropdown).getAllByRole("radio").map((radio) => radio.textContent)).toEqual(["Activity", "Apps", "Permissions", "Computer", "Automations", "Memory"]);
   });
 
   it("picks whose computer the workspace shows in a group chat", async () => {

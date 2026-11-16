@@ -1,5 +1,9 @@
 import type { Agent, Mention } from "@agent-desktop/client";
 import { ThemeProvider, TooltipProvider } from "@agent-desktop/ui";
+import { createMockClient } from "@agent-desktop/test-fixtures";
+import { QueryClient } from "@tanstack/react-query";
+import { ClientProvider } from "../../../data/ClientProvider";
+import { createWebPlatform } from "../../../platform";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AgentMessageItem, UserMessageItem } from "../../../lib/items";
@@ -40,7 +44,11 @@ function message(text: string, mentions: Mention[] = [mention]): UserMessageItem
   };
 }
 function show(item: UserMessageItem, agentById = lookup) {
-  return render(<UserMessage item={item} agentById={agentById} />);
+  return render(
+    <ClientProvider client={createMockClient()} queryClient={new QueryClient()} platform={createWebPlatform()}>
+      <UserMessage item={item} agentById={agentById} />
+    </ClientProvider>,
+  );
 }
 
 describe("canonical message mention presentation", () => {
@@ -133,7 +141,7 @@ describe("canonical message mention presentation", () => {
     const { container } = show(item);
     expect(container.querySelector("p")?.textContent).toBe(item.text);
     expect(screen.getByText("notes.txt")).toBeDefined();
-    expect(screen.getByText("2.0 KB")).toBeDefined();
+    expect(screen.getByText("TXT · 2.0 KB")).toBeDefined();
     expect(container.querySelector("[data-agent-id]")).toBeNull();
   });
 

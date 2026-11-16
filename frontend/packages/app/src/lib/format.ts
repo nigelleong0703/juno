@@ -88,6 +88,23 @@ export function formatDaySeparator(
   return date.toLocaleDateString(undefined, sameYear ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" });
 }
 
+/** A pause this long between two messages starts a new time marker in the transcript. */
+export const TIME_BLOCK_GAP_MS = 60 * 60_000;
+
+/** Whether a message at `at` opens a new time block after the one at `previous`: a new day, or an hour's pause. */
+export function opensTimeBlock(at: string, previous: string): boolean {
+  const a = new Date(at);
+  const b = new Date(previous);
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return false;
+  return a.toDateString() !== b.toDateString() || a.getTime() - b.getTime() >= TIME_BLOCK_GAP_MS;
+}
+
+/** The time of day in the reader's locale, e.g. "14:05" or "2:05 PM". */
+export function formatClock(value: string | number | Date): string {
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
 /** The iPhone's short relative time: "now", "5m ago", "2h ago", "3d ago", "2w ago", "4mo ago", "1y ago". */
 export function formatAgo(value: string | number | Date | undefined, now: number = Date.now()): string {
   if (value === undefined) return "";

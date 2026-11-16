@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { APP_ORIGIN, APP_URL, isAssetPathConfined, mimeForPath, resolveAssetPath } from "./asset-protocol";
+import { APP_ORIGIN, APP_URL, isAssetPathConfined, mimeForPath, originOf, resolveAssetPath } from "./asset-protocol";
 
 const ROOT = resolve("/packaged/renderer");
 const at = (path: string): string => resolve(ROOT, path);
@@ -95,5 +95,14 @@ describe("isAssetPathConfined", () => {
     expect(isAssetPathConfined(ROOT, ROOT)).toBe(false);
     expect(isAssetPathConfined(ROOT, resolve(ROOT, "..", "secret.txt"))).toBe(false);
     expect(isAssetPathConfined(ROOT, "/etc/passwd")).toBe(false);
+  });
+});
+
+describe("originOf", () => {
+  it("reads the app's own custom-scheme page as APP_ORIGIN (microphone requests were refused because Node said \"null\")", () => {
+    expect(originOf(APP_ORIGIN + "/index.html#/c/abc")).toBe(APP_ORIGIN);
+    expect(originOf("http://localhost:5200/x")).toBe("http://localhost:5200");
+    expect(originOf("https://evil.example/electron://app")).toBe("https://evil.example");
+    expect(originOf("not a url")).toBeUndefined();
   });
 });

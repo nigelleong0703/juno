@@ -69,7 +69,7 @@ export function DiscoverPage() {
   return (
     <PageFrame title={t("discover.title")}>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="mx-auto flex w-full max-w-xl flex-col gap-5 px-4 pb-10">
+        <div className="mx-auto flex w-full flex-col gap-5 px-5 pb-10 pt-8">
           <SearchField value={query} onValueChange={setQuery} placeholder={t("discover.search")} />
           {featured ? (
             <section
@@ -93,7 +93,7 @@ export function DiscoverPage() {
 
           <SegmentedControl
             aria-label={t("discover.title")}
-            className="self-center"
+            fill
             value={category}
             onValueChange={(value) => setCategory(value as Category)}
             items={[
@@ -108,7 +108,7 @@ export function DiscoverPage() {
             skills.isLoading ? (
               <LoadingState label={t("common.loading")} />
             ) : (
-              <SkillList skills={skillRows} searching={text !== ""} />
+              <SkillList skills={skillRows} searching={text !== ""} quietWhenEmpty={category === "all" && (templates.length > 0 || featured !== undefined)} />
             )
           ) : null}
 
@@ -123,6 +123,7 @@ function TemplateList({ templates, busy, onInstall }: { templates: RoleTemplate[
   const capped = useCapped(templates, LIST_LIMIT);
   return (
     <section aria-label={t("discover.agents")} className="flex flex-col gap-2">
+      <h2 className="text-lg font-semibold text-fg">{t("discover.agents")}</h2>
       {capped.shown.map((template) => (
         <div key={template.slug} className="flex items-center gap-3 rounded-2xl bg-muted/70 p-2.5 pr-3">
           <TemplateAvatar template={template} size={40} />
@@ -132,7 +133,7 @@ function TemplateList({ templates, busy, onInstall }: { templates: RoleTemplate[
             </span>
             <span className="block truncate text-[13px] text-fg-muted">{template.blurb}</span>
           </span>
-          <Button size="xs" className="rounded-full" disabled={busy} onClick={() => onInstall(template)}>
+          <Button size="xs" className="rounded-full bg-card text-fg hover:bg-card/70" disabled={busy} onClick={() => onInstall(template)}>
             {t("discover.install")}
           </Button>
         </div>
@@ -142,11 +143,13 @@ function TemplateList({ templates, busy, onInstall }: { templates: RoleTemplate[
   );
 }
 
-function SkillList({ skills, searching }: { skills: Skill[]; searching: boolean }) {
+/** `quietWhenEmpty`: the "All" list already shows agents, so "nothing in this category" would contradict it. */
+function SkillList({ skills, searching, quietWhenEmpty }: { skills: Skill[]; searching: boolean; quietWhenEmpty: boolean }) {
   const capped = useCapped(skills, LIST_LIMIT);
-  if (skills.length === 0) return <EmptyState title={searching ? t("discover.noMatch") : t("discover.empty")} />;
+  if (skills.length === 0) return quietWhenEmpty ? null : <EmptyState title={searching ? t("discover.noMatch") : t("discover.empty")} />;
   return (
     <section aria-label={t("discover.skills")} className="flex flex-col gap-2">
+      <h2 className="text-lg font-semibold text-fg">{t("discover.skills")}</h2>
       {capped.shown.map((skill) => (
         <SkillRow key={skill.id} skill={skill} />
       ))}

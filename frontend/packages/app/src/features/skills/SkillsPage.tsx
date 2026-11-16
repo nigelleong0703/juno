@@ -59,25 +59,20 @@ export function SkillsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg">
-      <PageHeader
-        title={t("skills.title")}
-        subtitle={skills ? `${skills.length} skills` : undefined}
-        actions={
-          <Button variant="primary" size="sm" onClick={() => setCreating(true)}>
-            <Plus className="size-3.5" />
-            New skill
-          </Button>
-        }
-      />
+      <PageHeader title={t("skills.title")} />
 
       <div className="mx-auto flex w-full max-w-4xl items-center gap-2 px-5 py-3">
         <SearchField
-          className="w-72"
+          className="min-w-0 flex-1"
           size="sm"
           value={query}
           onValueChange={setQuery}
-          placeholder="Search skills…"
+          placeholder="Search"
         />
+        <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setCreating(true)}>
+          <Plus className="size-3.5" />
+          New skill
+        </Button>
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
@@ -87,15 +82,7 @@ export function SkillsPage() {
           ) : isError ? (
             <ErrorState title={t("common.error")} onRetry={() => void refetch()} />
           ) : items.length === 0 ? (
-            <EmptyState
-              title={t("skills.empty")}
-              description={t("skills.emptyHint")}
-              action={
-                <Button variant="secondary" size="sm" onClick={() => setCreating(true)}>
-                  New skill
-                </Button>
-              }
-            />
+            <EmptyState title={t("skills.empty")} description={t("skills.emptyHint")} />
           ) : (
             <ul>
               {items.map((skill) => {

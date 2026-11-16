@@ -141,6 +141,7 @@ export function AppShell({ renderPane }: AppShellProps) {
               data-rail-panel={railPanel ? "" : undefined}
             >
               <main
+                data-slot="shell-main"
                 data-computer={tracks.displayedComputer ? "" : undefined}
                 className="relative isolate flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-bg"
                 style={{

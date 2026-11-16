@@ -3,7 +3,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuTrigger,
   InputGroupAddon,
   PromptInput,
@@ -198,6 +197,7 @@ export function Composer({
 
   // An attachment alone is a sendable message; text alone is too.
   const canSend = (value.trim().length > 0 || attachments.length > 0) && !uploading && !disabled;
+  const showSend = canSend && dictation.phase === "idle";
 
   // Owner feedback (UF6): the Stop control renders only in an actually cancellable
   // state - a live run AND a stop handler (same convention as RunBlock). A Stop square
@@ -503,7 +503,6 @@ export function Composer({
                 </PromptInputButton>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-56">
-                <DropdownMenuLabel>{t("composer.add")}</DropdownMenuLabel>
                 <DropdownMenuItem onSelect={() => fileInput.current?.click()}>
                   <Paperclip className="size-4" />
                   {t("composer.attach")}
@@ -534,7 +533,16 @@ export function Composer({
               </PromptInputSubmit>
             ) : (
               <>
-                {/* Dictation: tap to record, tap again to stop; the clip is transcribed by the backend. */}
+                {/* Like the iPhone: the mic while there is nothing to send, the send arrow once there is. */}
+                {showSend ? (
+                  <PromptInputSubmit
+                    status="ready"
+                    className={accent ? "bg-[var(--agent-accent)] text-[var(--agent-accent-fg)] hover:bg-[var(--agent-accent)] hover:brightness-95" : undefined}
+                  >
+                    <ArrowUp className="size-4" />
+                  </PromptInputSubmit>
+                ) : (
+                  /* Dictation: tap to record, tap again to stop; the clip is transcribed by the backend. */
                 <PromptInputButton
                   tooltip={dictation.phase === "recording" ? t("composer.voiceStop") : t("composer.voice")}
                   aria-label={dictation.phase === "recording" ? t("composer.voiceStop") : t("composer.voice")}
@@ -555,14 +563,7 @@ export function Composer({
                     <Mic className="size-4" />
                   )}
                 </PromptInputButton>
-
-                <PromptInputSubmit
-                  status="ready"
-                  disabled={!canSend}
-                  className={accent && canSend ? "bg-[var(--agent-accent)] text-[var(--agent-accent-fg)] hover:bg-[var(--agent-accent)] hover:brightness-95" : undefined}
-                >
-                  <ArrowUp className="size-4" />
-                </PromptInputSubmit>
+                )}
               </>
             )}
           </InputGroupAddon>

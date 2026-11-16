@@ -1,13 +1,13 @@
 import type { Agent } from "@agent-desktop/client";
 import { useAuthIdentity, usePeople } from "../../auth/AuthContext";
-import { Message, MessageContent, cn } from "@agent-desktop/ui";
-import { CircleAlert, Paperclip } from "lucide-react";
+import { Message, MessageContent } from "@agent-desktop/ui";
+import { CircleAlert } from "lucide-react";
 import { t } from "../../lib/i18n";
 import { ChannelMarker } from "../channel/platforms";
-import { formatBytes } from "../../lib/format";
 import type { UserMessageItem } from "../../lib/items";
 import { splitQuote } from "../../lib/quote";
 import { MentionText } from "./MentionText";
+import { MessageAttachments } from "./MessageAttachments";
 import { MessageMenu, QuoteCard, type ReplyTarget } from "./MessageMenu";
 
 export interface UserMessageProps {
@@ -41,6 +41,7 @@ export function UserMessage({ item, agentById, onOpenAgent, refused, onReply, on
   const bubble = (
     <MessageMenu
       itemId={item.id}
+      at={item.at}
       copyText={body}
       align={stranger ? "start" : "end"}
       reaction={item.reaction}
@@ -63,7 +64,10 @@ export function UserMessage({ item, agentById, onOpenAgent, refused, onReply, on
         <span className="pr-0.5 text-xs font-medium text-fg-subtle">{memberName(item.authorId)}</span>
       ) : null}
 
-      {refused ? (
+      {item.attachments.length > 0 ? <MessageAttachments attachments={item.attachments} align={stranger ? "start" : "end"} /> : null}
+
+      {/* A message that is only a file shows no empty bubble. */}
+      {body.trim() === "" && quote === undefined && item.attachments.length > 0 ? null : refused ? (
         <div className="flex items-center justify-end gap-1.5">
           <CircleAlert role="img" aria-label={t("agentStatus.refusedMark")} className="size-3.5 shrink-0 text-danger" />
           {bubble}
@@ -74,24 +78,6 @@ export function UserMessage({ item, agentById, onOpenAgent, refused, onReply, on
 
       {item.source ? <ChannelMarker kind={item.source.kind} direction="from" className={stranger ? "self-start pl-0.5" : "self-end pr-0.5"} /> : null}
 
-      {item.attachments.length > 0 && (
-        <div className={cn("flex flex-wrap gap-1.5", stranger ? "justify-start" : "justify-end")}>
-          {item.attachments.map((attachment) => (
-            <span
-              key={attachment.id}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-[10px] border border-border bg-surface px-2 py-1 text-xs text-fg-muted",
-              )}
-            >
-              <Paperclip className="size-3" />
-              <span className="max-w-48 truncate">{attachment.name}</span>
-              {attachment.sizeBytes !== undefined && (
-                <span className="text-fg-subtle">{formatBytes(attachment.sizeBytes)}</span>
-              )}
-            </span>
-          ))}
-        </div>
-      )}
     </Message>
   );
 }

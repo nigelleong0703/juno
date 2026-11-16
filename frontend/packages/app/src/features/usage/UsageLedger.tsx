@@ -2,20 +2,10 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useClient } from "../../data/ClientProvider";
 import { useAgents } from "../../data/queries";
-import { formatCount, formatUsd } from "../../lib/format";
+import { formatDateTime, isKnownModel, NOT_AVAILABLE, runsLabel, spendLabel, tokenLabel } from "./usageLabels";
 
 const LEDGER_PAGE_LIMIT = 25;
 const FIRST_LEDGER_CURSOR: string | undefined = undefined;
-
-/** A spend with an unknown price renders as unknown, never as a free $0.00. */
-function spendLabel(entry: { costUsd: number; costKnown?: boolean }): string {
-  return entry.costKnown === false ? "Unknown" : formatUsd(entry.costUsd);
-}
-
-/** Unmeasured counters are unknown, not a real zero. */
-function tokenLabel(entry: { measured?: boolean }, count: number): string {
-  return entry.measured === false ? "Unknown" : formatCount(count);
-}
 
 /**
  * Ledger: every run's spend, newest first, with an agent filter and per-model totals. With `agentId` it shows
@@ -39,7 +29,7 @@ export function UsageLedger({ agentId: scopedAgentId }: { agentId?: string }) {
   });
 
   const rows = ledger.data?.pages.flatMap((page) => page.items) ?? [];
-  const byModel = ledger.data?.pages[0]?.byModel ?? [];
+  const byModel = (ledger.data?.pages[0]?.byModel ?? []).filter((entry) => isKnownModel(entry.model));
   const agentName = (id: string) => agents?.find((entry) => entry.id === id)?.name ?? id;
 
   return (
@@ -80,13 +70,15 @@ export function UsageLedger({ agentId: scopedAgentId }: { agentId?: string }) {
         <p className="mt-2 text-sm text-fg-muted">No runs yet.</p>
       ) : (
         <>
-          <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-subtle">
-            {byModel.map((entry) => (
-              <li key={entry.model}>
-                {entry.model}: {spendLabel(entry)} · {formatCount(entry.runs)} runs
-              </li>
-            ))}
-          </ul>
+          {byModel.length > 0 && (
+            <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-fg-subtle">
+              {byModel.map((entry) => (
+                <li key={entry.model}>
+                  {entry.model}: {spendLabel(entry)} · {runsLabel(entry.runs)}
+                </li>
+              ))}
+            </ul>
+          )}
           <div className="mt-3 overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="text-fg-subtle">
@@ -103,7 +95,7 @@ export function UsageLedger({ agentId: scopedAgentId }: { agentId?: string }) {
                 {rows.map((row) => (
                   <tr key={row.runId} className="border-t border-border">
                     <td className="py-1.5 pr-3 tabular-nums">
-                      {new Date(row.startedAt).toLocaleString()}
+                      {formatDateTime(row.startedAt)}
                     </td>
                     <td className="py-1.5 pr-3">
                       {agentName(row.agentId)}
@@ -111,7 +103,7 @@ export function UsageLedger({ agentId: scopedAgentId }: { agentId?: string }) {
                         <span className="ml-1 text-fg-subtle">(child of {row.parentRunId})</span>
                       )}
                     </td>
-                    <td className="py-1.5 pr-3">{row.model ?? "unknown"}</td>
+                    <td className="py-1.5 pr-3">{isKnownModel(row.model) ? row.model : NOT_AVAILABLE}</td>
                     <td className="py-1.5 pr-3 text-right tabular-nums">
                       {tokenLabel(row, row.inputTokens)}
                     </td>

@@ -12,12 +12,12 @@ import {
   ListRow,
 } from "@agent-desktop/ui";
 import { ChevronDown, MoreHorizontal, Plus } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { errorCode } from "../../data/model-providers";
 import { useProfile, useSaveProfile } from "../../data/profile";
 import { useAgents } from "../../data/queries";
 import { EntryDialog, type EntryDraft } from "./DetailDialogs";
-import { Group } from "./SettingsGroup";
+import { Group, SettingsTitle } from "./SettingsGroup";
 
 /** Rows shown before "Show N more". */
 const VISIBLE_ROWS = 8;
@@ -38,22 +38,25 @@ function sourceLine(entry: ProfileEntry, agentName: string | undefined): string 
   return `Learned by ${agentName ?? "your agent"} · ${day}`;
 }
 
-export function YourDetailsSection() {
+export function YourDetailsSection({ title, before }: { title: string; before: ReactNode }) {
   const profile = useProfile();
   const save = useSaveProfile();
   const agents = useAgents();
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState<{ id: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  if (profile.isPending) return null;
+  if (profile.isPending) return <SettingsTitle title={title} />;
   if (profile.isError) {
     return (
-      <p className="text-sm text-fg-muted">
-        Could not load your details.{" "}
-        <button type="button" className="underline" onClick={() => void profile.refetch()}>
-          Retry
-        </button>
-      </p>
+      <>
+        <SettingsTitle title={title} />
+        <p className="text-sm text-fg-muted">
+          Could not load your details.{" "}
+          <button type="button" className="underline" onClick={() => void profile.refetch()}>
+            Retry
+          </button>
+        </p>
+      </>
     );
   }
   const entries = profile.data.entries;
@@ -79,19 +82,16 @@ export function YourDetailsSection() {
 
   return (
     <div className="space-y-6">
-      <header className="space-y-1">
-        <p className="text-xs text-fg-muted">
-          Details your agents fill into forms for you, so you do not retype them. They add what they learn here, and you can edit or remove anything.
-          Passwords and card details never go here.
-        </p>
-      </header>
-      <Group
+      <SettingsTitle
+        title={title}
         action={
-          <Button variant="secondary" size="sm" onClick={() => setEditing({ id: null })}>
-            <Plus className="size-3.5" /> Add
-          </Button>
+          <IconButton label="Add" size="sm" onClick={() => setEditing({ id: null })}>
+            <Plus className="size-4" />
+          </IconButton>
         }
-      >
+      />
+      {before}
+      <Group>
         {entries.length === 0 && <p className="px-2.5 py-2 text-sm text-fg-muted">{EMPTY}</p>}
         {shown.map((entry) => (
           <ListRow
@@ -153,6 +153,9 @@ export function YourDetailsSection() {
           </p>
         )}
       </Group>
+      <p className="px-1 text-xs text-fg-subtle">
+        Your agents fill these into forms for you, so you do not retype them. They add what they learn here, and you can edit or remove anything. Passwords and card details never go here.
+      </p>
       {editing && (
         <EntryDialog
           key={editing.id ?? "new"}

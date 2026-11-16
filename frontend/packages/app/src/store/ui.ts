@@ -169,7 +169,7 @@ export const useUiStore = create<UiPrefs>()(
     }),
     {
       name: "agent-desktop-ui-prefs",
-      version: 3,
+      version: 5,
       migrate: (persisted, version) => {
         const parsed = legacyPrefs.safeParse(persisted);
         if (!parsed.success) return {};
@@ -178,7 +178,9 @@ export const useUiStore = create<UiPrefs>()(
         const previousDefault =
           (version === 0 && width === 380) ||
           (version === 1 && width === 560) ||
-          (version === 2 && width === 680);
+          (version === 2 && width === 680) ||
+          // 4 shipped 560 for one day (2026-11-06), then the owner restored their 860 layout.
+          (version === 4 && width === 560);
         const computerPaneSize = width === undefined || previousDefault
           ? COMPUTER_DEFAULT_WIDTH
           : Math.max(COMPUTER_MIN_WIDTH, width ?? COMPUTER_DEFAULT_WIDTH);

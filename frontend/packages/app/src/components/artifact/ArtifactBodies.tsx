@@ -1,7 +1,7 @@
 import type { LibraryItem, Space } from "@agent-desktop/client";
 import { Button, IconButton, Markdown, RelativeTime, cn } from "@agent-desktop/ui";
 import { useQuery } from "@tanstack/react-query";
-import { AppWindow, ExternalLink, ZoomIn, ZoomOut } from "lucide-react";
+import { ExternalLink, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useClient, usePlatform } from "../../data/ClientProvider";
 import { formatBytes } from "../../lib/format";
@@ -9,6 +9,7 @@ import { decodeBase64, fileFormat } from "../conversation/artifactPreview";
 import { FileContentPreview } from "../chat-files/FileContentPreview";
 import { PdfFilePreview } from "../chat-files/PdfFilePreview";
 import { fileBlob, loadItemFile, useObjectUrl } from "./artifactBytes";
+import { ArtifactThumb } from "./ArtifactThumb";
 import { latestVersion, spaceStatusLabel } from "./artifactKind";
 
 /** A centred line for a body that cannot show its content. */
@@ -218,7 +219,7 @@ export function FileFacts({ item, agentName }: { item: LibraryItem; agentName?: 
 }
 
 /** A running app: its status and one button that opens it in the browser. The app itself is never embedded. */
-export function SpaceBody({ item, space, onOpened, onReady }: ViewerBodyProps & { space: Space | undefined; onOpened: () => void }) {
+export function SpaceBody({ item, space, agentName, onOpened, onReady }: ViewerBodyProps & { space: Space | undefined; onOpened: () => void }) {
   const client = useClient();
   const platform = usePlatform();
   const [opening, setOpening] = useState(false);
@@ -228,6 +229,7 @@ export function SpaceBody({ item, space, onOpened, onReady }: ViewerBodyProps & 
   }, [onReady]);
   const status = spaceStatusLabel(space?.status);
   const paused = space?.status === "computer_paused";
+  const running = space?.status === "running";
   const spaceId = item.spaceId;
 
   async function open(): Promise<void> {
@@ -246,20 +248,33 @@ export function SpaceBody({ item, space, onOpened, onReady }: ViewerBodyProps & 
     }
   }
 
+  // The app's page: its picture on the left, who made it, when, whether it is running and Open on the right (owner design 2026-11-06).
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6 text-center">
-      <span className="flex size-16 items-center justify-center rounded-2xl bg-bg-subtle text-fg-muted">
-        <AppWindow aria-hidden="true" className="size-7" />
-      </span>
-      <div className="min-w-0">
-        <p className="break-words text-base font-semibold text-fg">{item.name}</p>
-        {status ? <p className="mt-1 text-sm text-fg-muted">{status}</p> : null}
+    <div className="absolute inset-0 overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-6 py-10 md:flex-row md:items-center md:py-16">
+        <div className="aspect-[4/3] w-full shrink-0 overflow-hidden rounded-2xl border border-border bg-bg-subtle md:w-[440px]">
+          <ArtifactThumb item={item} className="size-full" />
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col items-start gap-3">
+          <h1 className="break-words text-2xl font-semibold text-fg">{item.name}</h1>
+          <p className="text-sm text-fg-muted">
+            {agentName ? <>Made by {agentName} · </> : null}
+            <RelativeTime date={item.updatedAt} />
+          </p>
+          {status ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-bg-subtle px-2.5 py-1 text-xs font-medium text-fg">
+              <span aria-hidden className={cn("size-1.5 rounded-full", running ? "bg-success" : paused ? "bg-warning" : "bg-fg-subtle")} />
+              {status}
+            </span>
+          ) : null}
+          <Button size="lg" variant={paused ? "secondary" : "default"} disabled={!spaceId || opening} onClick={() => void open()} className="mt-3">
+            <ExternalLink className="size-4" />
+            {opening ? "Opening…" : paused ? "Wake & open" : "Open"}
+          </Button>
+          <p className="text-xs text-fg-subtle">Opens in your browser.</p>
+          {error ? <p role="alert" className="text-xs text-danger">{error}</p> : null}
+        </div>
       </div>
-      <Button variant={paused ? "secondary" : "default"} disabled={!spaceId || opening} onClick={() => void open()}>
-        <ExternalLink className="size-4" />
-        {opening ? "Opening…" : paused ? "Wake & open" : "Open"}
-      </Button>
-      {error ? <p role="alert" className="text-xs text-danger">{error}</p> : null}
     </div>
   );
 }

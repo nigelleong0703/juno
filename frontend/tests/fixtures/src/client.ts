@@ -2791,6 +2791,7 @@ export function createMockClient(opts: MockClientOptions = {}): MockClient {
   const api: ApiClient = {
     inspiration,
     transcribe: () => Promise.reject(Object.assign(new Error('Dictation is not available in the demo'), { status: 503 })),
+    voiceCalls: { start: () => Promise.reject(Object.assign(new Error('Voice calls are not available in the demo'), { status: 503, code: 'VOICE_CALL_UNAVAILABLE' })) },
     macApps: () => Promise.resolve({ apps: [] }),
     revokeMacApp: () => Promise.reject(Object.assign(new Error('Not found'), { status: 404 })),
     // People and memory items (contract 0.60.0): the demo world has none, so the lists are empty.

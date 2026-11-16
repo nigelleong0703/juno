@@ -58,33 +58,40 @@ function useInspirationAction(): (card: Inspiration) => void {
  */
 export function InspirationCards({ cards, bare = false }: { cards: Inspiration[]; /** No heading: the caller titles the section. */ bare?: boolean }) {
   const { data: agents } = useAgents();
-  const perform = useInspirationAction();
-  const dismiss = useDismissInspiration();
   if (cards.length === 0) return null;
 
   return (
     <section aria-label={t("inspiration.title")} className="flex flex-col gap-2">
       {bare ? null : <h2 className="text-sm font-semibold text-fg-muted">{agents?.length ? t("inspiration.title") : t("inspiration.start")}</h2>}
       <ul className={CARD_GRID}>
-        {cards.map((card, index) => {
-          const unlock = card.action.type === "unlock";
-          return (
-            <li key={card.id}>
-              <SuggestionCard
-                agent={unlock ? undefined : agents?.find((a) => a.id === card.agentId)}
-                fallbackLeading={unlock ? <UnlockTile card={card} /> : <NoAgentTile tint={GLOW_TINTS[index % GLOW_TINTS.length] as string} />}
-                title={card.title}
-                reason={card.reason}
-                actionLabel={unlock ? card.prompt : cardLabel("start", `${card.title} ${card.prompt}`)}
-                onAction={() => perform(card)}
-                onDismiss={() => dismiss.mutate(card.id)}
-                dismissLabel={t("inspiration.dismiss")}
-              />
-            </li>
-          );
-        })}
+        {cards.map((card, index) => (
+          <li key={card.id}>
+            <InspirationCard card={card} index={index} />
+          </li>
+        ))}
       </ul>
     </section>
+  );
+}
+
+/** One server suggestion as a card; `index` picks the tint of a card that belongs to no agent. */
+export function InspirationCard({ card, index, className }: { card: Inspiration; index: number; className?: string }) {
+  const { data: agents } = useAgents();
+  const perform = useInspirationAction();
+  const dismiss = useDismissInspiration();
+  const unlock = card.action.type === "unlock";
+  return (
+    <SuggestionCard
+      {...(className ? { className } : {})}
+      agent={unlock ? undefined : agents?.find((a) => a.id === card.agentId)}
+      fallbackLeading={unlock ? <UnlockTile card={card} /> : <NoAgentTile tint={GLOW_TINTS[index % GLOW_TINTS.length] as string} />}
+      title={card.title}
+      reason={card.reason}
+      actionLabel={unlock ? card.prompt : cardLabel("start", `${card.title} ${card.prompt}`)}
+      onAction={() => perform(card)}
+      onDismiss={() => dismiss.mutate(card.id)}
+      dismissLabel={t("inspiration.dismiss")}
+    />
   );
 }
 

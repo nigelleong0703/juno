@@ -68,8 +68,17 @@ struct UserBubble: View {
             } else if showAuthor && !isSelf {
                 Text(world.member(item.authorId)?.name ?? "Teammate").text(.xs, .medium).foregroundStyle(Theme.fgSubtle).padding(.trailing, 2)
             }
-            // Real attachments (server items carry them); `world.attachments` holds the names of files just picked.
-            let files = (item.attachments ?? []).map { ($0.name, $0.kind == "image" ? "photo" : "doc") } + (world.attachments[item.id] ?? []).map { ($0, "paperclip") }
+            // A photo shows as itself (tap to look closely); other files, and names of files just picked, as chips.
+            let photos = (item.attachments ?? []).filter(SentPhoto.isPhoto)
+            if !photos.isEmpty {
+                // One photo large; several (the picker allows five) as a grid of up to three a row.
+                let columns = Array(repeating: GridItem(.fixed(SentPhoto.side(photos.count)), spacing: 4), count: min(photos.count, 3))
+                LazyVGrid(columns: columns, alignment: stranger ? .leading : .trailing, spacing: 4) {
+                    ForEach(photos) { SentPhoto(attachment: $0, count: photos.count) }
+                }
+                .fixedSize()
+            }
+            let files = (item.attachments ?? []).filter { !SentPhoto.isPhoto($0) }.map { ($0.name, "doc") } + (world.attachments[item.id] ?? []).map { ($0, "paperclip") }
             if !files.isEmpty {
                 HStack(spacing: 6) {
                     ForEach(files, id: \.0) { f, icon in
@@ -516,6 +525,44 @@ struct StepRow: View {
             Image(systemName: failed ? "exclamationmark.circle" : stepSymbol(step) ?? "checkmark")
                 .font(.system(size: 12)).foregroundStyle(failed ? Theme.danger : Theme.fgMuted)
         }
+    }
+}
+
+/// A photo the user sent, in their bubble: the picture itself (from the library, decoded once), tap to view it full size.
+struct SentPhoto: View {
+    @Environment(World.self) private var world
+    var attachment: Attachment
+    /// How many photos share the row: one is drawn larger.
+    var count: Int
+    @State private var image: UIImage?
+    @State private var viewing = false
+
+    /// The square a photo is drawn in: one alone large, two side by side, three or more three a row.
+    static func side(_ count: Int) -> CGFloat { count == 1 ? 220 : count == 2 ? 132 : 88 }
+
+    static func isPhoto(_ attachment: Attachment) -> Bool {
+        attachment.kind == "image" || (attachment.mimeType ?? "").hasPrefix("image/")
+    }
+
+    var body: some View {
+        let side = Self.side(count)
+        Button { viewing = image != nil } label: {
+            ZStack {
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFill()
+                } else {
+                    Theme.muted
+                    ProgressView()
+                }
+            }
+            .frame(width: side, height: side)
+            .clipShape(.rect(cornerRadius: Radius.xl))
+            .overlay(RoundedRectangle(cornerRadius: Radius.xl).stroke(Theme.border, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(attachment.name)
+        .sheet(isPresented: $viewing) { ImageViewer(image: image) }
+        .task(id: attachment.id) { image = await world.previewImage(attachment.id) }
     }
 }
 

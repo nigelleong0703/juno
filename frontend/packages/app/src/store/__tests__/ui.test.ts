@@ -37,7 +37,7 @@ describe("computer width preference migration", () => {
     await useUiStore.persist.rehydrate();
     expect(useUiStore.getState().computerPaneSize).toBe(460);
     expect(useUiStore.getState().theme).toBe("light");
-    expect(JSON.parse(storage.getItem(key) ?? "{}").version).toBe(3);
+    expect(JSON.parse(storage.getItem(key) ?? "{}").version).toBe(5);
   });
 
   it("upgrades the version 1 default without changing sidebar, conversation or theme preferences", async () => {
@@ -50,8 +50,17 @@ describe("computer width preference migration", () => {
     await useUiStore.persist.rehydrate();
     expect(useUiStore.getState()).toMatchObject({ ...unrelated, computerPaneSize: 860 });
     expect(JSON.parse(storage.getItem(key) ?? "{}")).toEqual({
-      version: 3, state: { ...unrelated, computerPaneSize: 860 },
+      version: 5, state: { ...unrelated, computerPaneSize: 860 },
     });
+  });
+
+  it("gives the owner's 860 layout back to a browser that saved the one-day 560 default (version 4), keeping custom widths", async () => {
+    values.set(key, JSON.stringify({ version: 4, state: { computerPaneSize: 560, sidebarCollapsed: true } }));
+    await useUiStore.persist.rehydrate();
+    expect(useUiStore.getState()).toMatchObject({ computerPaneSize: 860, sidebarCollapsed: true });
+    values.set(key, JSON.stringify({ version: 4, state: { computerPaneSize: 700 } }));
+    await useUiStore.persist.rehydrate();
+    expect(useUiStore.getState().computerPaneSize).toBe(700);
   });
 
   it("upgrades only the version 2 shipped default and preserves version 2 custom widths", async () => {

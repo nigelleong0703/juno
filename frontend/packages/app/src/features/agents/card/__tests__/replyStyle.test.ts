@@ -11,6 +11,8 @@ const FILE = [
   "- Skip the pleasantries with Juno. [claim:clm_b2]",
   "## Sol（agt-2）",
   "- Only for Sol. [claim:clm_c3]",
+  '## Agent: "Sol"',
+  "- Sol again, no id. [src:itm-9]",
 ].join("\n");
 
 describe("parseReplyStyle", () => {
@@ -23,6 +25,15 @@ describe("parseReplyStyle", () => {
     ]);
     expect(style.updated).toBeDefined();
     expect([style.updated?.getFullYear(), style.updated?.getMonth(), style.updated?.getDate()]).toEqual([2026, 9, 24]);
+  });
+
+  it("shows an agent only the shared rules and its own section, never a section that names an agent without an id", () => {
+    const text = replyStyleFor(FILE, "agt-1");
+    expect(text).not.toContain("Only for Sol");
+    expect(text).not.toContain("Sol again");
+    expect(replyStyleFor(FILE, "agt-2")).toContain("Only for Sol.");
+    expect(replyStyleFor(FILE, "agt-2")).not.toContain("Sol again");
+    expect(parseReplyStyle("- Brief. [claim:c1] [src:itm-1]").rules).toEqual([{ text: "Brief.", claimId: "c1" }]);
   });
 
   it("reads a file with no header or date line", () => {

@@ -7,9 +7,6 @@ import { t } from "../../../lib/i18n";
 import { Group, Row } from "../SettingsGroup";
 import { providerErrorMessage } from "./errors";
 
-/** The adapter's built-in temperature, kept when the account sets none. */
-const ADAPTER_DEFAULT_TEMPERATURE = 0.7;
-
 /** Editable text for the account-wide model choice; an empty field means "provider default". */
 export interface ModelDraft {
   providerId: string;
@@ -58,7 +55,6 @@ function modelsPatch(draft: ModelDraft): NonNullable<UpdateSettingsInput["models
 
 /** Radix Select cannot carry an empty value, so "no choice" travels as this sentinel. */
 const NONE = "__none";
-const CONTROL = "h-8 rounded-md bg-bg-subtle px-2 text-sm text-fg ring-1 ring-border";
 
 /**
  * Default model: provider (only ones with a key), then a searchable model from that provider's
@@ -89,7 +85,6 @@ export function DefaultModel({
   const patch = modelsPatch({ ...draft, providerId, defaultModel: modelId });
   const dirty = JSON.stringify(draft) !== JSON.stringify(served);
 
-  const field = (key: keyof ModelDraft, value: string) => onDraft((current) => ({ ...current, [key]: value }));
   const options = items.map((item) => ({
     value: item.id,
     label: item.name,
@@ -144,7 +139,7 @@ export function DefaultModel({
             </Select>
           </Row>
           {providerId !== "" && (
-            <Row label={t("settings.defaultModel")}>
+            <Row label={t("models.default.model")}>
               <div className="w-64">
                 {catalog.isLoading ? (
                   <span className="text-sm text-fg-muted">{t("models.default.loadingModels")}</span>
@@ -171,39 +166,8 @@ export function DefaultModel({
               </div>
             </Row>
           )}
-          <Row
-            label={t("settings.temperature")}
-            description={t("settings.temperatureHint", { value: ADAPTER_DEFAULT_TEMPERATURE })}
-          >
-            <input
-              aria-label={t("settings.temperature")}
-              type="number"
-              min={0}
-              max={2}
-              step={0.1}
-              placeholder={t("settings.providerDefault")}
-              className={`${CONTROL} w-64`}
-              disabled={save.isPending}
-              value={draft.temperature}
-              onChange={(event) => field("temperature", event.currentTarget.value)}
-            />
-          </Row>
-          <Row label={t("settings.maxOutputTokens")} description={t("settings.maxOutputTokensHint")}>
-            <input
-              aria-label={t("settings.maxOutputTokens")}
-              type="number"
-              min={1}
-              step={1}
-              placeholder={t("settings.providerDefault")}
-              className={`${CONTROL} w-64`}
-              disabled={save.isPending}
-              value={draft.maxOutputTokens}
-              onChange={(event) => field("maxOutputTokens", event.currentTarget.value)}
-            />
-          </Row>
           {patch === null && modelId !== "" && <p className="px-2.5 pb-2 text-xs text-danger">{t("settings.runtimeInvalid")}</p>}
-          <div className="flex items-center justify-between gap-4 px-2.5 py-2">
-            <p className="text-xs text-fg-subtle">{t("settings.modelsNote")}</p>
+          <div className="flex items-center justify-end gap-4 px-2.5 py-2">
             <span className="flex shrink-0 items-center gap-2">
               {(save.isPending || save.isSuccess) && (
                 <span className="text-xs text-fg-subtle">{save.isPending ? t("settings.saving") : t("settings.saved")}</span>

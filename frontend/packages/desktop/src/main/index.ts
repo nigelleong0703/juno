@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import electronUpdater from "electron-updater";
 import { observeStartup, revealWindow, reportStartupFailure, startupLog } from "./startup";
-import { APP_ORIGIN, APP_SCHEME, APP_URL, isAssetPathConfined, mimeForPath, resolveAssetPath } from "./asset-protocol";
+import { APP_ORIGIN, APP_SCHEME, APP_URL, isAssetPathConfined, mimeForPath, originOf, resolveAssetPath } from "./asset-protocol";
 import { buildContentSecurityPolicy, normalizeServerOrigin, registerServerOrigin } from "./server-origin";
 import { SHELL_HEADER_HEIGHT_PX, TRAFFIC_LIGHT_POSITION } from "@agent-desktop/app/window-chrome";
 import type { MyMacLinkState } from "@agent-desktop/app";
@@ -41,7 +41,9 @@ const DEFAULT_BG = "#0b0f14";
 // The packaged client's documented default server (E5). It is always in the CSP allow-list, so a
 // blank install can reach 127.0.0.1:8787 without any configuration.
 const DEFAULT_SERVER_ORIGIN = "http://127.0.0.1:8787";
-const STREAM_ORIGINS = (process.env.AGENT_DESKTOP_STREAM_ORIGINS ?? "").split(",").filter(Boolean);
+// Voice calls: the server hands out a LiveKit URL on its own host (wss://api.junoteam.app today); it is always allowed.
+const VOICE_CALL_ORIGINS = ["wss://api.junoteam.app"];
+const STREAM_ORIGINS = [...VOICE_CALL_ORIGINS, ...(process.env.AGENT_DESKTOP_STREAM_ORIGINS ?? "").split(",").filter(Boolean)];
 const isDev = !app.isPackaged;
 // The renderer dev server's port: must match electron.vite.config.ts (same env var, 5200 by default; 5199 is the web app).
 const DEV_PORT = process.env.JUNO_DESKTOP_PORT ?? "5200";
@@ -136,15 +138,11 @@ function contentSecurityPolicy(): string {
   });
 }
 
-/** Dictation: the renderer may use the microphone, only the app's own page, and never the camera. */
+/** Dictation and voice calls: the renderer may use the microphone, only the app's own page, and never the camera. */
 function applyMediaPermissions(): void {
   const own = (url: string): boolean => {
-    try {
-      const origin = new URL(url).origin;
-      return origin === APP_ORIGIN || DEV_ORIGINS.includes(origin);
-    } catch {
-      return false;
-    }
+    const origin = originOf(url);
+    return origin !== undefined && (origin === APP_ORIGIN || DEV_ORIGINS.includes(origin));
   };
   session.defaultSession.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) => {
     if (permission !== "media") return false;

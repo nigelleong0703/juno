@@ -8,7 +8,6 @@ import { TasksPanel } from "../../../components/computer";
 import { dragRegion, noDragRegion } from "../../../lib/drag";
 import { t } from "../../../lib/i18n";
 import { useUiStore, type WorkspaceTab } from "../../../store/ui";
-import { statusLine } from "../card/AgentProfile";
 import { ComputerTab, WorkspaceTasks } from "../card/activityTabs";
 import { AgentPanelPopover } from "./AgentPanel";
 
@@ -40,7 +39,6 @@ export function Workspace({
   const navigate = useNavigate();
   const tab = useUiStore((state) => state.workspaceTab);
   const setTab = useUiStore((state) => state.setWorkspaceTab);
-  const status = statusLine(agent.status);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -59,7 +57,6 @@ export function Workspace({
                 className="flex min-w-0 items-baseline gap-2 rounded-full px-2.5 py-1 transition-colors hover:bg-interactive-hover focus-ring"
               >
                 <span className="truncate text-sm font-semibold text-fg">{agent.name}</span>
-                <span className={`shrink-0 text-xs font-medium ${status.tone}`}>{t(status.label)}</span>
               </button>
             </AgentPanelPopover>
           )}

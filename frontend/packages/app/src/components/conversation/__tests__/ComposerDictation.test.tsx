@@ -36,7 +36,7 @@ class FakeRecorder {
 }
 
 describe("Composer dictation", () => {
-  it("records, transcribes and appends the text to the field", async () => {
+  it("records, transcribes and fills the empty field (the mic gives way to send once there is text)", async () => {
     const trackStop = vi.fn();
     vi.stubGlobal("MediaRecorder", FakeRecorder);
     Object.defineProperty(navigator, "mediaDevices", {
@@ -54,12 +54,11 @@ describe("Composer dictation", () => {
       </ThemeProvider>,
     );
     const field = screen.getByRole("textbox") as HTMLTextAreaElement;
-    fireEvent.change(field, { target: { value: "hello" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Voice input" }));
     fireEvent.click(await screen.findByRole("button", { name: "Stop dictation" }));
 
-    await waitFor(() => expect(field.value).toBe("hello 你好 world"));
+    await waitFor(() => expect(field.value).toBe("你好 world"));
     expect((transcribe.mock.calls[0]?.[0] as Blob).type).toBe("audio/webm");
     expect(trackStop).toHaveBeenCalled();
   });

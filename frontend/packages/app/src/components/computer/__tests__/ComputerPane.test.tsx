@@ -230,7 +230,7 @@ describe("ComputerPane without a computer", () => {
     const ensure: ApiClient["computers"]["ensure"] = () => new Promise<Computer>(() => {});
     renderPane(createNoComputerClient(ensure));
 
-    await waitFor(() => expect(screen.getByText(tc("computer.noComputerHint"))).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(tc("computer.noComputerHint", { name: "Juno" }))).toBeTruthy());
     // Header access survives the missing machine: settings (agent customization) and close.
     expect(screen.getByLabelText(tc("computer.action.settings"))).toBeTruthy();
     expect(screen.getByLabelText(tc("computer.action.close"))).toBeTruthy();
@@ -262,7 +262,7 @@ describe("ComputerPane without a computer", () => {
     // Retry re-issues the explicit allocation for the selected agent and the machine appears.
     await waitFor(() => expect(calls).toEqual([{ agentId: "agent-juno" }, { agentId: "agent-juno" }]));
     await waitFor(() => expect(streamScreen).toHaveBeenCalledWith("screen-agent-juno", { control: false }));
-    expect(screen.queryByText(tc("computer.noComputerHint"))).toBeNull();
+    expect(screen.queryByText(tc("computer.noComputerHint", { name: "Juno" }))).toBeNull();
   });
 
   it("keeps the settings menu reachable while the machine is missing", async () => {

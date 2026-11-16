@@ -23,6 +23,7 @@
     "cronstrue": "^3.27.0",
     "date-fns": "^4.4.0",
     "fflate": "^0.8.3",
+    "livekit-client": "2.23.0",
     "lucide-react": "^1.51.0",
     "pdfjs-dist": "^6.4.299",
     "qrcode": "^1.5.4",

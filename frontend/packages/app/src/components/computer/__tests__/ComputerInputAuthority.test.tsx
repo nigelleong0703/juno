@@ -286,3 +286,64 @@ describe("screen input authority", () => {
     expect(rfbInstances.filter((rfb) => rfb.url === "wss://host/expired")).toHaveLength(1);
   });
 });
+
+describe("voxl player selection and ticket refresh", () => {
+  const voxlTicket = (id: string, over: Partial<ScreenStreamTicket> = {}): ScreenStreamTicket => ({
+    ...ticket,
+    voxlUrl: `https://screen.example/s/${id}/`,
+    ...over,
+  });
+  const userHeld = () => computer({ screens: [screenFor("agent-juno", { controller: "user" })] });
+  const agentHeld = () => computer({ screens: [screenFor("agent-juno", { controller: "agent" })] });
+  const voxlFrame = () => screen.findByTestId("voxl-frame") as Promise<HTMLIFrameElement>;
+
+  afterEach(() => window.history.replaceState(null, "", "/"));
+
+  it("embeds voxl for a ticket carrying voxlUrl and mounts no noVNC session", async () => {
+    renderPane(createLiveClient({ computer: agentHeld(), streamScreen: async () => voxlTicket("a") }));
+    const frame = await voxlFrame();
+    expect(frame.getAttribute("src")).toBe("https://screen.example/s/a/");
+    expect(frame.getAttribute("allow")).toBe("clipboard-read; clipboard-write; fullscreen");
+    // Watching: the iframe must not take pointer or focus.
+    expect(frame.className).toContain("pointer-events-none");
+    expect(rfbInstances).toHaveLength(0);
+  });
+
+  it("uses noVNC exactly as before when the ticket has no voxlUrl, or noVNC is forced", async () => {
+    renderPane(createLiveClient({ computer: agentHeld() }));
+    await waitFor(() => expect(rfbInstances.length).toBeGreaterThan(0));
+    expect(screen.queryByTestId("voxl-frame")).toBeNull();
+    cleanup();
+    rfbInstances.length = 0;
+
+    window.history.replaceState(null, "", "/?screen=novnc");
+    renderPane(createLiveClient({ computer: agentHeld(), streamScreen: async () => voxlTicket("a") }));
+    await waitFor(() => expect(rfbInstances.length).toBeGreaterThan(0));
+    expect(screen.queryByTestId("voxl-frame")).toBeNull();
+  });
+
+  it("lets a user-held screen take input in the iframe, from a control ticket", async () => {
+    const streamScreen = vi.fn(async (_id: string, options?: { control?: boolean }) =>
+      voxlTicket(options?.control ? "rw" : "ro"),
+    );
+    renderPane(createLiveClient({ computer: userHeld(), streamScreen }));
+    const frame = await voxlFrame();
+    expect(streamScreen).toHaveBeenCalledWith("screen-agent-juno", { control: true });
+    expect(frame.getAttribute("src")).toBe("https://screen.example/s/rw/");
+    expect(frame.className).not.toContain("pointer-events-none");
+  });
+
+  it("Reconnect requests a fresh ticket under the current control and reloads onto it", async () => {
+    let call = 0;
+    const streamScreen = vi.fn(async () => voxlTicket(`t${(call += 1)}`));
+    renderPane(createLiveClient({ computer: userHeld(), streamScreen }));
+    const first = await voxlFrame();
+    expect(first.getAttribute("src")).toBe("https://screen.example/s/t1/");
+
+    fireEvent.load(first);
+    fireEvent.click(await reconnectButton());
+
+    await waitFor(async () => expect((await voxlFrame()).getAttribute("src")).toBe("https://screen.example/s/t2/"));
+    expect(streamScreen).toHaveBeenLastCalledWith("screen-agent-juno", { control: true });
+  });
+});

@@ -7,7 +7,7 @@ import {
   cn,
 } from "@agent-desktop/ui";
 import { AgentBubble } from "../agent/AgentBubble";
-import { ChevronDown, MessageSquare, Monitor, Users } from "lucide-react";
+import { ChevronDown, MessageSquare, Monitor, Phone, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { useUiStore } from "../../store/ui";
 import { t } from "../../lib/i18n";
@@ -21,6 +21,7 @@ import { agentAccentStyle } from "../../lib/avatars";
 import { resolveDoingLine } from "../../lib/doingLine";
 import { runShowsWork } from "../../lib/stepLine";
 import { AgentAvatar } from "../agent/AgentAvatar";
+import { VoiceCallOverlay } from "../call/VoiceCallOverlay";
 import { AgentAvatarGroup } from "../agent/AgentAvatarGroup";
 import { Composer } from "./Composer";
 import type { ReplyTarget } from "./MessageMenu";
@@ -169,6 +170,15 @@ export function ConversationView({
     typing.stopTyping();
     handleSend(payload);
   };
+  // A call needs a direct in-app chat with exactly one agent (not a channel chat, group or task thread). Leaving the chat
+  // hangs up: the overlay unmounts with it, or when the open conversation changes.
+  const [callFor, setCallFor] = useState<string | null>(null);
+  const canCall =
+    conversation?.kind === "direct" && !conversation.channel && conversation.agentIds.length === 1 && primaryAgent !== undefined;
+  const calling = canCall && callFor === conversation?.id;
+  useEffect(() => {
+    if (callFor !== null && callFor !== conversation?.id) setCallFor(null);
+  }, [callFor, conversation?.id]);
   const isGroup = conversation?.kind === "room" || conversation?.kind === "peer";
   const workspaceShown = computerOpen;
   const withAgentPanel = (trigger: ReactElement): ReactNode => agentPanel?.(trigger) ?? trigger;
@@ -336,6 +346,18 @@ export function ConversationView({
         </div>
 
         <div className="flex items-start justify-end gap-1 pt-2">
+          {canCall && (
+            <IconButton
+              style={noDragRegion}
+              label={t("call.start", { name: primaryAgent.name })}
+              variant="ghost"
+              size="sm"
+              disabled={calling}
+              onClick={() => setCallFor(conversation.id)}
+            >
+              <Phone />
+            </IconButton>
+          )}
           <IconButton
             style={noDragRegion}
             label={workspaceShown ? t("chat.computer.hide") : t("chat.computer.show")}
@@ -440,6 +462,9 @@ export function ConversationView({
           )}
         </div>
       </div>
+      {calling && primaryAgent !== undefined && (
+        <VoiceCallOverlay key={conversation.id} conversationId={conversation.id} agent={primaryAgent} onClose={() => setCallFor(null)} />
+      )}
     </div>
   );
 }

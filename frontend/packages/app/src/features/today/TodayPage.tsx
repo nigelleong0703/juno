@@ -1,4 +1,4 @@
-import type { Agent, Goal, Request, TodayNeedsYouItem } from "@agent-desktop/client";
+import type { Agent, Goal, Inspiration, Request, TodayNeedsYouItem } from "@agent-desktop/client";
 import { Button, ScrollArea, cn, toast } from "@agent-desktop/ui";
 import { Check, ChevronRight, Loader2, Newspaper, Plus, Target } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -15,7 +15,7 @@ import { timeLabel } from "../agents/card/parts";
 import { SuggestionCard } from "../ideas/SuggestionCard";
 import { goalsProgress } from "../goals/labels";
 import { Aurora, useAccountFirstName } from "../chat/ReturningWelcome";
-import { GLOW_TINTS } from "./Inspiration";
+import { GLOW_TINTS, InspirationCard } from "./Inspiration";
 
 /** Rows per section before "All" takes over (owner-approved 2026-10-26: capped everywhere). */
 const NEEDS_LIMIT = 3;
@@ -78,7 +78,7 @@ export function TodayPage() {
                 <UpdatesSection brief={today.brief} agentOf={agentOf} />
               </div>
             </div>
-            <IdeasSection agentOf={agentOf} />
+            <IdeasSection agentOf={agentOf} inspiration={today.inspiration} />
           </div>
         </div>
       </ScrollArea>
@@ -100,7 +100,7 @@ function Stories({ agents, workingIds }: { agents: Agent[]; workingIds: Set<stri
           <span className="flex size-16 items-center justify-center rounded-full border border-dashed border-border text-fg-muted">
             <Plus className="size-6" />
           </span>
-          <span className="max-w-full truncate text-xs text-fg-muted">{t("today.newAgent")}</span>
+          <span className="max-w-full truncate text-xs text-fg-muted">{t("today.new")}</span>
         </Link>
       </li>
     </ul>
@@ -338,13 +338,15 @@ function UpdatesSection({ brief, agentOf }: { brief: TodayData["brief"]; agentOf
 }
 
 /** The open ideas, three at most: Try starts the agent on it in a new chat, Never stops it being offered again. */
-function IdeasSection({ agentOf }: { agentOf: AgentOf }) {
+function IdeasSection({ agentOf, inspiration }: { agentOf: AgentOf; inspiration: Inspiration[] }) {
   const navigate = useNavigate();
   const { data: open } = useOpenIdeas();
   const accept = useAcceptIdea();
   const feedback = useIdeaFeedback();
+  // Like the iPhone: the open ideas, then the server's suggestions, three cards at most.
   const ideas = (open ?? []).filter((idea) => agentOf(idea.agentId) !== undefined).slice(0, IDEAS_LIMIT);
-  if (ideas.length === 0) return null;
+  const suggestions = inspiration.slice(0, IDEAS_LIMIT - ideas.length);
+  if (ideas.length + suggestions.length === 0) return null;
   const busy = accept.isPending || feedback.isPending;
 
   const tryIdea = async (id: string) => {
@@ -381,6 +383,11 @@ function IdeasSection({ agentOf }: { agentOf: AgentOf }) {
                 </Button>
               </div>
             </SuggestionCard>
+          </li>
+        ))}
+        {suggestions.map((card, index) => (
+          <li key={card.id} className="flex w-[85%] max-w-[340px] shrink-0 snap-start sm:w-[320px]">
+            <InspirationCard card={card} index={index} className="w-full" />
           </li>
         ))}
       </ul>

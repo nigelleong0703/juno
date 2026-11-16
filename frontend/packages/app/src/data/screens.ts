@@ -88,6 +88,25 @@ export function useComputerScreens(computerId: string | undefined) {
   });
 }
 
+const VOXL_REFRESH_LEAD_MS = 60_000;
+const VOXL_REFRESH_MIN_MS = 10_000;
+
+/**
+ * When to fetch the next ticket for a voxl screen: shortly before this one expires, so a reload,
+ * Reconnect or the page's own websocket retry always has a live ticket. noVNC tickets are never
+ * refreshed on a timer (see `useScreenStreamTicket`). The open stream keeps running on the old
+ * ticket; the player only swaps to a fresh one when it has to reload.
+ */
+export function voxlTicketRefreshDelay(
+  ticket: { voxlUrl?: string; expiresAt: string } | undefined,
+  now: number = Date.now(),
+): number | false {
+  if (!ticket?.voxlUrl) return false;
+  const left = Date.parse(ticket.expiresAt) - now;
+  if (!Number.isFinite(left)) return false;
+  return Math.max(VOXL_REFRESH_MIN_MS, left - VOXL_REFRESH_LEAD_MS);
+}
+
 /** A short-lived, server-signed stream ticket for one screen. Never carries a VNC password. */
 export function useScreenStreamTicket(screenId: string | undefined, control: boolean) {
   const client = useClient();
@@ -102,6 +121,9 @@ export function useScreenStreamTicket(screenId: string | undefined, control: boo
     // a fresh ticket when a new connection is actually needed.
     staleTime: 2 * 60_000,
     refetchOnWindowFocus: false,
+    // A voxl ticket (voxlUrl present) is the exception: its page is a long-lived stream that only
+    // needs a valid ticket when it reloads, so it is renewed before it expires.
+    refetchInterval: (query) => voxlTicketRefreshDelay(query.state.data),
   });
 }
 

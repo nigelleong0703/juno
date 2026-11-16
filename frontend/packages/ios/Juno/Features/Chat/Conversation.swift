@@ -172,7 +172,7 @@ struct ConversationView: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if conversation?.kind == "direct", conversation?.isChannelChat != true, agents.count == 1 {
                     Button {
-                        if let pushRoute { pushRoute(.voiceCall(conversationId)) } else { route = .voiceCall(conversationId) }
+                        world.startCall(conversationId)
                     } label: { Label("Voice call", systemImage: "phone") }
                 }
                 Button {

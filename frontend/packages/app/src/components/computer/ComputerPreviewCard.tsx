@@ -10,7 +10,7 @@ import type { LiveScreenTarget } from "./types";
 export interface ComputerPreviewCardProps {
   computer: Computer;
   agent?: Agent;
-  /** When set, the thumbnail mounts a real noVNC session; otherwise it shows no picture. */
+  /** When set, the thumbnail mounts a live session (voxl or noVNC); otherwise it shows no picture. */
   target?: LiveScreenTarget | null;
   onOpen?: () => void;
   className?: string;

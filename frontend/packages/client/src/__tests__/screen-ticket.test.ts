@@ -49,6 +49,31 @@ describe('first-party screen ticket origin', () => {
   });
 });
 
+describe('voxl page URL', () => {
+  const api = 'https://configured.example';
+  const voxlUrl = 'https://computer.example/s/signed.ticket/';
+
+  it('keeps a well-formed voxl page and every other field', () => {
+    const normalized = normalizeScreenStreamTicket({ ...ticket, control: true, voxlUrl }, screenId, api);
+    expect(normalized).toMatchObject({ voxlUrl, control: true, expiresAt: ticket.expiresAt });
+  });
+
+  it.each([
+    'http://computer.example/s/t/', 'https://computer.example/s/t', 'https://computer.example/other/t/',
+    'https://u:p@computer.example/s/t/', 'https://computer.example/s/t/#x', 'javascript:alert(1)', 'not a url',
+    'https://computer.example/s/a/b/',
+  ])('drops an unsafe voxl page (falls back to noVNC) instead of failing the ticket: %s', (bad) => {
+    const normalized = normalizeScreenStreamTicket({ ...ticket, voxlUrl: bad }, screenId, api);
+    expect(normalized).not.toHaveProperty('voxlUrl');
+    expect(normalized.url).toBe(`wss://configured.example${path}${query}`);
+  });
+
+  it('allows loopback http for local development (a secure context)', () => {
+    const local = 'http://localhost:8788/s/t/';
+    expect(normalizeScreenStreamTicket({ ...ticket, voxlUrl: local }, screenId, api).voxlUrl).toBe(local);
+  });
+});
+
 describe('HTTP streamScreen integration', () => {
   it('normalizes a forwarded HTTP ticket for HTTPS without changing the DTO, options or other requests', async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(ticket), { status: 200, headers: { 'Content-Type': 'application/json' } }));

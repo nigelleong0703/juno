@@ -25,7 +25,7 @@ import { useAgents } from "../../data/queries";
 import { formatDuration } from "../../lib/format";
 import { t } from "../../lib/i18n";
 import { routineRuns, routineStatusMeta } from "../../lib/status";
-import { SCHEDULE_PRESETS, TIMEZONES, describeCron, localTimeZone, presetForCron } from "./cron";
+import { SCHEDULE_PRESETS, TIMEZONES, describeCron, localTimeZone, presetForCron, scheduleText } from "./cron";
 
 /**
  * Trigger + delivery + history for one routine (§4.6). Shared by the detail sheet opened from a
@@ -281,7 +281,7 @@ export function triggerIcon(kind: RoutineTrigger["kind"]) {
 export function triggerText(routine: Routine): string {
   const { trigger } = routine;
   if (trigger.kind === "schedule") {
-    return trigger.human || describeCron(trigger.cron ?? "") || "Scheduled";
+    return scheduleText(trigger.cron ?? "", trigger.human);
   }
   if (trigger.kind === "event") {
     const source =

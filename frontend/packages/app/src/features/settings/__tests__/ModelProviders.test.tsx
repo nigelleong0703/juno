@@ -206,7 +206,7 @@ const modelPicker = () =>
   });
 
 describe("default model", () => {
-  it("saves provider, model and temperature", async () => {
+  it("saves provider and model, leaving the runtime tuning untouched", async () => {
     const client = createMockClient({ seed: 7, platformDefault: false });
     const openai = await client.modelProviders.create({ kind: "builtin", providerId: "openai", apiKey: "sk-x" });
     renderModels(client);
@@ -214,14 +214,13 @@ describe("default model", () => {
     await pickOption("Provider", openai.name);
     fireEvent.click(await modelPicker());
     fireEvent.click(await screen.findByRole("option", { name: /GPT-5\.5 mini/ }));
-    typeInto(screen.getByLabelText("Temperature"), "0.3");
+    expect(screen.queryByLabelText("Temperature")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.getByText("Saved")).toBeDefined());
     expect((await client.settings.get()).models).toMatchObject({
       providerId: openai.id,
       defaultModel: "gpt-5.5-mini",
-      temperature: 0.3,
     });
     expect(screen.queryByLabelText("Reasoning effort")).toBeNull();
   });

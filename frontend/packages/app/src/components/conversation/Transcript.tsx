@@ -8,7 +8,7 @@ import {
   cn,
 } from "@agent-desktop/ui";
 import { Fragment, useRef } from "react";
-import { formatDaySeparator } from "../../lib/format";
+import { formatClock, formatDaySeparator, opensTimeBlock } from "../../lib/format";
 import { t } from "../../lib/i18n";
 import { feedRefsAfterReply, runsWithFeedRef } from "../../lib/items";
 import { AgentMessage } from "./AgentMessage";
@@ -213,9 +213,9 @@ export function Transcript({
             )
           ) : (
             ordered.map((item, index) => {
-              const day = new Date(item.at).toDateString();
               const previous = ordered[index - 1];
-              const newDay = index === 0 || day !== new Date(previous?.at ?? item.at).toDateString();
+              // A time marker opens each day and any pause of an hour or more, as in Messages.
+              const newDay = index === 0 || opensTimeBlock(item.at, previous?.at ?? item.at);
               const grouped = continuesGroup(item, ordered[index - 1]);
               return (
                 <Fragment key={item.id}>
@@ -223,6 +223,7 @@ export function Transcript({
                     <div role="separator" className="my-1 flex justify-center">
                       <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-fg-muted">
                         {formatDaySeparator(item.at, { today: t("transcript.today"), yesterday: t("transcript.yesterday") })}
+                        <span className="font-normal"> {formatClock(item.at)}</span>
                       </span>
                     </div>
                   ) : null}

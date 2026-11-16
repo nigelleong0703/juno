@@ -11,6 +11,7 @@ import {
 } from "@agent-desktop/ui";
 import { Check, Copy, Reply, RotateCcw, Smile } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import { formatClock } from "../../lib/format";
 import { t } from "../../lib/i18n";
 import { REACTIONS, useReactions } from "../../lib/reactions";
 
@@ -22,6 +23,8 @@ export interface ReplyTarget {
 
 export interface MessageMenuProps {
   itemId: string;
+  /** When it was sent; the hover bar shows the time. */
+  at?: string;
   /** Text Copy puts on the clipboard. */
   copyText: string;
   /** Right-aligned (the user's own bubble) or left-aligned (an agent's). */
@@ -42,7 +45,7 @@ const barButton =
  * corner and the same actions in a right-click menu (React, Reply, Copy, Retry). The reaction
  * is kept on this device and shown as a badge on the bubble's bottom corner; clicking it removes it.
  */
-export function MessageMenu({ itemId, copyText, align, reaction, onReply, onRetry, children }: MessageMenuProps) {
+export function MessageMenu({ itemId, at, copyText, align, reaction, onReply, onRetry, children }: MessageMenuProps) {
   const mine = useReactions((state) => state.byItem[itemId]);
   const shown = mine ?? reaction;
   const toggle = useReactions((state) => state.toggle);
@@ -90,6 +93,11 @@ export function MessageMenu({ itemId, copyText, align, reaction, onReply, onRetr
               end ? "right-2" : "left-2",
             )}
           >
+            {at && formatClock(at) ? (
+              <time dateTime={at} title={new Date(at).toLocaleString()} className="px-2 text-[11px] tabular-nums text-fg-subtle">
+                {formatClock(at)}
+              </time>
+            ) : null}
             <Popover open={picking} onOpenChange={setPicking}>
               <PopoverTrigger asChild>
                 <button type="button" aria-label={t("message.react")} title={t("message.react")} className={barButton}>

@@ -59,6 +59,12 @@ export function filterApps(apps: readonly App[], pill: AppPill, query: string): 
 /** Connected when something is added, else Chat: the pill the page opens on. */
 export const defaultPill = (apps: readonly App[]): AppPill => (apps.some(isAdded) ? "connected" : "chat");
 
+/** Apps in the banner row. */
+export const FEATURED_COUNT = 3;
+
+/** The server's example prompts address its default agent "@Nova"; say the owner's own agent instead. */
+export const withAgentName = (prompt: string, agentName: string | undefined): string => (agentName ? prompt.replaceAll("@Nova", `@${agentName}`) : prompt);
+
 /** The banner row: apps that have prompts to try, the ones not added yet first; the first is the lead. */
 export function featuredApps(apps: readonly App[], limit = 5): App[] {
   const candidates = apps.filter((app) => app.tryAsking.length > 0 && canAdd(app));

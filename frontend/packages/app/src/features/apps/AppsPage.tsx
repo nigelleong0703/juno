@@ -5,9 +5,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { BrandIcon } from "../../components/BrandIcon";
 import { useApps } from "../../data/apps";
+import { useAgents } from "../../data/queries";
 import { t } from "../../lib/i18n";
 import { SuggestionCard } from "../ideas/SuggestionCard";
-import { APP_PILLS, APP_ROWS, defaultPill, featuredApps, filterApps, isAdded, rowState, type AppPill } from "../../lib/apps";
+import { APP_PILLS, APP_ROWS, defaultPill, FEATURED_COUNT, featuredApps, filterApps, isAdded, rowState, withAgentName, type AppPill } from "../../lib/apps";
 import { CustomAppDialog } from "./CustomAppDialog";
 import { MacRow, macRowMatches } from "./MacRow";
 /** One app: brand icon, name, one-line blurb, its state ("Sign in" in the warning colour) and a chevron. No box. */
@@ -32,18 +33,18 @@ export function AppRow({ app, onOpen }: { app: App; onOpen: () => void }) {
   );
 }
 
-/** The banner row: apps with prompts to try, scrolling sideways; the lead is the first. */
-function Featured({ apps, onOpen }: { apps: App[]; onOpen: (app: App) => void }) {
+/** The banner row: up to three apps with a prompt to try, in one row that fits the column. */
+function Featured({ apps, agentName, onOpen }: { apps: App[]; agentName: string | undefined; onOpen: (app: App) => void }) {
   if (apps.length === 0) return null;
   return (
-    <section aria-label={t("apps.featured")} className="-mx-5 flex gap-3 overflow-x-auto px-5 pb-1">
+    <section aria-label={t("apps.featured")} className="grid grid-cols-1 gap-3 sm:grid-cols-3">
       {apps.map((app) => (
         <SuggestionCard
           key={app.id}
-          className="w-72 shrink-0"
+          className="min-w-0"
           fallbackLeading={<BrandIcon id={app.id} symbol={app.icon} className="size-9 rounded-lg" />}
           title={app.name}
-          reason={app.tryAsking[0] ?? app.blurb}
+          reason={app.tryAsking[0] ? withAgentName(app.tryAsking[0], agentName) : app.blurb}
           actionLabel={isAdded(app) ? t("apps.open") : t("apps.add")}
           onAction={() => onOpen(app)}
         />
@@ -67,6 +68,7 @@ export function AppsPage() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const { data, isLoading, isError, refetch } = useApps();
+  const agentName = useAgents().data?.[0]?.name;
   const [query, setQuery] = useState("");
   const [pill, setPill] = useState<AppPill | null>(null);
   const [showAll, setShowAll] = useState(false);
@@ -95,7 +97,7 @@ export function AppsPage() {
     <div className="flex h-full min-h-0 flex-col bg-bg">
       <PageHeader title={t("apps.title")} />
       <ScrollArea className="min-h-0 flex-1">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-5 pb-10 pt-2">
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-5 pb-10 pt-2">
           <SearchField size="md" value={query} onValueChange={setQuery} placeholder={t("apps.search")} />
           {isLoading ? (
             <LoadingState label={t("common.loading")} />
@@ -103,7 +105,7 @@ export function AppsPage() {
             <ErrorState title={t("common.error")} onRetry={() => void refetch()} />
           ) : (
             <>
-              {query.trim() === "" ? <Featured apps={featuredApps(apps)} onOpen={open} /> : null}
+              {query.trim() === "" ? <Featured apps={featuredApps(apps, FEATURED_COUNT)} agentName={agentName} onOpen={open} /> : null}
               {query.trim() === "" ? (
                 <SegmentedControl
                   aria-label={t("apps.categories")}

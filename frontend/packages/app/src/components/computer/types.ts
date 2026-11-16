@@ -53,6 +53,16 @@ export interface LiveScreenTarget {
   url: string;
   /** VNC password (if the endpoint requires one). */
   password?: string;
+  /**
+   * voxl's own web client for this screen (`https://<host>/s/<ticket>/`). When present the screen
+   * is shown by the voxl player (an iframe) instead of noVNC.
+   */
+  voxlUrl?: string;
+  /**
+   * Whether the ticket was requested for a control (read-write) session. The voxl player reloads
+   * when this changes (take-over / hand-back), because the server picks the instance per ticket.
+   */
+  control?: boolean;
 }
 
 export type LiveScreenState =

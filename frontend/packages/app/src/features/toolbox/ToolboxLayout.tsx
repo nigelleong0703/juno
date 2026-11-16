@@ -1,29 +1,20 @@
-import { Outlet, useLocation, useNavigate } from "react-router";
-import { SettingsPage } from "../../templates/SettingsPage";
-import { buildToolboxGroups } from "./toolboxEntries";
+import { Outlet, useLocation } from "react-router";
+import { SettingsShell } from "../settings/SettingsShell";
 
-/**
- * Toolbox (owner request 2026-10-17, as a sidebar page 2026-10-21): the tools that used to live behind
- * the account menu's More submenu are sections of one page. The section nav is the page's own sidebar
- * (the top-left toggle shows and hides it); each section keeps its own header and body.
- */
+/** The Workspace pages of Settings (Routines, Rules, Memory, Usage): the settings list beside the page. */
+const ACTIVE_BY_PREFIX = [
+  ["/automations", "routines"],
+  ["/rules", "rules"],
+  ["/memories", "memory"],
+  ["/usage", "usage"],
+] as const;
+
 export function ToolboxLayout() {
-  const navigate = useNavigate();
   const { pathname } = useLocation();
-  const entries = buildToolboxGroups().flatMap((group) => group.entries);
-  const active = entries.find((entry) => pathname === entry.to || pathname.startsWith(`${entry.to}/`));
-
+  const active = ACTIVE_BY_PREFIX.find(([prefix]) => pathname === prefix || pathname.startsWith(`${prefix}/`))?.[1];
   return (
-    <SettingsPage
-      bare
-      activeId={active?.key}
-      onSelect={(key) => {
-        const entry = entries.find((item) => item.key === key);
-        if (entry) navigate(entry.to);
-      }}
-      sections={entries.map((entry) => ({ id: entry.key, label: entry.label, icon: <entry.icon className="size-4" /> }))}
-    >
+    <SettingsShell bare activeId={active}>
       <Outlet />
-    </SettingsPage>
+    </SettingsShell>
   );
 }

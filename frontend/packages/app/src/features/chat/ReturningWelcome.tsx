@@ -83,7 +83,7 @@ export function Aurora({ agents, colors: fixed }: { agents: Agent[]; colors?: st
   return (
     <div
       aria-hidden="true"
-      className="pointer-events-none absolute inset-x-0 top-0 h-[460px] overflow-hidden opacity-55 [mask-image:linear-gradient(to_bottom,black,rgba(0,0,0,0.6),transparent)]"
+      className="pointer-events-none absolute inset-x-0 top-0 h-[460px] overflow-hidden opacity-30 [mask-image:linear-gradient(to_bottom,black,rgba(0,0,0,0.6),transparent)]"
     >
       {palette.map((color, index) => (
         <span

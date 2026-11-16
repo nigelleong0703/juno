@@ -173,6 +173,7 @@ export function AgentMessage({
       {showBubble ? (
         <MessageMenu
           itemId={item.id}
+          at={item.at}
           copyText={item.markdown}
           align="start"
           onReply={onReply && (() => onReply({ name: agent?.name ?? "Agent", text: body }))}

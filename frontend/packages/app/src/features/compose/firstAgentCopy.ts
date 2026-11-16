@@ -14,7 +14,7 @@ export const FIRST_AGENT_COPY = {
   firstAgentCreateFailed: "Couldn't create that agent. Your name is kept — try again.",
   firstAgentSendFailed: "Couldn't start that chat. Your draft is kept — try again.",
   /** Explicit group mode on the same /new page (Grok-style: pick members, create). */
-  newGroupChat: 'New group chat',
+  newGroupChat: 'New group',
   newGroupHint: 'Pick 2–6 agents, then create the group. It opens right away — no first message required.',
   groupSelected: 'selected',
   groupTooFew: 'Pick at least 2 agents to create a group.',

@@ -49,3 +49,13 @@ export function Row({
     </div>
   );
 }
+
+/** The page title of a Settings page, with the page's one primary action (Save, +) at the trailing edge, as on the iPhone. */
+export function SettingsTitle({ title, action }: { title: string; action?: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-4 pb-6">
+      <h1 className="text-[30px] font-bold leading-tight tracking-[-0.01em] text-fg">{title}</h1>
+      {action && <div className="shrink-0">{action}</div>}
+    </div>
+  );
+}

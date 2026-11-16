@@ -18,6 +18,13 @@ import { SettingsPage } from "../../templates/SettingsPage";
 import { MATCHES_ID, PeopleSegment, PersonMenu } from "./PeopleSegment";
 import { MemoryHeaderLine, MemorySegment, REVIEW_ID, SEARCH_ID } from "./MemorySegment";
 
+/** The wash sits inside the scroller, whose edges would cut it: fade it out on the top and on both sides. */
+const AURORA_EDGE_MASK = {
+  maskImage: "linear-gradient(to right, transparent, black 25%, black 75%, transparent), linear-gradient(to bottom, transparent, black 30%)",
+  maskComposite: "intersect",
+  WebkitMaskComposite: "source-in",
+} as const;
+
 /** The three Team segments, in order. The first one is the default. */
 const SEGMENTS = ["agents", "people", "memory"] as const;
 type Segment = (typeof SEGMENTS)[number];
@@ -79,11 +86,11 @@ export function TeamPage() {
       <ScrollArea className="min-h-0 flex-1">
         <div className="relative">
           {detailId || active === "people" ? null : (
-            <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-10 h-[360px]">
+            <div aria-hidden="true" style={AURORA_EDGE_MASK} className="pointer-events-none absolute inset-x-0 top-0 h-[460px]">
               <Aurora agents={[]} colors={GLOW_TINTS} />
             </div>
           )}
-          <div className="relative mx-auto flex w-full max-w-xl flex-col gap-4 px-4 pb-10">
+          <div className="relative mx-auto flex w-full flex-col gap-4 px-5 pb-10">
             {wide || detailId ? null : (
               <SegmentedControl
                 aria-label={t("team.segments")}

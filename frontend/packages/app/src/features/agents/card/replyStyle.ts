@@ -1,3 +1,8 @@
+import { replyStyleFor, splitRuleTags } from "@agent-desktop/client";
+
+/** The per-agent section rule is the one in the shared contracts, so the card shows what the agent is given. */
+export { replyStyleFor };
+
 /** One learned rule: a sentence, and the claim it rests on when the file names one (`[claim:<id>]`). */
 export interface ReplyRule {
   text: string;
@@ -10,28 +15,13 @@ export interface ReplyStyle {
   updated?: Date;
 }
 
-const CLAIM = /\s*\[claim:([^\]\s]+)\]/g;
 const UPDATED = /^\W*last updated(?: from)?\s+(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/i;
 const BULLET = /^\s*[-*]\s+(.*)$/;
 
-/** A line without its trailing claim markers, and the first claim id it carried. */
+/** A line without its evidence tags (`[claim:<id>]`, `[src:<id>]`), and the first claim id it carried. */
 function withoutClaim(line: string): ReplyRule {
-  let claimId: string | undefined;
-  const text = line.replace(CLAIM, (_marker, id: string) => {
-    claimId ??= id;
-    return "";
-  });
-  return claimId === undefined ? { text: text.trim() } : { text: text.trim(), claimId };
-}
-
-/** ALIGNMENT_SYNTHESIS.md for one agent: the shared body plus this agent's own `## <name>（<id>）` section. */
-export function replyStyleFor(text: string, agentId: string): string {
-  const parts = text.split(/^(?=## )/m);
-  const kept = parts.filter((part) => {
-    const heading = /^## .*（([^）]*)）\s*$/m.exec(part.split("\n")[0] ?? "");
-    return heading === null || heading[1] === agentId;
-  });
-  return kept.join("").trim();
+  const { text, claimId } = splitRuleTags(line);
+  return claimId === undefined ? { text } : { text, claimId };
 }
 
 /**

@@ -12,6 +12,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, Download, Loader2, Share2, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useClient } from "../../data/ClientProvider";
 import { saveDownload, safeBasename } from "../chat-files/fileArtifacts";
 import { SpaceShareDialog } from "../conversation/SpaceShareDialog";
@@ -54,10 +55,12 @@ export function ArtifactViewer(props: ArtifactViewerProps) {
 }
 
 function ViewerLoading() {
-  return (
-    <div role="status" aria-label="Loading" className="fixed inset-0 z-50 flex items-center justify-center bg-bg">
+  const stage = shellMain();
+  return createPortal(
+    <div role="status" aria-label="Loading" className={cn(stage ? "absolute" : "fixed", "inset-0 z-50 flex items-center justify-center bg-bg")}>
       <Loader2 aria-hidden="true" className="size-5 animate-spin text-fg-subtle" />
-    </div>
+    </div>,
+    stage ?? document.body,
   );
 }
 
@@ -119,8 +122,10 @@ function FileViewer({ item, agentName, onClose }: ArtifactViewerProps) {
   }
 
   const sharesFile = kind !== "space" && canShareFiles();
-  return (
-    <section role="dialog" aria-modal="true" aria-label={item.name} data-slot="artifact-viewer" className="fixed inset-0 z-50 flex flex-col bg-bg">
+  // Inside the shell's content panel: the window's frame (rail and top row) stays around the viewer (owner, 2026-11-06).
+  const stage = shellMain();
+  return createPortal(
+    <section role="dialog" aria-modal="true" aria-label={item.name} data-slot="artifact-viewer" className={cn(stage ? "absolute" : "fixed", "inset-0 z-50 flex flex-col bg-bg")}>
       <header className="flex h-14 shrink-0 items-center gap-1.5 border-b border-border px-3">
         <IconButton label="Close" onClick={onClose} autoFocus>
           <X className="size-4" />
@@ -169,8 +174,14 @@ function FileViewer({ item, agentName, onClose }: ArtifactViewerProps) {
         <ViewerStage key={`${item.id}:${shown}`} item={item} version={shown} kind={kind} agentName={agentName} space={space.data} onOpened={() => void space.refetch()} />
       </div>
       {space.data ? <SpaceShareDialog space={space.data} name={item.name} open={sharePanel} onOpenChange={setSharePanel} /> : null}
-    </section>
+    </section>,
+    stage ?? document.body,
   );
+}
+
+/** The shell's content panel (right of the rail, under the top row); absent outside the app shell, e.g. in tests. */
+function shellMain(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('[data-slot="shell-main"]');
 }
 
 /** One version's content with its loading cover. Keyed by version, so a new version starts loading again. */

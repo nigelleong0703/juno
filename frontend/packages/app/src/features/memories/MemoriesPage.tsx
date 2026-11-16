@@ -1,14 +1,15 @@
-import { ErrorState, ListRow, LoadingState, PageHeader, ScrollArea, SearchField, Tabs, TabsContent, TabsList, TabsTrigger } from "@agent-desktop/ui";
+import { ErrorState, ListRow, LoadingState, PageHeader, ScrollArea, SearchField } from "@agent-desktop/ui";
+import { ChevronLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useMemorySearch } from "../../data/memories";
 import { t } from "../../lib/i18n";
+import { PageAction } from "../../components/page/PageFrame";
 import { ShowMore, useCapped } from "../agents/card/parts";
 import { ClaimsPanel } from "./ClaimsPanel";
+import { MemoryIndex, type TabId } from "./MemoryIndex";
 import { BankPanel, DailyPanel, MemoryFilePanel, PeoplePanel, StylePanel, type Focus } from "./MemoryPanels";
 import { parseDailyPath } from "./personPage";
 
-const TABS = ["memory", "about", "people", "daily", "style", "claims"] as const;
-type TabId = (typeof TABS)[number];
 
 /** The tab that shows a memory file. */
 function tabOf(path: string): TabId {
@@ -66,7 +67,8 @@ function SearchResults({ query, onOpen }: { query: string; onOpen: (focus: Focus
  * behind them with the words that back each one and a way to forget.
  */
 export function MemoriesPage() {
-  const [tab, setTab] = useState<TabId>("memory");
+  // null is the list of memory pages (the iPhone's Memory page); a tab id is one of them open.
+  const [tab, setTab] = useState<TabId | null>(null);
   const [focus, setFocus] = useState<Focus | undefined>(undefined);
   const [person, setPerson] = useState<string | undefined>(undefined);
   const [text, setText] = useState("");
@@ -87,7 +89,21 @@ export function MemoriesPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg">
-      <PageHeader title={t("memories.title")} subtitle={t("memories.subtitle")} />
+      <PageHeader
+        title={tab === null ? t("memories.title") : t(`memories.tab.${tab}`)}
+        back={
+          tab === null ? undefined : (
+            <PageAction
+              icon={ChevronLeft}
+              label={t("common.back")}
+              onClick={() => {
+                setTab(null);
+                setFocus(undefined);
+              }}
+            />
+          )
+        }
+      />
       <div className="mx-auto w-full max-w-4xl px-5 py-3">
         <SearchField className="w-72" size="sm" value={text} onValueChange={setText} placeholder={t("memories.searchPlaceholder")} />
       </div>
@@ -95,30 +111,23 @@ export function MemoriesPage() {
         <div className="mx-auto w-full max-w-4xl px-5 pb-10">
           {query.length > 0 ? (
             <SearchResults query={query} onOpen={open} />
-          ) : (
-            <Tabs
-              value={tab}
-              onValueChange={(value) => {
-                setTab(value as TabId);
+          ) : tab === null ? (
+            <MemoryIndex
+              onOpen={(id) => {
                 setFocus(undefined);
+                setPerson(undefined);
+                setTab(id);
               }}
-            >
-              <div className="overflow-x-auto">
-                <TabsList>
-                  {TABS.map((id) => (
-                    <TabsTrigger key={id} value={id}>
-                      {t(`memories.tab.${id}`)}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              </div>
-              <TabsContent value="memory" className="pt-4"><MemoryFilePanel focus={focus} /></TabsContent>
-              <TabsContent value="about" className="pt-4"><BankPanel focus={focus} /></TabsContent>
-              <TabsContent value="people" className="pt-4"><PeoplePanel focus={focus} open={person} onOpen={setPerson} /></TabsContent>
-              <TabsContent value="daily" className="pt-4"><DailyPanel focus={focus} /></TabsContent>
-              <TabsContent value="style" className="pt-4"><StylePanel focus={focus} /></TabsContent>
-              <TabsContent value="claims" className="pt-4"><ClaimsPanel /></TabsContent>
-            </Tabs>
+            />
+          ) : (
+            <>
+              {tab === "memory" && <MemoryFilePanel focus={focus} />}
+              {tab === "about" && <BankPanel focus={focus} />}
+              {tab === "people" && <PeoplePanel focus={focus} open={person} onOpen={setPerson} />}
+              {tab === "daily" && <DailyPanel focus={focus} />}
+              {tab === "style" && <StylePanel focus={focus} />}
+              {tab === "claims" && <ClaimsPanel />}
+            </>
           )}
         </div>
       </ScrollArea>

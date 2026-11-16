@@ -31,10 +31,13 @@ mac:
   # to each build's hash, so every reinstall asked again for "Juno Safe Storage". A release overrides this with CSC_NAME
   # (the Developer ID Application certificate). Set CSC_NAME to your own signing certificate.
   icon: build/icon.icns
+  # Hardened runtime needs the audio-input entitlement, or macOS never offers the microphone to the signed app.
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
   # macOS 26+ reads the light/dark/tinted AppIcon from Assets.car (copied in by afterPack); icon.icns is the older-macOS fallback.
   extendInfo:
     CFBundleIconName: AppIcon
-    NSMicrophoneUsageDescription: Juno uses the microphone when you dictate a message.
+    NSMicrophoneUsageDescription: Juno uses the microphone when you dictate a message or talk to an agent in a voice call.
     NSAudioCaptureUsageDescription: Juno records system audio only when you start a recording.
     NSAppleEventsUsageDescription: Juno's agents use Mail, Calendar, Reminders and Notes on this Mac when you allow it.
     NSCalendarsUsageDescription: Juno's agents read and add calendar events on this Mac when you allow it.

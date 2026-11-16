@@ -13,7 +13,7 @@ import { ClientProvider } from "../../data/ClientProvider";
 import { useResolveRequest, useSendMessage } from "../../data/mutations";
 import { qk } from "../../data/keys";
 import { webPlatform } from "../../platform";
-import { AppRail } from "../../shell/AppRail";
+import { Sidebar } from "../../shell/Sidebar";
 
 const identity: AuthIdentity = { mode: "account", user: { id: "alice-owner", name: "Alice Chen", email: "alice@example.com", initials: "AC" }, signOut: vi.fn() };
 afterEach(cleanup);
@@ -22,10 +22,10 @@ function wrapperFor(client: ApiClient, queryClient: QueryClient) {
 }
 
 describe("account identity consumers", () => {
-  it("uses the actual rail identity and account menu sign-out action", async () => {
+  it("uses the actual account identity and menu sign-out action (phone menu sheet)", async () => {
     const client = createMockClient({ seed: 5 });
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<AuthContext value={identity}><ThemeProvider><TooltipProvider><ClientProvider client={client} platform={webPlatform} queryClient={qc}><MemoryRouter><AppRail /></MemoryRouter></ClientProvider></TooltipProvider></ThemeProvider></AuthContext>);
+    render(<AuthContext value={identity}><ThemeProvider><TooltipProvider><ClientProvider client={client} platform={webPlatform} queryClient={qc}><MemoryRouter><Sidebar collapsedOverride={false} showNavigation /></MemoryRouter></ClientProvider></TooltipProvider></ThemeProvider></AuthContext>);
     const footer = screen.getByRole("button", { name: "Alice Chen" });
     expect(screen.queryByRole("button", { name: "Robin" })).toBeNull();
     fireEvent.keyDown(footer, { key: "ArrowDown" });

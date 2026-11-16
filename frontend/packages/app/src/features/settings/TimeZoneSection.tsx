@@ -1,5 +1,6 @@
 import { Combobox, Switch } from "@agent-desktop/ui";
 import { useMemo } from "react";
+import { usePlatform } from "../../data/ClientProvider";
 import { useUpdateSettings } from "../../data/mutations";
 import { useSettings } from "../../data/queries";
 import { TIMEZONES, localTimeZone } from "../routines/cron";
@@ -18,6 +19,7 @@ function allTimeZones(): string[] {
  * IANA name, and the app stops overriding it until automatic is switched back on.
  */
 export function TimeZoneSection() {
+  const platform = usePlatform();
   const settings = useSettings();
   const save = useUpdateSettings();
   const device = localTimeZone();
@@ -32,12 +34,15 @@ export function TimeZoneSection() {
   if (!general) return null;
 
   return (
-    <Group description="Agents use your time zone for the current time and for the routines they schedule.">
-      <Row label="Set time zone automatically" description={auto ? `Following this device (${device})` : undefined}>
+    <Group
+      title="Time zone"
+      description={`${auto ? `Following this ${platform.isDesktop ? "computer" : "browser"} (${device}). ` : ""}Your agents use it for the current time and the routines they schedule.`}
+    >
+      <Row label="Set automatically">
         <Switch
           checked={auto}
           disabled={save.isPending}
-          aria-label="Set time zone automatically"
+          aria-label="Set automatically"
           onCheckedChange={(checked) =>
             save.mutate({ general: checked ? { timezoneAuto: true, timezone: device } : { timezoneAuto: false, timezone: zone } })
           }

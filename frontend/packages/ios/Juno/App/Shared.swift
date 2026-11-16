@@ -8,7 +8,6 @@ enum Route: Hashable {
     case request(String)
     case goal(String)
     case chat(String)
-    case voiceCall(String)
     /// The Apps page, and one app's page (contracts 0.65.0; replaces Plugins › Connectors).
     case apps
     case app(String)
@@ -202,7 +201,6 @@ struct RouteDestination: View {
         case .app(let id): AppDetailPage(appId: id)
         case .request(let id): RequestDetail(requestId: id)
         case .chat(let id): ConversationView(conversationId: id).id(id).toolbar(.hidden, for: .tabBar)
-        case .voiceCall(let id): VoiceCallScreen(conversationId: id).toolbar(.hidden, for: .tabBar)
         }
     }
 }
